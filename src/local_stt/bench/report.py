@@ -85,8 +85,8 @@ def summarize(lines: list[dict[str, Any]], stage: int | None) -> dict[str, Confi
     """Per-configuration statistics.
 
     stage=1: stage-1 measurements only (medium group).
-    stage=None: the whole corpus — all measurements of configurations that reached stage 2
-    (stage-2 groups plus the medium results reused from stage 1).
+    stage=None: the whole corpus — stage-2 measurements of configurations that reached stage 2.
+    Runs recorded before stage 2 re-measured the medium group fall back to the stage-1 medium rows.
     """
     file_lines = [ln for ln in lines if ln.get("type") == "file"]
     if stage == 1:
@@ -94,10 +94,16 @@ def summarize(lines: list[dict[str, Any]], stage: int | None) -> dict[str, Confi
         config_lines = [ln for ln in lines if ln.get("type") == "config" and ln["stage"] == 1]
     else:
         in_stage2 = {ln["config_key"] for ln in file_lines if ln["stage"] == 2}
-        selected = [ln for ln in file_lines if ln["config_key"] in in_stage2]
-        config_lines = [
-            ln for ln in lines if ln.get("type") == "config" and ln["config_key"] in in_stage2
-        ]
+        legacy = in_stage2 - {
+            ln["config_key"] for ln in file_lines if ln["stage"] == 2 and ln["group"] == MEDIUM
+        }
+
+        def whole_corpus(ln: dict[str, Any]) -> bool:
+            key = ln["config_key"]
+            return key in in_stage2 and (ln["stage"] == 2 or key in legacy)
+
+        selected = [ln for ln in file_lines if whole_corpus(ln)]
+        config_lines = [ln for ln in lines if ln.get("type") == "config" and whole_corpus(ln)]
 
     by_config: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for ln in selected:
@@ -230,7 +236,7 @@ def _audio_ctx_allowed(s: ConfigStats, full: dict[str, ConfigStats]) -> bool:
             c
             for c in full.values()
             if (c.model, c.threads, c.beam_size, c.audio_ctx)
-            == (s.model, s.threads, s.beam_size, False)
+            == (s.model, s.threads, s.beam_size, 0)
         ),
         None,
     )

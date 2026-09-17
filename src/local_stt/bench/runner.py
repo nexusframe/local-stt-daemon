@@ -2,8 +2,9 @@
 
 Stage 1 (`--quick`): every model x threads x audio_ctx on the medium group only; a model is
 eliminated for speed only if p50 text_ready_s > 6 s in all of its configurations.
-Stage 2: surviving models on the remaining groups (medium results are reused from stage 1), plus
-beam search (-bs 5) for the two best models by stage-1 WER on the whole corpus.
+Stage 2: surviving models on the whole corpus, medium included, on one server per configuration
+in one fixed interleaved order (results depend on request history, 06 §6.7), plus beam search
+(-bs 5) for the two best models by stage-1 WER in the same order.
 Sanity: `whisper-bench -t 4` per model (raw encoder time).
 
 Every measurement is appended to <out>/results.jsonl as soon as it is taken, so an interrupted run
@@ -79,6 +80,15 @@ def load_dataset(root: Path, groups: Iterable[str] = GROUPS) -> list[Item]:
             if txt.is_file():
                 items.append(Item(group, wav.stem, wav, txt.read_text(encoding="utf-8").strip()))
     return items
+
+
+def interleave(items: Iterable[Item]) -> list[Item]:
+    """Round-robin over groups (in first-seen order), keeping the file order within each group."""
+    by_group: dict[str, list[Item]] = {}
+    for it in items:
+        by_group.setdefault(it.group, []).append(it)
+    rounds = itertools.zip_longest(*by_group.values())
+    return [it for round_ in rounds for it in round_ if it is not None]
 
 
 def has_speech_rms(
@@ -438,16 +448,15 @@ def run(
     eliminated = report.eliminated_models(stage1, control=CONTROL_MODEL)
     survivors = [m for m in models if m not in eliminated]
     _log(f"stage 1 eliminated: {sorted(eliminated) or 'none'}")
-    rest = [it for it in items if it.group != "medium"]
-    if rest:
-        for cfg in _configs(survivors, threads, audio_ctx):
-            run_config(2, cfg, rest, repeats, results, models_dir)
+    corpus = interleave(items)
+    for cfg in _configs(survivors, threads, audio_ctx):
+        run_config(2, cfg, corpus, repeats, results, models_dir)
     if beam:
         for model in report.top_models_by_wer(
             stage1, survivors, BEAM_TOP_N, exclude={CONTROL_MODEL}
         ):
             cfg = BenchConfig(model, min(threads), 0, BEAM_SIZE)
-            run_config(2, cfg, items, repeats, results, models_dir)
+            run_config(2, cfg, corpus, repeats, results, models_dir)
     if sanity:
         for model in models:
             run_whisper_bench(model, models_dir, results)

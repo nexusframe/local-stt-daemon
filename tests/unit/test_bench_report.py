@@ -173,3 +173,25 @@ def test_legacy_dynamic_audio_ctx_results_still_render() -> None:
     stats = report.summarize([line], stage=1)
     assert next(iter(stats.values())).audio_ctx == report.LEGACY_PER_REQUEST
     assert "ctx=per-request" in report.render([line], {})
+
+
+def test_whole_corpus_uses_stage2_medium_measurements_not_stage1() -> None:
+    c = cfg("small-q8_0", ctx=1000)
+    lines = [
+        file_line(c, latency=9.0, word_errors=5),  # stage 1, measured without interleaving
+        file_line(c, stage=2, latency=3.0),
+        file_line(c, stage=2, group="long_utt", stem="002", latency=6.0),
+    ]
+    s = report.summarize(lines, stage=None)[key(c)]
+    assert s.p90_text_ready_s == pytest.approx(3.0)
+    assert s.wer_mean == 0.0
+
+
+def test_whole_corpus_falls_back_to_stage1_medium_for_old_runs() -> None:
+    c = cfg("small-q8_0")
+    lines = [
+        file_line(c, latency=5.5),
+        file_line(c, stage=2, group="long_utt", stem="002", latency=6.0),
+    ]
+    s = report.summarize(lines, stage=None)[key(c)]
+    assert s.p90_text_ready_s == pytest.approx(5.5)
