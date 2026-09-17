@@ -1,6 +1,6 @@
 # 14. Test strategy
 
-Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` for `src/local_stt` (excluding `bench/`). python-xlib ships no type information, so `pyproject.toml` contains `[[tool.mypy.overrides]] module = ["Xlib.*"] ignore_missing_imports = true`; Xlib calls are confined to `hotkeys/x11.py` and `inject/` (`x11util.py`, `clipboard.py`), whose public functions have fully typed signatures so untyped values do not leak into the rest of the code. Run `pytest -m "not needs_whisper and not needs_x11 and not needs_audio and not e2e"` for the fast suite and `pytest` for the complete local suite.
+Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` for `src/local_stt` (excluding `bench/`). python-xlib and sounddevice ship no type information, so `pyproject.toml` contains `[[tool.mypy.overrides]] module = ["Xlib.*", "sounddevice"] ignore_missing_imports = true`; their calls are confined to `hotkeys/x11.py`, `inject/` (`x11util.py`, `clipboard.py`) and `audio/capture.py`, whose public functions have fully typed signatures so untyped values do not leak into the rest of the code. Run `pytest -m "not needs_whisper and not needs_x11 and not needs_audio and not e2e"` for the fast suite and `pytest` for the complete local suite.
 
 ## 14.1 Pyramid
 

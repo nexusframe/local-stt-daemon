@@ -43,6 +43,10 @@ local_stt = ["models.sha256"]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "--strict-config", "-ra"]
 timeout = 60
+filterwarnings = [
+    # sounddevice 0.5.6 sets ndarray.shape inside its PortAudio callback (deprecated in NumPy 2.5).
+    "ignore:Setting the shape on a NumPy array has been deprecated:DeprecationWarning:sounddevice",
+]
 markers = [
     "needs_whisper: requires a local whisper-server build and a model",
     "needs_x11: requires an X server (run under xvfb-run)",
@@ -68,8 +72,8 @@ strict = true
 files = ["src/local_stt"]
 exclude = ["^src/local_stt/bench/"]
 
-# python-xlib ships no type information; Xlib use is confined to hotkeys/x11.py
-# and inject/ behind fully typed signatures.
+# python-xlib and sounddevice ship no type information; their use is confined to
+# hotkeys/x11.py, inject/ and audio/capture.py behind fully typed signatures.
 [[tool.mypy.overrides]]
-module = ["Xlib.*"]
+module = ["Xlib.*", "sounddevice"]
 ignore_missing_imports = true
