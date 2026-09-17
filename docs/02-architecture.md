@@ -57,7 +57,8 @@ local-stt-daemon/
 ├── scripts/
 │   ├── install.sh
 │   ├── uninstall.sh
-│   └── fleurs_to_corpus.py
+│   ├── fleurs_to_corpus.py
+│   └── wolnelektury_to_corpus.py
 ├── systemd/
 │   ├── local-stt.service
 │   └── local-stt-whisper.service

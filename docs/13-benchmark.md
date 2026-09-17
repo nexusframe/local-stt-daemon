@@ -39,9 +39,15 @@ The benchmark is the **first implementation step** ([15](15-implementation-plan.
 
 Also include a **continuous recording** under `long/` (`record-corpus --long`): about five minutes of read-aloud text with natural pauses for testing continuous mode. The text is `src/local_stt/bench/long_pl.txt` (~780 words from the Polish Wikipedia article “Maria Skłodowska-Curie”, revision 80747346, CC BY-SA 4.0; attribution and edits in `long_pl.ATTRIBUTION.md`), so the recording is reproducible and the reference text is known. Repeated takes are saved as `long/002.wav`, and so on.
 
-### B. FLEURS pl_pl (optional—for comparability with the paper)
+### B. Public corpus (interim substitute for A, and for comparability with the paper)
 
-`local-stt bench --dataset DIR`. The directory uses the format from A. `scripts/fleurs_to_corpus.py` converts 50 random samples from the FLEURS test set (CC-BY-4.0). Data is downloaded manually and online, outside the daemon.
+Decision 2026-09-17: corpus A could not be recorded yet, so stage 0 starts on a public corpus in the same layout, `~/stt-corpus-public` (outside the repository; only the scripts are committed). It measures model quality on other speakers and studio-like audio, **not** on the user's microphone, voice, and room, so results from B are provisional: rerun the relevant stages on corpus A once it is recorded, before fixing defaults.
+
+- `.venv/bin/python scripts/fleurs_to_corpus.py DIR [--split test] [--seed 0]` — FLEURS `pl_pl` (CC-BY-4.0, pinned revision): one random recording per distinct sentence, assigned to groups by duration as in A (short 1–3 s, medium 4–10 s, long_utt 12–25 s; difficult = 5–10 s sentences containing digits), at most the A group counts. Known gap: the test split has a single 1–3 s recording (and with `--seed 0` that sentence gets a longer take), so the short group is empty; short-utterance behavior can only be measured on corpus A.
+- `.venv/bin/python scripts/wolnelektury_to_corpus.py DIR --slug borowski-kamienny-swiat-lato-w-miasteczku --start 39.9 --end 335.28` — continuous recording for `long/`: Tadeusz Borowski, “Lato w miasteczku” (public-domain prose), Wolne Lektury audiobook read by Robert Koszucki, decoded with GStreamer; the spoken Wolne Lektury intro and outro are cut at digital-silence points (verified by transcribing both edges), leaving 295.4 s that start with the title. Reference text = book text without the author line and the license footer.
+- Attribution for both parts is written to `DIR/SOURCE.md` and `DIR/long/SOURCE.md`. Data is downloaded manually and online, outside the daemon.
+
+`local-stt bench --dataset DIR` accepts any directory in this layout.
 
 ## 13.3 Metrics
 
