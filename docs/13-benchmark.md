@@ -1,13 +1,13 @@
 # 13. Benchmarking and model selection
 
-The benchmark is the **first implementation step** ([15](15-implementation-plan.md), stage 0). Its results determine the default `stt.model`, `stt.threads`, and `stt.dynamic_audio_ctx`. Until results are available, use `small-q5_1`, `threads=4`, and `dynamic_audio_ctx=false`.
+The benchmark is the **first implementation step** ([15](15-implementation-plan.md), stage 0). Its results determine the default `stt.model`, `stt.threads`, and `stt.audio_ctx`. Until results are available, use `small-q5_1`, `threads=4`, and `audio_ctx=0`.
 
 ## 13.1 Questions it answers
 
 1. Which model delivers the lowest WER for Polish while keeping p90 PTT latency ≤ 2.5 s for 4–10 s utterances (N2)?
 2. Can the same model sustain continuous mode for 10 minutes without a growing queue (N3), including after the CPU heats up?
 3. Four or eight threads?
-4. Does matching `audio_ctx` to the recording length reduce latency without sacrificing quality?
+4. Does a fixed shortened `audio_ctx` (with the full window for longer recordings, 06 §6.7) reduce latency without sacrificing quality?
 5. Does OpenBLAS help (optional, separate build)?
 
 ## 13.2 Corpus
@@ -79,13 +79,13 @@ Before starting, it checks whether `local-stt-whisper.service` is active. If so,
 |---|---|
 | model | `base-q5_1`, `small-q5_1`, `small-q8_0`, `small`, `medium-q5_0`, `large-v3-turbo-q5_0` |
 | threads | 4, 8 |
-| dynamic_audio_ctx | false, true |
+| audio_ctx | 0 (full window), 1000 (fixed, full window beyond coverage) |
 | beam | greedy (all); `-bs 5` only for the top two after stage 1 |
 
 The sequence is economical because the full matrix would take hours on this CPU:
 
-1. **Stage 1—`bench --quick`.** All models × `t∈{4,8}` × `dynamic_audio_ctx∈{false,true}`, using only the “medium” group (16 files). A model is eliminated for speed only when p50 `text_ready_s` > 6 s in **all four** configurations. This prevents the full encoder window from eliminating a model before `audio_ctx` is tested. `base-q5_1` remains a test control, not a production candidate.
-2. **Stage 2.** Remaining models × `t∈{4,8}` × `dynamic_audio_ctx∈{false,true}` over the entire A corpus.
+1. **Stage 1—`bench --quick`.** All models × `t∈{4,8}` × `audio_ctx∈{0,1000}`, using only the “medium” group (16 files). A model is eliminated for speed only when p50 `text_ready_s` > 6 s in **all four** configurations. This prevents the full encoder window from eliminating a model before `audio_ctx` is tested. `base-q5_1` remains a test control, not a production candidate.
+2. **Stage 2.** Remaining models × `t∈{4,8}` × `audio_ctx∈{0,1000}` over the entire A corpus, with files sent in the same order for every configuration (results depend on request history, 06 §6.7).
 3. **Stage 3—`bench --soak --model M --threads T --audio-ctx X`.** For the top one or two: play the `long/` recording through the real `Segmenter` in real time, looped to 10 minutes, while measuring the queue, RTF, and thermals. Run on **AC power and battery** (`powersave` governor).
 4. **Sanity check.** Run `whisper-bench -m <model> -t 4` for each model (raw encoder time) to separate HTTP and pipeline overhead from engine performance.
 
@@ -95,8 +95,8 @@ Measure each configuration three times. Report the WER for every run plus its me
 
 ```text
 production = configurations excluding base-q5_1, with peak server RSS ≤ 1 GB (N1),
-             and with dynamic_audio_ctx=true only when
-             WER(true) − WER(false) ≤ 1.0 pp for the same model, threads, and beam
+             and with audio_ctx > 0 only when
+             WER(audio_ctx) − WER(0) ≤ 1.0 pp for the same model, threads, and beam
 
 # Stage 0: provisional selection, without N2 confirmation yet.
 provisional = { configurations from production with p90_text_ready_s(medium) ≤ 2.5 s }

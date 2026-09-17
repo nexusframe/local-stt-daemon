@@ -43,12 +43,12 @@ Legend:
 
 - **Context:** the preliminary design treated `base` as the “responsive” option.
 - **Facts:** Polish WER (FLEURS) from the Whisper paper: base 30.8%, small 14.7%, medium 8.0%.
-- **Decision:** start with `small-q5_1` (181 MiB). The final choice follows the rule in [13](13-benchmark.md) §13.5; candidates also include `medium-q5_0` and `large-v3-turbo-q5_0` with `audio_ctx`.
+- **Decision:** start with `small-q5_1` (181 MiB). The final choice follows the rule in [13](13-benchmark.md) §13.5; candidates also include `medium-q5_0` and `large-v3-turbo-q5_0` with a fixed `audio_ctx` (06 §6.7).
 - **Objection:** `small` may be too slow for continuous mode on the i5-8365U.
 - **Response:**
   - continuous mode does not block recording (ADR-004),
   - the backlog has a hard limit with a clear message,
-  - if the soak test fails, the benchmark will identify a faster configuration (`audio_ctx`, q5),
+  - if the soak test fails, the benchmark will identify a faster configuration (fixed `audio_ctx`, quantization),
   - `base`, with one in three words wrong, is not useful regardless of speed.
 
 ## ADR-004 ✅ State as three independent components, one owner thread, capture is never paused

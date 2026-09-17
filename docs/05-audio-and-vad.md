@@ -80,7 +80,7 @@ The “keep the stream open for another N seconds after PTT” option was reject
   - no frame with `p ≥ start_threshold` → `JobDiscarded(no_speech)`,
   - otherwise, trim leading and trailing silence while preserving `vad.speech_pad_ms`.
 
-  This shortens the audio and therefore also speeds up the encoder with `dynamic_audio_ctx`. The worker uses **its own instance** of `SileroVad`, because an ONNX session is stateful and cannot be shared with audio-consumer.
+  This shortens the audio and therefore also lets more recordings fit the fixed `stt.audio_ctx` window (06 §6.7). The worker uses **its own instance** of `SileroVad`, because an ONNX session is stateful and cannot be shared with audio-consumer.
 
 ## 5.4 Silero VAD (`local_stt/audio/vad.py` module)
 

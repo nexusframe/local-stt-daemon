@@ -23,8 +23,8 @@ threads = 4                          # ⟳ -t for whisper-server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk."
 continuous_context = true            # append the end of the previous segment to the prompt
-dynamic_audio_ctx = false            # see 06 §6.7 — set based on benchmark results
-audio_ctx_margin = 128
+audio_ctx = 0                        # ⟳ 0 = full 30 s window, or fixed frames (e.g. 1000); 06 §6.7, set from the benchmark
+audio_ctx_margin = 128               # ⟳ recordings needing more than audio_ctx - margin frames use the full window
 no_speech_threshold = 0.6
 logprob_threshold = -1.0
 startup_timeout_s = 60
@@ -106,6 +106,8 @@ timings = true                       # timing line for each job (without content
 | `0 < thresholds < 1` | `…: must be in (0, 1)` |
 | `vad.split_search_s < vad.max_segment_s` | |
 | `vad.max_segment_s ≤ 28` | margin for Whisper's 30 s window |
+| `stt.audio_ctx == 0` or `500 ≤ stt.audio_ctx < 1500`; `0 ≤ stt.audio_ctx_margin < stt.audio_ctx` when it is set | `stt.audio_ctx: must be 0 or 500–1499` (the lower bound is conservative: only 750 and 1000 were measured, 06 §6.7) |
+| `stt.audio_ctx > 0` and `vad.max_segment_s * 50 + stt.audio_ctx_margin > stt.audio_ctx` | warning `vad.max_segment_s: continuous segments longer than X s use the full window` |
 | the `models_dir/ggml-<model>.bin` file exists | `stt.model: file not found: … (run: local-stt models pull small-q5_1)` |
 | when `vad.enabled`: the `models_dir/<vad.model>` file exists | `vad.model: file not found: … (run: local-stt models pull silero-vad)` |
 | `len(stt.vocabulary_prompt) ≤ 300` | vocabulary character limit, not token count; the engine may truncate the prompt ([06](06-stt-engine.md) §6.6) |

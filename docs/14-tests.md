@@ -27,7 +27,7 @@ Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` f
 | `hotkeys.spec` | parsing, errors, rejection of AltGr/Super_L/Control_L/Shift_L, `ptt_cancel_key` validation | |
 | `config` | defaults; every rule from [09](09-configuration.md) §9.3; unknown key → error; `whisper-server.env` generation | |
 | `audio.wav` | float32 → WAV s16: header, clipping, round trip | |
-| `stt.whisper_server` | multipart construction; `verbose_json` parsing (fixture from a real v1.9.4 response); HTTP/timeout error mapping | local `http.server` stub |
+| `stt.whisper_server` | multipart construction; `audio_ctx` policy (fixed value when `ceil(duration·50) + margin ≤ audio_ctx`, otherwise `0`; only these two values are ever sent); `verbose_json` parsing (fixture from a real v1.9.4 response); HTTP/timeout error mapping | local `http.server` stub |
 | `ipc` | protocol, unknown command, overlong line (> 64 KiB), `SO_PEERCRED` (different uid → reject; monkeypatch test) | |
 | `bench.wer` / metrics / selection | WER/CER on known examples, Polish-character normalization; cuts inside a word, at a boundary, and within silence; `base` excluded from production; a model slow without `audio_ctx` but fast with it is not eliminated in stage 1; stage 0 does not confirm N2 | |
 | `feedback` | generated WAV files have the correct duration and no DC offset; `notify-send` is called with expected arguments and **without transcript text** | mocked `subprocess` |

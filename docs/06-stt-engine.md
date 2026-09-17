@@ -44,7 +44,7 @@ Download: `local-stt models pull <name>` downloads `ggml-<name>.bin` from `https
 | `small-q8_0` | 252 MiB | same | benchmark candidate |
 | `small` (f16) | 465 MiB | same | small quality baseline |
 | `medium-q5_0` | 514 MiB | 8.0 / 10.1 (medium) | PTT candidate if latency permits |
-| `large-v3-turbo-q5_0` | 547 MiB | no figures in the paper; better than medium in OpenAI charts | PTT candidate with `audio_ctx` |
+| `large-v3-turbo-q5_0` | 547 MiB | no figures in the paper; better than medium in OpenAI charts | PTT candidate with a fixed `audio_ctx` |
 
 Notes:
 
@@ -99,7 +99,7 @@ All paths have the `--request-path` prefix. The client reads the secret from `~/
 | `temperature` / `temperature_inc` | `0.0` / `0.2` | temperature fallback on high entropy |
 | `prompt` | vocabulary + context (6.6) | omitted when empty |
 | `no_timestamps` | `false` | segment boundaries are needed for filtering |
-| `audio_ctx` | `0` or calculated (6.7) | |
+| `audio_ctx` | `0` or the fixed `stt.audio_ctx` (6.7) | |
 
 Response (the portion we read):
 
@@ -144,15 +144,40 @@ The `prompt` field is Whisper's `initial_prompt` (prompt-context budget of about
 
 ## 6.7 `audio_ctx` — the main latency lever
 
-The Whisper encoder always processes a **30 s window** (1500 frames, 50 frames/s), even for a 3 s recording. On CPU, the encoder is the dominant cost. `audio_ctx` shortens this window:
+The Whisper encoder always processes a **30 s window** (1500 frames, 50 frames/s), even for a 3 s recording. On CPU, the encoder is the dominant cost. `audio_ctx` shortens this window. The model was trained on the full window, so a shortened context can lower quality; the benchmark decides whether a value is acceptable ([13](13-benchmark.md) §13.5).
+
+### Policy: one fixed value per server, full window as the only fallback
+
+`stt.audio_ctx` is either `0` (full window, the default until the benchmark selects a value) or a fixed number of frames. For every request the adapter sends exactly one of two values:
 
 ```text
-audio_ctx = min(1500, ceil(duration_s * 50) + stt.audio_ctx_margin)    # margin defaults to 128 (~2.5 s)
+needed = ceil(duration_s * 50) + stt.audio_ctx_margin        # margin defaults to 128 (~2.5 s)
+audio_ctx = stt.audio_ctx  if stt.audio_ctx > 0 and needed <= stt.audio_ctx
+            0             otherwise                          # full 30 s window
 ```
 
-- For a 5-second utterance, the encoder runs several times faster.
-- Risk: the model was trained on the full window. With a heavily shortened context, quality may decline or repetitions may appear. Therefore `stt.dynamic_audio_ctx` (`true`/`false`) is a toggle, and the benchmark compares WER and latency for each model ([13](13-benchmark.md)). The default until benchmarking is `false`.
-- **Measured 2026-09-17 (whisper.cpp v1.9.4, `small-q5_1`, FLEURS medium group, 16 files):** in a long-running `whisper-server`, per-request `audio_ctx` makes the encoder ~1.7× faster but raises WER from ~22 % to 44–50 %, with hallucinated multilingual segments and loops on some files. `no_timestamps=true` does not fix it in a long-running server (43.9 %). The same files are transcribed correctly by `whisper-cli -ac N` and by a fresh server handling a single request, so the degradation depends on server state carried across requests with different `audio_ctx`, plus timestamp decoding (a fresh server with timestamps on still failed on one file). Until a fixed whisper.cpp version is verified, `dynamic_audio_ctx=true` is expected to fail the 13.5 WER rule; the benchmark still measures it because it reproduces the production setup (one long-running server).
+With `stt.audio_ctx = 1000` and the default margin, recordings up to 17.4 s use the shortened window; longer PTT recordings use the full window. Continuous segments (`vad.max_segment_s = 15`) always fit. A server therefore sees at most two `audio_ctx` values during its lifetime, which is the setup that was verified; changing `stt.audio_ctx` restarts the server (04 §4.6).
+
+### Why not a per-request value (the former `stt.dynamic_audio_ctx`)
+
+Measured 2026-09-17, whisper.cpp v1.9.4, FLEURS `pl_pl` medium group (16 files, 4.6–9.9 s), greedy decoding, timestamps on, one long-running `whisper-server` as in production. Scripts and raw logs were ad hoc (not in the repository); results were reproduced word for word in a second run on AC power with the `performance` platform profile.
+
+| Setup (`small-q5_1` for the first two rows, `small-q8_0` for the rest) | WER | p90 per request |
+|---|---|---|
+| `audio_ctx = 0` (full window) | 21.7 % | — |
+| per-request `audio_ctx = ceil(duration_s * 50) + 128` | 49.6 % (hallucinated multilingual segments, loops) | — |
+| `small-q8_0`, `audio_ctx = 0` | 23.3 % | 4.5–6.0 s |
+| `small-q8_0`, fixed `audio_ctx = 1000`, two passes | 23.8 % (identical per file in both passes) | 3.3–4.0 s |
+| `small-q8_0`, fixed `audio_ctx = 750`, two passes | 26.0 % (identical per file in both passes) | 2.6–3.0 s |
+| `small-q8_0`, medium @ 1000 interleaved with 12–17 s files @ full window, two passes | medium 24.2 %, long 21.7 % (dedicated servers: 23.8 % / 23.2 %) | medium 3.5–4.0 s |
+
+Findings:
+
+- **Per-request values break decoding in a long-running server.** The same files are correct with `whisper-cli -ac N` and with a fresh server handling a single request, so the failure depends on server state carried across requests with different `audio_ctx` (timestamp decoding contributes: a fresh server failed on one file with timestamps on and succeeded with them off). The root cause in whisper.cpp is not known.
+- **A fixed value is stable:** repeated passes give identical text for every file.
+- **Alternating a fixed value with the full window works but is history-dependent:** 15 of 24 files differ by a few words from the dedicated-server result (both better and worse), with no quality loss overall and identical results across passes. Benchmark comparisons therefore use the same request order for every configuration.
+- **Latency varies ±20 % between runs** with temperature and background load (68–71 °C, load 2–4.5 in the second run); relative gains are stable: `1000` is ~30 % faster than the full window, `750` ~50 %.
+- Only `small-q8_0` and two fixed values were tested. Other models and values need the benchmark; a whisper.cpp upgrade requires repeating the interleaving test.
 
 ### Separate models for PTT and continuous mode?
 

@@ -19,7 +19,7 @@ The sequence follows the preliminary design principle: **first establish whether
 **Acceptance:**
 
 - stage 1–2 report for every model,
-- provisional `stt.model`, `threads`, and `dynamic_audio_ctx` selected under the rule in §13.5; the report explicitly states that N2 remains unconfirmed until the full injector measurement in v0.1 (the soak test comes in v0.2).
+- provisional `stt.model`, `threads`, and `audio_ctx` selected under the rule in §13.5; the report explicitly states that N2 remains unconfirmed until the full injector measurement in v0.1 (the soak test comes in v0.2).
 
 ## v0.1 — MVP: PTT
 
@@ -83,7 +83,7 @@ The preliminary design scope (“partial transcription, result stabilization, im
 | # | Task | Notes |
 |---|---|---|
 | 3.1 | **Model switching:** changing `stt.model` + `local-stt reload` already works in v0.1 (server restart, [04](04-state-machine.md) §4.6). v0.3 adds only `local-stt models list --bench`, a model list with the latest benchmark results (WER, p90 latency, RAM) for an informed choice. No runtime override—the config is the single source of truth (ADR-008) | 06 §6.5, 13 |
-| 3.2 | **Partial preview, without insertion:** in continuous mode, once an utterance lasts > 4 s, send the accumulated audio with `dynamic_audio_ctx` to the engine every 2 s, **but only when the final-job queue is empty and the worker is idle**. The result goes only to `local-stt status --watch --preview`, when `continuous.preview = true` and at least one explicit preview subscriber exists. Never send it to a window or notification; ordinary `status`, `status --watch`, and `job` events still contain no text. Add the new `continuous.preview = false` key, CLI flag, and preview subscription to [09](09-configuration.md) and [10](10-cli-ipc-status.md) in v0.3 | ADR-010 |
+| 3.2 | **Partial preview, without insertion:** in continuous mode, once an utterance lasts > 4 s, send the accumulated audio to the engine every 2 s (same `audio_ctx` policy as final jobs, 06 §6.7), **but only when the final-job queue is empty and the worker is idle**. The result goes only to `local-stt status --watch --preview`, when `continuous.preview = true` and at least one explicit preview subscriber exists. Never send it to a window or notification; ordinary `status`, `status --watch`, and `job` events still contain no text. Add the new `continuous.preview = false` key, CLI flag, and preview subscription to [09](09-configuration.md) and [10](10-cli-ipc-status.md) in v0.3 | ADR-010 |
 | 3.3 | **Segment-boundary stabilization:** `max_length` cuts with 1 s of audio overlap + removal of duplicate words at the join (longest common word suffix/prefix ≥ 2) | 05 §5.5 |
 | 3.4 | **Context:** tune `continuous_context` (tail length; reset after `min_silence` > 5 s = new paragraph) using the `long/` corpus | 06 §6.6 |
 | 3.5 | `stt.continuous_model` (second server)—**only if** required by the rule in 13 §13.5 | ADR-016 |
