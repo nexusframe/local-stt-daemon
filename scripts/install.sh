@@ -118,7 +118,9 @@ build_whisper() {
     mkdir -p "$(dirname "$WHISPER_SRC")" "$BIN_DIR"
     if [[ -d "$WHISPER_SRC/.git" ]]; then
         git -C "$WHISPER_SRC" fetch --depth 1 origin tag "$WHISPER_TAG"
-        git -C "$WHISPER_SRC" -c advice.detachedHead=false checkout -q "$WHISPER_TAG"
+        # -f: the checkout is owned by this script, and CMake configure rewrites tracked files
+        # (bindings/javascript/package.json), which would otherwise block switching tags.
+        git -C "$WHISPER_SRC" -c advice.detachedHead=false checkout -q -f "$WHISPER_TAG"
     else
         git -c advice.detachedHead=false clone --depth 1 --branch "$WHISPER_TAG" \
             "$WHISPER_REPO" "$WHISPER_SRC"
