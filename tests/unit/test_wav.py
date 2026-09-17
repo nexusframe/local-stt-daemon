@@ -37,3 +37,9 @@ def test_round_trip() -> None:
 def test_rejects_non_mono_input() -> None:
     with pytest.raises(ValueError, match="mono"):
         float32_to_wav_bytes(np.zeros((10, 2), dtype=np.float32))
+
+
+@pytest.mark.parametrize("data", [b"not a wav at all", b"", b"RIFF\x00\x00"])
+def test_decode_rejects_non_wav_with_value_error(data: bytes) -> None:
+    with pytest.raises(ValueError, match="not a PCM WAV"):
+        wav_bytes_to_float32(data)

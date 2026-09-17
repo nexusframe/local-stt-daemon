@@ -25,12 +25,19 @@ def float32_to_wav_bytes(samples: NDArray[np.float32], sample_rate: int = SAMPLE
 
 
 def wav_bytes_to_float32(data: bytes) -> tuple[NDArray[np.float32], int]:
-    """Decode a mono PCM s16le WAV into float32 samples and its sample rate."""
-    with wave.open(io.BytesIO(data), "rb") as w:
-        if w.getnchannels() != 1 or w.getsampwidth() != 2:
-            raise ValueError(
-                f"expected mono 16-bit WAV, got {w.getnchannels()} ch, {8 * w.getsampwidth()} bit"
-            )
-        rate = w.getframerate()
-        pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+    """Decode a mono PCM s16le WAV into float32 samples and its sample rate.
+
+    Raises ValueError for anything else (not a WAV, float WAV, stereo, other bit depth).
+    """
+    try:
+        with wave.open(io.BytesIO(data), "rb") as w:
+            if w.getnchannels() != 1 or w.getsampwidth() != 2:
+                raise ValueError(
+                    f"expected mono 16-bit WAV, got {w.getnchannels()} ch, "
+                    f"{8 * w.getsampwidth()} bit"
+                )
+            rate = w.getframerate()
+            pcm = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+    except (wave.Error, EOFError) as e:
+        raise ValueError(f"not a PCM WAV file: {e}") from e
     return pcm.astype(np.float32) / np.float32(_S16_MAX), rate
