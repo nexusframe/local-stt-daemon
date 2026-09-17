@@ -24,7 +24,7 @@ from local_stt.bench import wer
 MEDIUM = "medium"
 ELIMINATION_P50_S = 6.0
 N1_SERVER_RSS_MB = 1024.0
-N2_P90_S = 2.5
+N2_P90_S = 5.0  # N2 target, raised from 2.5 s on 2026-09-17 (01 §1.5)
 AUDIO_CTX_MAX_WER_DELTA = 0.01  # 1.0 pp
 WER_TIE = 0.01
 LEGACY_PER_REQUEST = -1  # results recorded with the former `dynamic_audio_ctx=true`
@@ -220,7 +220,7 @@ def select(full: dict[str, ConfigStats], control: str) -> Selection:
         if s.p90_text_ready_s is not None and s.p90_text_ready_s <= N2_P90_S:
             provisional.append(s)
         else:
-            excluded[s.key] = f"p90 text_ready {_fmt(s.p90_text_ready_s, '.2f')} s > 2.5 s"
+            excluded[s.key] = f"p90 text_ready {_fmt(s.p90_text_ready_s, '.2f')} s > {N2_P90_S} s"
     return Selection(excluded, production, rank(provisional))
 
 
@@ -348,7 +348,7 @@ def _header(info: dict[str, Any]) -> list[str]:
 def _selection_section(selection: Selection) -> list[str]:
     out = ["", "## Provisional selection (13 §13.5, stage 0)", ""]
     if selection.provisional:
-        out += ["Ranked candidates with p90 text_ready ≤ 2.5 s (best first):", ""]
+        out += [f"Ranked candidates with p90 text_ready ≤ {N2_P90_S} s (best first):", ""]
         out += [f"{i}. {_summary_line(s)}" for i, s in enumerate(selection.provisional, 1)]
         best = selection.provisional[0]
         settings = [
@@ -364,7 +364,9 @@ def _selection_section(selection: Selection) -> list[str]:
             "N2 remains unconfirmed until the v0.1 measurement of `total`.",
         ]
     else:
-        out.append("**No configuration meets p90 text_ready ≤ 2.5 s.** Best available compromises:")
+        out.append(
+            f"**No configuration meets p90 text_ready ≤ {N2_P90_S} s.** Best available compromises:"
+        )
         if selection.production:
             fastest = min(selection.production, key=lambda s: s.p90_text_ready_s or float("inf"))
             accurate = min(selection.production, key=lambda s: s.wer_mean)

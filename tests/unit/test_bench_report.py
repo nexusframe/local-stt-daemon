@@ -122,12 +122,12 @@ def _stats(
 
 def test_select_applies_n1_audio_ctx_rule_and_n2_filter() -> None:
     stats = [
-        _stats("base-q5_1", 0.30, 0.5),
-        _stats("large-v3-turbo-q5_0", 0.05, 2.0, rss=1200),
-        _stats("small", 0.10, 3.0),
-        _stats("small", 0.125, 2.0, ctx=1000),  # +2.5 pp vs full window -> excluded
-        _stats("small-q5_1", 0.12, 2.4),
-        _stats("small-q5_1", 0.125, 1.5, ctx=1000),  # +0.5 pp -> allowed
+        _stats("base-q5_1", 0.30, 1.0),
+        _stats("large-v3-turbo-q5_0", 0.05, 4.0, rss=1200),
+        _stats("small", 0.10, 6.0),
+        _stats("small", 0.125, 4.0, ctx=1000),  # +2.5 pp vs full window -> excluded
+        _stats("small-q5_1", 0.12, 4.8),
+        _stats("small-q5_1", 0.125, 3.0, ctx=1000),  # +0.5 pp -> allowed
     ]
     selection = report.select({s.key: s for s in stats}, control="base-q5_1")
     assert [(s.model, s.audio_ctx) for s in selection.provisional] == [
@@ -138,7 +138,7 @@ def test_select_applies_n1_audio_ctx_rule_and_n2_filter() -> None:
     assert "control" in reasons[key(cfg("base-q5_1"))]
     assert "N1" in reasons[key(cfg("large-v3-turbo-q5_0"))]
     assert "audio_ctx" in reasons[key(cfg("small", ctx=1000))]
-    assert "2.5" in reasons[key(cfg("small"))]
+    assert "> 5.0 s" in reasons[key(cfg("small"))]
 
 
 def test_rank_tie_breaks_ram_then_latency_then_four_threads() -> None:
@@ -153,14 +153,14 @@ def test_render_mentions_unconfirmed_n2_and_interim_corpus() -> None:
     c = cfg("small-q5_1")
     lines = [
         config_line(c),
-        file_line(c, latency=5.0),
+        file_line(c, latency=6.0),
         config_line(c, stage=2),
-        file_line(c, stage=2, group="long_utt", latency=5.0),
+        file_line(c, stage=2, group="long_utt", latency=6.0),
         {"type": "whisper_bench", "model": "small-q5_1", "encode_ms": 4200.0},
     ]
     text = report.render(lines, {"dataset_is_public_interim": True, "repeats": 1})
     assert "N2 is not confirmed" in text and "Interim public corpus" in text
-    assert "No configuration meets p90 text_ready" in text
+    assert "No configuration meets p90 text_ready ≤ 5.0 s" in text
     assert "| `small-q5_1` | 4200 |" in text
 
 

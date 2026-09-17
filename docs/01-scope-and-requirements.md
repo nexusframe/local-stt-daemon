@@ -74,7 +74,7 @@ Pressing `Esc` while holding PTT cancels the recording. Taps shorter than `ptt.m
 | ID | Target | How it is measured |
 |---|---|---|
 | N1 | RAM: Python daemon ≤ 150 MB RSS; `whisper-server` with the selected model ≤ 1 GB RSS | `local-stt bench`, `ps -o rss` |
-| N2 | PTT: p90 latency from key release to injector completion, including clipboard handling (`total` in logs), ≤ 2.5 s for 4–10 s utterances (default model) | `bench` measures the stage up to ready text; acceptance: p90 `total` from at least 20 complete dictations with successful injection, including audio finalization and clipboard handling (13 §13.5) |
+| N2 | PTT: p90 latency from key release to injector completion, including clipboard handling (`total` in logs), ≤ 5 s for 4–10 s utterances (default model). Raised from 2.5 s on 2026-09-17 after stage-0 measurements (13 §13.5) | `bench` measures the stage up to ready text; acceptance: p90 `total` from at least 20 complete dictations with successful injection, including audio finalization and clipboard handling (13 §13.5) |
 | N3 | Continuous: average RTF ≤ 0.5 in a 10-minute test; the queue does not grow monotonically | `bench --soak` |
 | N4 | Continuous in silence: daemon CPU ≤ 5% of one core | `pidstat` |
 | N5 | no audio or text byte leaves the host; `whisper-server` listens only on `127.0.0.1` | `ss -ltnp`, `doctor` |

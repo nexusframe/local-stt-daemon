@@ -3,7 +3,7 @@
 > **Status: preliminary, no provisional default selected.**
 > - Run on the interim public corpus (13.2B), not corpus A; `dynamic_audio_ctx=true` was not measured because it is broken in a long-running whisper-server v1.9.4 (06 §6.7).
 > - Consequence for stage 1: the elimination rule assumes `audio_ctx` was tested, so `small`, `small-q5_1`, `medium-q5_0` and `large-v3-turbo-q5_0` were eliminated on full-window latency alone (small: p50 6.7 s, small-q5_1: 7.6 s — close to the 6 s limit and measured at up to 91–99 °C package temperature).
-> - No configuration meets N2 (p90 ≤ 2.5 s even before injection). The fastest usable model is `small-q8_0` (p90 text_ready 5.65–5.82 s, WER 23.3 %). The 13.5 rule requires an explicit decision on the latency target; it is pending.
+> - No configuration meets N2 (p90 ≤ 2.5 s even before injection). The fastest usable model is `small-q8_0` (p90 text_ready 5.65–5.82 s, WER 23.3 %). The 13.5 rule requires an explicit decision on the latency target. **Decided 2026-09-17: N2 raised to 5 s** (01 §1.5, 13 §13.5); the tables below still use the old 2.5 s filter and will be replaced by the rerun with `audio_ctx∈{0,1000}` (13 §13.4).
 > - Observations: `small-q8_0` encodes faster than `small-q5_1` and f16 on this CPU (whisper-bench 5.0 s vs 7.0 s / 6.0 s); 8 threads give no gain (≤ 3 %); greedy decoding is deterministic here (WER spread 0.0 over 3 runs); beam 5 lowers `small-q8_0` WER from 23.3 % to 19.4 % at +33 % latency.
 
 # Benchmark results

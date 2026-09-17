@@ -4,7 +4,7 @@ The benchmark is the **first implementation step** ([15](15-implementation-plan.
 
 ## 13.1 Questions it answers
 
-1. Which model delivers the lowest WER for Polish while keeping p90 PTT latency ≤ 2.5 s for 4–10 s utterances (N2)?
+1. Which model delivers the lowest WER for Polish while keeping p90 PTT latency ≤ 5 s for 4–10 s utterances (N2)?
 2. Can the same model sustain continuous mode for 10 minutes without a growing queue (N3), including after the CPU heats up?
 3. Four or eight threads?
 4. Does a fixed shortened `audio_ctx` (with the full window for longer recordings, 06 §6.7) reduce latency without sacrificing quality?
@@ -85,9 +85,11 @@ Before starting, it checks whether `local-stt-whisper.service` is active. If so,
 The sequence is economical because the full matrix would take hours on this CPU:
 
 1. **Stage 1—`bench --quick`.** All models × `t∈{4,8}` × `audio_ctx∈{0,1000}`, using only the “medium” group (16 files). A model is eliminated for speed only when p50 `text_ready_s` > 6 s in **all four** configurations. This prevents the full encoder window from eliminating a model before `audio_ctx` is tested. `base-q5_1` remains a test control, not a production candidate.
-2. **Stage 2.** Remaining models × `t∈{4,8}` × `audio_ctx∈{0,1000}` over the entire A corpus, with files sent in the same order for every configuration (results depend on request history, 06 §6.7).
+2. **Stage 2.** Remaining models × `t∈{4,8}` × `audio_ctx∈{0,1000}` over the entire A corpus, **including the “medium” group again**, on one server per configuration. Files are sent in one fixed interleaved order, identical for every configuration and every repetition: round-robin over the groups (`short`, `medium`, `long_utt`, `difficult`), files within a group by name. Results depend on request history (06 §6.7), so medium recordings must be measured alongside longer recordings that fall back to the full window, as in production; stage-1 results are used only for elimination and are not reused in stage 2.
 3. **Stage 3—`bench --soak --model M --threads T --audio-ctx X`.** For the top one or two: play the `long/` recording through the real `Segmenter` in real time, looped to 10 minutes, while measuring the queue, RTF, and thermals. Run on **AC power and battery** (`powersave` governor).
 4. **Sanity check.** Run `whisper-bench -m <model> -t 4` for each model (raw encoder time) to separate HTTP and pipeline overhead from engine performance.
+
+Decision 2026-09-17 (rerun on the interim corpus B, after the fixed `audio_ctx` policy): models `small-q8_0`, `small-q5_1`, `medium-q5_0`, plus `base-q5_1` as the control; `t=4` only (8 threads gave ≤ 3 % in the first run); `audio_ctx∈{0,1000}`; beam search as in stage 2 above. The full matrix is run on corpus A once it is recorded.
 
 Measure each configuration three times. Report the WER for every run plus its mean and spread; do not assume identical answers because the production HTTP contract permits temperature fallback (06 §6.5), and the matrix also includes beam search. For each file, report the median time from three repetitions; calculate “medium” group percentiles from those medians. Record decoding parameters so equivalent settings are compared.
 
@@ -99,10 +101,10 @@ production = configurations excluding base-q5_1, with peak server RSS ≤ 1 GB (
              WER(audio_ctx) − WER(0) ≤ 1.0 pp for the same model, threads, and beam
 
 # Stage 0: provisional selection, without N2 confirmation yet.
-provisional = { configurations from production with p90_text_ready_s(medium) ≤ 2.5 s }
+provisional = { configurations from production with p90_text_ready_s(medium) ≤ 5 s }
 
 # v0.1: full daemon + injector, at least 20 utterances of 4–10 s per configuration.
-ptt_candidates = { configurations from provisional with p90_total ≤ 2.5 s }
+ptt_candidates = { configurations from provisional with p90_total ≤ 5 s }
 PTT_default    = argmin mean WER(corpus A) over ptt_candidates
                  tie (WER difference < 1 pp) → lower peak RAM → lower latency
                  latency tie (< 5%) → 4 threads
@@ -118,7 +120,9 @@ if it fails → test the next faster production model satisfying N1/N2; if that 
 
 Stage 0 ranks configurations by quality and time to text; it does not claim N2 compliance. In v0.1, measure the full `total` for successive candidates until one meets the threshold. Do not subtract an arbitrary 100 ms or add separate stage percentiles. The measurement includes successful insertion into the applications listed in 14.4, including with existing clipboard content; the report states the backend, application, clipboard content type, wait times, and failed-paste rate. Do not classify failures as fast successes. Report `inject` separately alongside `total`; the additional 150 ms before restoration is part of it.
 
-If no model satisfies N2 (for example, even `small-q5_1` has p90 > 2.5 s), do not silently change the requirement. Instead, the report presents the **best available compromise and an explicit recommendation to change N2** for approval.
+If no model satisfies N2 (for example, even `small-q5_1` has p90 > 5 s), do not silently change the requirement. Instead, the report presents the **best available compromise and an explicit recommendation to change N2** for approval.
+
+History: N2 was originally 2.5 s. The first stage-0 run (`docs/benchmark-results.md`) found no configuration below 5.6 s p90 `text_ready_s` with the full window; `small-q8_0` with fixed `audio_ctx = 1000` measured 3.3–4.0 s (06 §6.7), while the clearly more accurate `medium-q5_0` and `large-v3-turbo-q5_0` were 4–7× slower than `small-q8_0` with the full window. On 2026-09-17 the user approved raising N2 to 5 s, which leaves room for injection and the ±20 % thermal variance of the reference machine.
 
 ## 13.6 Results
 
