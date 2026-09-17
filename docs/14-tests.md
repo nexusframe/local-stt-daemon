@@ -1,6 +1,6 @@
 # 14. Test strategy
 
-Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` for `src/local_stt` (excluding `bench/`). Run `pytest -m "not needs_whisper and not needs_x11 and not needs_audio and not e2e"` for the fast suite and `pytest` for the complete local suite.
+Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` for `src/local_stt` (excluding `bench/`). python-xlib ships no type information, so `pyproject.toml` contains `[[tool.mypy.overrides]] module = ["Xlib.*"] ignore_missing_imports = true`; Xlib calls are confined to `hotkeys/x11.py` and `inject/` (`x11util.py`, `clipboard.py`), whose public functions have fully typed signatures so untyped values do not leak into the rest of the code. Run `pytest -m "not needs_whisper and not needs_x11 and not needs_audio and not e2e"` for the fast suite and `pytest` for the complete local suite.
 
 ## 14.1 Pyramid
 
@@ -22,7 +22,7 @@ Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` f
 | `segmenter` | start after `min_speech_ms`; rejection of short impulses; hysteresis (p oscillating between thresholds does not end speech); end after `min_silence_ms`; pre-roll and padding; cut at `max_segment_s` in the longest silence / lowest p; `flush()` | `ScriptedVad` returning a prescribed p sequence; assertions at sample boundaries |
 | `vad` | tensor shapes, transfer of 64 context samples and state, `reset()` | real `silero_vad.onnx` on silence (p < 0.1) and speech (max p > 0.8) fixtures |
 | `recorder` / `audio.consumer` | start-sound window masking; duration limit; `AudioClip`; final frames waiting in the queue are processed before `RecordingFinished`; rejection of frames outside the time boundary and from a foreign `capture_id`; discarding an old recording does not remove a new one | synthetic frames and controlled command ordering |
-| `text.filters` | every hallucination pattern (positive and negative—the Polish sample “Dziękuję za uwagę, a teraz…” **must not** be removed); `no_speech`+`logprob` (only together); n-gram loops; prompt echo | case table |
+| `text.filters` | every hallucination pattern (positive and negative—the Polish sample “Dziękuję za uwagę, a teraz…” **must not** be removed); `no_speech`+`logprob` (only together); n-gram loops; prompt echo (continuous context suffix → rejected; PTT result equal to a `vocabulary_prompt` word → **kept**; `prompt_tail=None` → filter skipped) | case table |
 | `text.processor` | steps 2–7 from [08](08-text-injection.md) §8.2, including `max_length` → period removal and lowercase; joining `" trans"` + `"krypcja"` without an extra space; preserving spaces between words; separator after a removed segment | table |
 | `hotkeys.spec` | parsing, errors, rejection of AltGr/Super_L/Control_L/Shift_L, `ptt_cancel_key` validation | |
 | `config` | defaults; every rule from [09](09-configuration.md) §9.3; unknown key → error; `whisper-server.env` generation | |

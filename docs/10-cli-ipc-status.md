@@ -16,7 +16,7 @@ One entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), with sub
 | `local-stt devices` | v0.1 | lists PipeWire sources (`pactl -f json list sources`, excluding `.monitor`): node name for `audio.device` + description; marks the default | no |
 | `local-stt models list\|pull NAME\|verify` | stage 0 | models in `models_dir`, HF download, SHA256 verification (the only command that uses the Internet) | no |
 | `local-stt models list --bench` | v0.3 | lists models with the latest benchmark results | no |
-| `local-stt transcribe FILE.wav [--model M]` | stage 0 | one-shot file transcription (test without microphone or hotkeys); without `--model`, uses the running server; with `--model`, uses a **temporary** server on port 8199 (like `bench`) to avoid changing the service model | without `--model`: yes |
+| `local-stt transcribe FILE.wav [--model M]` | stage 0 | one-shot file transcription (test without microphone or hotkeys); without `--model`, uses the running server; with `--model`, uses a **temporary** server on a random free loopback port (like `bench`, [13](13-benchmark.md) §13.4) to avoid changing the service model | without `--model`: yes |
 | `local-stt record-corpus DIR [--long]` | stage 0 | records the benchmark corpus ([13](13-benchmark.md) §13.2) | no |
 | `local-stt bench [--quick] [--dataset DIR] …` | stage 0 | model matrix on temporary servers ([13](13-benchmark.md) §13.4) | no (the server service should be stopped) |
 | `local-stt bench --soak …` | v0.2 | 10-minute continuous-mode test through the real Segmenter | no |

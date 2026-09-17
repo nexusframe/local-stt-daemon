@@ -56,7 +56,7 @@ The `long/NNN.words.json` reference contains the words actually spoken and manua
 
 ## 13.4 Matrix
 
-For each configuration, `local-stt bench` starts a **temporary** `whisper-server` on port 8199: `nice -n 5` (matching `Nice=5` in the unit), random `--request-path`, start → `/health` → warm-up (one discarded request) → measurements → stop.
+For each configuration, `local-stt bench` starts a **temporary** `whisper-server` on a random free port (the OS picks it: bind a socket to `127.0.0.1:0`, read the port, close the socket, pass it to `--port`; if the server fails to bind in the meantime, retry with a new port, at most 3 attempts), so `bench` and `transcribe --model` never collide: `nice -n 5` (matching `Nice=5` in the unit), random `--request-path`, start → `/health` → warm-up (one discarded request) → measurements → stop.
 
 Before starting, it checks whether `local-stt-whisper.service` is active. If so, it refuses to proceed and displays `systemctl --user stop local-stt-whisper local-stt` (the `--allow-concurrent` flag skips this check), because two servers would distort CPU and RAM results.
 

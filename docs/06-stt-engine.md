@@ -139,7 +139,7 @@ The `prompt` field is Whisper's `initial_prompt` (prompt-context budget of about
 
 - `stt.vocabulary_prompt` may be, for example, `"Kubernetes, PipeWire, whisper.cpp, Gdańsk."`. Proper names in the prompt substantially improve their spelling.
 - In PTT, the context consists only of the vocabulary because each recording is independent.
-- In continuous mode, context carries punctuation and capitalization across segments. Risk: a hallucination repeats the prompt. The filter in 6.8 guards against this (a result identical to the prompt suffix is rejected).
+- In continuous mode, context carries punctuation and capitalization across segments. Risk: a hallucination repeats the prompt. The filter in 6.8 guards against this (a result identical to the suffix of the session context is rejected). The vocabulary is never treated as an echo source: a PTT utterance consisting only of a vocabulary word (e.g. “Gdańsk”) must not be discarded.
 
 ## 6.7 `audio_ctx` — the main latency lever
 
@@ -190,7 +190,7 @@ Content filtering is performed by `TextProcessor`, not the engine ([08](08-text-
    - `^\s*dzięk(i|uję) za (uwagę|obejrzenie|oglądanie)[.!]?\s*$` — **unconfirmed**, added by analogy with “Thanks for watching.” This entry matches only the entire segment so that these words are not removed from a normal utterance.
    - `^\s*(za)?subskrybuj[^.]*[.!]?\s*$` — unconfirmed, as above.
 3. reject repetitions: a segment identical to the preceding segment in the same result, or an n-gram (n ≥ 3 words) repeated ≥ 4 consecutive times (decoder loop),
-4. reject the entire result if, after normalization, it equals the suffix of the supplied prompt.
+4. **continuous mode only:** reject the entire result if, after normalization, it equals the suffix of the session context passed in the prompt (the `last_text` part, not `stt.vocabulary_prompt`). In PTT, and when the context is empty, this filter does not run.
 
 Every rejection is logged at DEBUG as `filtered: <reason>`. Content is logged only when `logging.log_text = true` ([12](12-logging-privacy-errors.md)).
 

@@ -16,7 +16,7 @@ class TextContext:
     seq: int | None
     cut: Literal["release", "max_duration", "silence", "max_length", "flush"]
     prev_cut: str | None          # cut of the previous segment from this session (continuous)
-    prompt_tail: str | None       # end of the prompt passed to the engine
+    prompt_tail: str | None       # session context passed in the prompt (continuous only; excludes vocabulary_prompt); None in PTT
 ```
 
 ## 8.2 `TextProcessor` — steps (in this order)

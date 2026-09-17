@@ -8,7 +8,7 @@ The sequence follows the preliminary design principle: **first establish whether
 
 | # | Task | Result |
 |---|---|---|
-| 0.1 | Repository skeleton: `pyproject.toml` (src layout), `ruff`, `mypy`, `pytest`, `requirements.lock`, `git init` | `pytest` passes on an empty suite |
+| 0.1 | Repository skeleton: `pyproject.toml` (src layout), `ruff`, `mypy`, `pytest` (including the mypy override for `Xlib.*`, [14](14-tests.md)), `requirements.lock`; the git repository already exists | `pytest` passes on an empty suite |
 | 0.2 | `scripts/install.sh` steps 1–4 (apt, build whisper.cpp v1.9.4 + `.whisper-tag`, venv) and `secret` generation | `bin/whisper-server --help` |
 | 0.3 | `local_stt/models.py` + `local-stt models pull/list/verify` + `scripts/models.sha256` (base-q5_1, small-q5_1, small-q8_0, small, medium-q5_0, large-v3-turbo-q5_0, silero-vad) | models on disk, checksums valid |
 | 0.4 | `audio/capture.py` (minimum: 16 kHz `pipewire` PCM, frames, `PIPEWIRE_NODE`) + `audio/wav.py` | `needs_audio` test; confirmation that `sounddevice` with `PIPEWIRE_NODE` reaches the selected node (already verified for `arecord`, [05](05-audio-and-vad.md) §5.2) |
