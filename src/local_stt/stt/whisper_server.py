@@ -63,9 +63,25 @@ def read_request_path(secret_file: Path = DEFAULT_SECRET_FILE) -> str:
     return "/" + secret
 
 
-def compute_audio_ctx(duration_s: float, margin: int) -> int:
-    """Encoder context for a recording of `duration_s` (06 §6.7); 1500 = full 30 s window."""
-    return min(1500, math.ceil(duration_s * 50) + margin)
+FULL_AUDIO_CTX = 1500  # 30 s encoder window
+
+
+def select_audio_ctx(duration_s: float, audio_ctx: int, margin: int) -> int:
+    """`audio_ctx` for one request (06 §6.7): the fixed value if the recording fits, else 0.
+
+    Only these two values are ever sent to a server: per-request values break decoding in a
+    long-running whisper-server v1.9.4.
+    """
+    needed = math.ceil(duration_s * 50) + margin
+    return audio_ctx if audio_ctx > 0 and needed <= audio_ctx else 0
+
+
+def _check_audio_ctx(audio_ctx: int, margin: int) -> None:
+    if not (audio_ctx == 0 or 0 <= margin < audio_ctx < FULL_AUDIO_CTX):
+        raise ValueError(
+            f"audio_ctx must be 0 or in (margin, {FULL_AUDIO_CTX}), "
+            f"got {audio_ctx} (margin {margin})"
+        )
 
 
 def build_multipart(
@@ -132,14 +148,15 @@ class WhisperServerEngine:
         port: int,
         request_path: str,
         model: str,
-        dynamic_audio_ctx: bool = False,
+        audio_ctx: int = 0,
         audio_ctx_margin: int = 128,
         health_timeout_s: float = 2.0,
     ):
+        _check_audio_ctx(audio_ctx, audio_ctx_margin)
         self.port = port
         self.request_path = request_path
         self.model = model
-        self.dynamic_audio_ctx = dynamic_audio_ctx
+        self.audio_ctx = audio_ctx
         self.audio_ctx_margin = audio_ctx_margin
         self.health_timeout_s = health_timeout_s
 
@@ -166,9 +183,7 @@ class WhisperServerEngine:
         if sample_rate != SAMPLE_RATE:
             raise ValueError(f"sample_rate must be {SAMPLE_RATE}, got {sample_rate}")
         duration_s = len(audio) / sample_rate
-        audio_ctx = (
-            compute_audio_ctx(duration_s, self.audio_ctx_margin) if self.dynamic_audio_ctx else 0
-        )
+        audio_ctx = select_audio_ctx(duration_s, self.audio_ctx, self.audio_ctx_margin)
         fields = [
             ("response_format", "verbose_json"),
             ("language", language),
@@ -236,7 +251,8 @@ class TemporaryWhisperServer:
         model: str,
         threads: int = 4,
         beam_size: int = -1,
-        dynamic_audio_ctx: bool = False,
+        audio_ctx: int = 0,
+        audio_ctx_margin: int = 128,
         language: str = "pl",
         binary: Path = DEFAULT_BINARY,
         startup_timeout_s: float = 120.0,
@@ -245,7 +261,9 @@ class TemporaryWhisperServer:
         self.model = model
         self.threads = threads
         self.beam_size = beam_size
-        self.dynamic_audio_ctx = dynamic_audio_ctx
+        _check_audio_ctx(audio_ctx, audio_ctx_margin)
+        self.audio_ctx = audio_ctx
+        self.audio_ctx_margin = audio_ctx_margin
         self.language = language
         self.binary = binary
         self.startup_timeout_s = startup_timeout_s
@@ -300,7 +318,8 @@ class TemporaryWhisperServer:
             port=port,
             request_path=request_path,
             model=self.model,
-            dynamic_audio_ctx=self.dynamic_audio_ctx,
+            audio_ctx=self.audio_ctx,
+            audio_ctx_margin=self.audio_ctx_margin,
         )
         deadline = time.monotonic() + self.startup_timeout_s
         while time.monotonic() < deadline:

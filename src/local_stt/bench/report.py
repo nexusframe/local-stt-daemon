@@ -27,6 +27,7 @@ N1_SERVER_RSS_MB = 1024.0
 N2_P90_S = 2.5
 AUDIO_CTX_MAX_WER_DELTA = 0.01  # 1.0 pp
 WER_TIE = 0.01
+LEGACY_PER_REQUEST = -1  # results recorded with the former `dynamic_audio_ctx=true`
 RELATIVE_TIE = 0.05
 
 
@@ -35,7 +36,7 @@ class ConfigStats:
     key: str
     model: str
     threads: int
-    dynamic_audio_ctx: bool
+    audio_ctx: int  # 0 = full window, N = fixed value, LEGACY_PER_REQUEST = old per-request mode
     beam_size: int
     files: int = 0
     wer_runs: list[float] = field(default_factory=list)
@@ -63,6 +64,13 @@ class ConfigStats:
     @property
     def cer_mean(self) -> float:
         return statistics.fmean(self.cer_runs) if self.cer_runs else float("nan")
+
+
+def config_audio_ctx(cfg: dict[str, Any]) -> int:
+    """audio_ctx of a recorded configuration, including runs made before the fixed policy."""
+    if "audio_ctx" in cfg:
+        return int(cfg["audio_ctx"])
+    return LEGACY_PER_REQUEST if cfg.get("dynamic_audio_ctx") else 0
 
 
 def load_results(run_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -98,9 +106,7 @@ def summarize(lines: list[dict[str, Any]], stage: int | None) -> dict[str, Confi
     stats: dict[str, ConfigStats] = {}
     for key, rows in by_config.items():
         cfg = rows[0]["config"]
-        s = ConfigStats(
-            key, cfg["model"], cfg["threads"], cfg["dynamic_audio_ctx"], cfg["beam_size"]
-        )
+        s = ConfigStats(key, cfg["model"], cfg["threads"], config_audio_ctx(cfg), cfg["beam_size"])
         _fill_quality(s, rows)
         _fill_latency(s, rows)
         runs = [c for c in config_lines if c["config_key"] == key]
@@ -203,9 +209,9 @@ def select(full: dict[str, ConfigStats], control: str) -> Selection:
             excluded[s.key] = "control model (not a production candidate)"
         elif s.peak_rss_mb is None or s.peak_rss_mb > N1_SERVER_RSS_MB:
             excluded[s.key] = f"peak server RSS {_fmt(s.peak_rss_mb, '.0f')} MB > 1 GB (N1)"
-        elif s.dynamic_audio_ctx and not _audio_ctx_allowed(s, full):
+        elif s.audio_ctx != 0 and not _audio_ctx_allowed(s, full):
             excluded[s.key] = (
-                "dynamic_audio_ctx costs > 1.0 pp WER (or no audio_ctx=false counterpart)"
+                "audio_ctx costs > 1.0 pp WER vs the full window (or no audio_ctx=0 run)"
             )
         else:
             production.append(s)
@@ -223,7 +229,7 @@ def _audio_ctx_allowed(s: ConfigStats, full: dict[str, ConfigStats]) -> bool:
         (
             c
             for c in full.values()
-            if (c.model, c.threads, c.beam_size, c.dynamic_audio_ctx)
+            if (c.model, c.threads, c.beam_size, c.audio_ctx)
             == (s.model, s.threads, s.beam_size, False)
         ),
         None,
@@ -263,7 +269,8 @@ def _pct(value: float) -> str:
 
 def _config_label(s: ConfigStats) -> str:
     beam = "greedy" if s.beam_size < 0 else f"beam {s.beam_size}"
-    return f"`{s.model}` t={s.threads} actx={'on' if s.dynamic_audio_ctx else 'off'} {beam}"
+    ctx = {0: "full", LEGACY_PER_REQUEST: "per-request"}.get(s.audio_ctx, str(s.audio_ctx))
+    return f"`{s.model}` t={s.threads} ctx={ctx} {beam}"
 
 
 _COLUMNS = (
@@ -288,7 +295,7 @@ def _row(cells: Iterable[str]) -> str:
 def _table(stats: Iterable[ConfigStats], with_groups: bool) -> list[str]:
     columns = list(_COLUMNS) + ([f"WER {g} %" for g in _GROUPS] if with_groups else [])
     rows = [_row(columns), _row("---" for _ in columns)]
-    for s in sorted(stats, key=lambda s: (s.model, s.beam_size, s.threads, s.dynamic_audio_ctx)):
+    for s in sorted(stats, key=lambda s: (s.model, s.beam_size, s.threads, s.audio_ctx)):
         cells = [
             _config_label(s),
             f"{_pct(s.wer_mean)} ± {_pct(s.wer_spread)}",
@@ -347,7 +354,7 @@ def _selection_section(selection: Selection) -> list[str]:
         settings = [
             f'`stt.model = "{best.model}"`',
             f"`stt.threads = {best.threads}`",
-            f"`stt.dynamic_audio_ctx = {str(best.dynamic_audio_ctx).lower()}`",
+            f"`stt.audio_ctx = {best.audio_ctx}`",
         ]
         if best.beam_size >= 0:
             settings.append(f"`stt.beam_size = {best.beam_size}`")

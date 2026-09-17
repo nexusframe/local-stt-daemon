@@ -49,7 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--dataset", type=Path, default=Path.home() / "stt-corpus")
     bench.add_argument("--models", help="comma-separated (default: all six benchmark models)")
     bench.add_argument("--threads", default="4,8", help="comma-separated (default: 4,8)")
-    bench.add_argument("--audio-ctx", default="false,true", help="dynamic_audio_ctx values")
+    bench.add_argument(
+        "--audio-ctx", default="0,1000", help="fixed audio_ctx values, 0 = full window (06 §6.7)"
+    )
     bench.add_argument("--repeats", type=int, default=3)
     bench.add_argument("--resume", type=Path, metavar="RUN_DIR", help="continue an interrupted run")
     bench.add_argument("--no-beam", action="store_true", help="skip -bs 5 for the top two models")
@@ -150,11 +152,9 @@ def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
 
     try:
         threads = [int(t) for t in args.threads.split(",")]
-        audio_ctx = [
-            {"true": True, "false": False}[v.strip().lower()] for v in args.audio_ctx.split(",")
-        ]
-    except (ValueError, KeyError):
-        parser.error("--threads takes integers and --audio-ctx takes true/false values")
+        audio_ctx = [int(v) for v in args.audio_ctx.split(",")]
+    except ValueError:
+        parser.error("--threads and --audio-ctx take comma-separated integers")
     models = args.models.split(",") if args.models else list(runner.DEFAULT_MODELS)
     return runner.run(
         args.dataset.expanduser(),

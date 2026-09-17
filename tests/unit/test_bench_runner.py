@@ -35,7 +35,7 @@ def test_load_dataset_layout(tmp_path: Path) -> None:
 
 
 def test_results_resume(tmp_path: Path) -> None:
-    cfg = runner.BenchConfig("small", 4, False)
+    cfg = runner.BenchConfig("small", 4, 0)
     item = runner.Item("medium", "001", tmp_path / "001.wav", "tekst")
     results = runner.Results(tmp_path)
     results.append(
@@ -55,4 +55,4 @@ def test_results_resume(tmp_path: Path) -> None:
 
 
 def test_config_key() -> None:
-    assert runner.BenchConfig("small-q5_1", 8, True, 5).key == "small-q5_1|t8|actx1|bs5"
+    assert runner.BenchConfig("small-q5_1", 8, 1000, 5).key == "small-q5_1|t8|ctx1000|bs5"

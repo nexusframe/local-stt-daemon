@@ -107,21 +107,52 @@ def test_transcribe_request_contract(stub: tuple[Stub, int]) -> None:
     assert fields["file"][:4] == b"RIFF"
 
 
-def test_prompt_and_dynamic_audio_ctx(stub: tuple[Stub, int]) -> None:
+def test_prompt_and_fixed_audio_ctx(stub: tuple[Stub, int]) -> None:
     state, port = stub
-    engine = _engine(port, dynamic_audio_ctx=True, audio_ctx_margin=128)
+    engine = _engine(port, audio_ctx=1000, audio_ctx_margin=128)
     engine.transcribe(
         _audio(3.0), sample_rate=16000, language="pl", prompt="Gdańsk, PipeWire.", timeout_s=5
     )
 
     fields = _form_fields(state.requests[0][2], state.requests[0][3])
     assert fields["prompt"].decode() == "Gdańsk, PipeWire."
-    assert fields["audio_ctx"] == b"278"  # ceil(3.0 * 50) + 128
+    assert fields["audio_ctx"] == b"1000"  # 3 s fits: ceil(3.0 * 50) + 128 <= 1000
 
 
-@pytest.mark.parametrize(("duration", "expected"), [(3.0, 278), (5.01, 379), (40.0, 1500)])
-def test_compute_audio_ctx(duration: float, expected: int) -> None:
-    assert ws.compute_audio_ctx(duration, 128) == expected
+@pytest.mark.parametrize(
+    ("duration", "audio_ctx", "expected"),
+    [
+        (3.0, 1000, 1000),
+        (17.4, 1000, 1000),  # 870 + 128 = 998 frames: fits
+        (17.46, 1000, 0),  # 873 + 128 = 1001 frames -> full window
+        (40.0, 1000, 0),
+        (3.0, 0, 0),  # full window configured
+    ],
+)
+def test_select_audio_ctx_sends_only_fixed_value_or_full_window(
+    duration: float, audio_ctx: int, expected: int
+) -> None:
+    assert ws.select_audio_ctx(duration, audio_ctx, 128) == expected
+
+
+@pytest.mark.parametrize(("audio_ctx", "margin"), [(1500, 128), (100, 128), (-1, 0), (1000, -5)])
+def test_invalid_audio_ctx_is_rejected(audio_ctx: int, margin: int) -> None:
+    with pytest.raises(ValueError, match="audio_ctx"):
+        ws.WhisperServerEngine(
+            port=1,
+            request_path=REQUEST_PATH,
+            model="m",
+            audio_ctx=audio_ctx,
+            audio_ctx_margin=margin,
+        )
+
+
+def test_long_recording_falls_back_to_full_window(stub: tuple[Stub, int]) -> None:
+    state, port = stub
+    _engine(port, audio_ctx=1000).transcribe(
+        _audio(20.0), sample_rate=16000, language="pl", prompt=None, timeout_s=5
+    )
+    assert _form_fields(state.requests[0][2], state.requests[0][3])["audio_ctx"] == b"0"
 
 
 def test_parse_real_v1_9_4_response_preserves_segment_text(stub: tuple[Stub, int]) -> None:

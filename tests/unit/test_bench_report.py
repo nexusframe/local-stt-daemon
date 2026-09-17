@@ -5,12 +5,12 @@ import pytest
 from local_stt.bench import report
 
 
-def cfg(model: str, threads: int = 4, actx: bool = False, beam: int = -1) -> dict[str, Any]:
-    return {"model": model, "threads": threads, "dynamic_audio_ctx": actx, "beam_size": beam}
+def cfg(model: str, threads: int = 4, ctx: int = 0, beam: int = -1) -> dict[str, Any]:
+    return {"model": model, "threads": threads, "audio_ctx": ctx, "beam_size": beam}
 
 
 def key(c: dict[str, Any]) -> str:
-    return f"{c['model']}|t{c['threads']}|actx{int(c['dynamic_audio_ctx'])}|bs{c['beam_size']}"
+    return f"{c['model']}|t{c['threads']}|ctx{c['audio_ctx']}|bs{c['beam_size']}"
 
 
 def file_line(
@@ -88,7 +88,7 @@ def test_elimination_requires_all_configs_slow_and_spares_control() -> None:
         file_line(slow, latency=7.0),
         file_line({**slow, "threads": 8}, latency=6.5),
         file_line(mixed, latency=7.0),
-        file_line({**mixed, "dynamic_audio_ctx": True}, latency=5.0),
+        file_line({**mixed, "audio_ctx": 1000}, latency=5.0),
         file_line(base, latency=9.0),
     ]
     assert report.eliminated_models(report.summarize(lines, 1), "base-q5_1") == {"medium-q5_0"}
@@ -113,9 +113,9 @@ def _stats(
     p90: float,
     rss: float = 400.0,
     threads: int = 4,
-    actx: bool = False,
+    ctx: int = 0,
 ) -> report.ConfigStats:
-    s = report.ConfigStats(key(cfg(model, threads, actx)), model, threads, actx, -1)
+    s = report.ConfigStats(key(cfg(model, threads, ctx)), model, threads, ctx, -1)
     s.wer_runs, s.p90_text_ready_s, s.peak_rss_mb = [wer_mean], p90, rss
     return s
 
@@ -125,19 +125,19 @@ def test_select_applies_n1_audio_ctx_rule_and_n2_filter() -> None:
         _stats("base-q5_1", 0.30, 0.5),
         _stats("large-v3-turbo-q5_0", 0.05, 2.0, rss=1200),
         _stats("small", 0.10, 3.0),
-        _stats("small", 0.125, 2.0, actx=True),  # +2.5 pp vs actx off -> excluded
+        _stats("small", 0.125, 2.0, ctx=1000),  # +2.5 pp vs full window -> excluded
         _stats("small-q5_1", 0.12, 2.4),
-        _stats("small-q5_1", 0.125, 1.5, actx=True),  # +0.5 pp -> allowed
+        _stats("small-q5_1", 0.125, 1.5, ctx=1000),  # +0.5 pp -> allowed
     ]
     selection = report.select({s.key: s for s in stats}, control="base-q5_1")
-    assert [(s.model, s.dynamic_audio_ctx) for s in selection.provisional] == [
-        ("small-q5_1", True),
-        ("small-q5_1", False),
+    assert [(s.model, s.audio_ctx) for s in selection.provisional] == [
+        ("small-q5_1", 1000),
+        ("small-q5_1", 0),
     ]  # within 1 pp WER and equal RAM -> lower latency wins
     reasons = selection.excluded
     assert "control" in reasons[key(cfg("base-q5_1"))]
     assert "N1" in reasons[key(cfg("large-v3-turbo-q5_0"))]
-    assert "dynamic_audio_ctx" in reasons[key(cfg("small", actx=True))]
+    assert "audio_ctx" in reasons[key(cfg("small", ctx=1000))]
     assert "2.5" in reasons[key(cfg("small"))]
 
 
@@ -162,3 +162,14 @@ def test_render_mentions_unconfirmed_n2_and_interim_corpus() -> None:
     assert "N2 is not confirmed" in text and "Interim public corpus" in text
     assert "No configuration meets p90 text_ready" in text
     assert "| `small-q5_1` | 4200 |" in text
+
+
+def test_legacy_dynamic_audio_ctx_results_still_render() -> None:
+    legacy = {"model": "small-q5_1", "threads": 4, "dynamic_audio_ctx": True, "beam_size": -1}
+    line = file_line(cfg("small-q5_1")) | {
+        "config": legacy,
+        "config_key": "small-q5_1|t4|actx1|bs-1",
+    }
+    stats = report.summarize([line], stage=1)
+    assert next(iter(stats.values())).audio_ctx == report.LEGACY_PER_REQUEST
+    assert "ctx=per-request" in report.render([line], {})

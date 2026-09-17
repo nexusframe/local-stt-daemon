@@ -1,6 +1,6 @@
 """`local-stt bench`: model matrix on temporary servers (docs/13-benchmark.md §13.4).
 
-Stage 1 (`--quick`): every model x threads x dynamic_audio_ctx on the medium group only; a model is
+Stage 1 (`--quick`): every model x threads x audio_ctx on the medium group only; a model is
 eliminated for speed only if p50 text_ready_s > 6 s in all of its configurations.
 Stage 2: surviving models on the remaining groups (medium results are reused from stage 1), plus
 beam search (-bs 5) for the two best models by stage-1 WER on the whole corpus.
@@ -55,16 +55,12 @@ BENCH_DIR = ws.DATA_DIR / "bench"
 class BenchConfig:
     model: str
     threads: int
-    dynamic_audio_ctx: bool
+    audio_ctx: int  # 0 = full window; fixed value with full-window fallback (06 §6.7)
     beam_size: int = -1
 
     @property
     def key(self) -> str:
-        return f"{self.model}|t{self.threads}|actx{int(self.dynamic_audio_ctx)}|bs{self.beam_size}"
-
-    @staticmethod
-    def from_dict(d: dict[str, Any]) -> "BenchConfig":
-        return BenchConfig(d["model"], d["threads"], d["dynamic_audio_ctx"], d["beam_size"])
+        return f"{self.model}|t{self.threads}|ctx{self.audio_ctx}|bs{self.beam_size}"
 
 
 @dataclass(frozen=True)
@@ -248,7 +244,7 @@ def run_config(
         model=cfg.model,
         threads=cfg.threads,
         beam_size=cfg.beam_size,
-        dynamic_audio_ctx=cfg.dynamic_audio_ctx,
+        audio_ctx=cfg.audio_ctx,
     )
     started = time.monotonic()
     engine = server.start()
@@ -382,9 +378,9 @@ def service_active() -> bool:
 
 
 def _configs(
-    models: Iterable[str], threads: Iterable[int], actx: Iterable[bool]
+    models: Iterable[str], threads: Iterable[int], audio_ctx: Iterable[int]
 ) -> Iterator[BenchConfig]:
-    for model, t, a in itertools.product(models, threads, actx):
+    for model, t, a in itertools.product(models, threads, audio_ctx):
         yield BenchConfig(model, t, a)
 
 
@@ -394,7 +390,7 @@ def run(
     *,
     models: list[str],
     threads: list[int],
-    audio_ctx: list[bool],
+    audio_ctx: list[int],
     repeats: int,
     quick: bool,
     beam: bool,
@@ -450,7 +446,7 @@ def run(
         for model in report.top_models_by_wer(
             stage1, survivors, BEAM_TOP_N, exclude={CONTROL_MODEL}
         ):
-            cfg = BenchConfig(model, min(threads), False, BEAM_SIZE)
+            cfg = BenchConfig(model, min(threads), 0, BEAM_SIZE)
             run_config(2, cfg, items, repeats, results, models_dir)
     if sanity:
         for model in models:
