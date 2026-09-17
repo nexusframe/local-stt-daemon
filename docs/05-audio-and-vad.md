@@ -84,7 +84,7 @@ The “keep the stream open for another N seconds after PTT” option was reject
 
 ## 5.4 Silero VAD (`local_stt/audio/vad.py` module)
 
-- Model: `silero_vad.onnx` from the `snakers4/silero-vad` repository, tag **v6.2.1**, file `src/silero_vad/data/silero_vad.onnx` (2,327,524 B, MIT license). Downloaded by `install.sh` to `~/.local/share/local-stt/models/`; its SHA256 is pinned in `scripts/models.sha256`.
+- Model: `silero_vad.onnx` from the `snakers4/silero-vad` repository, tag **v6.2.1**, file `src/silero_vad/data/silero_vad.onnx` (2,327,524 B, MIT license). Downloaded by `install.sh` to `~/.local/share/local-stt/models/`; its SHA256 is pinned in `src/local_stt/models.sha256`.
 - Runtime: `onnxruntime` (CPU), **without torch**. The PyPI `silero-vad` package pulls in torch, so we do not use it.
 - Session: `SessionOptions.intra_op_num_threads = 1`, `inter_op_num_threads = 1`, so VAD does not compete with whisper.cpp for cores.
 

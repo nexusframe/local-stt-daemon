@@ -35,7 +35,7 @@ Binaries: `whisper-server`, `whisper-cli`, `whisper-bench` (plus `quantize` if i
 
 ## 6.3 Models
 
-Download: `local-stt models pull <name>` downloads `ggml-<name>.bin` from `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/` (the same source as `models/download-ggml-model.sh`) and verifies its SHA256 checksum against `scripts/models.sha256`. A file with an invalid checksum is deleted.
+Download: `local-stt models pull <name>` downloads `ggml-<name>.bin` from `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/` (the same source as `models/download-ggml-model.sh`) and verifies its SHA256 checksum against `src/local_stt/models.sha256`. The checksum file is package data (read through `importlib.resources`), so the command works identically from the repository and from the installed venv, which does not contain `scripts/`. A file with an invalid checksum is deleted.
 
 | Model (`ggml-<name>.bin` file) | Size | Polish WER FLEURS / CV9 (Whisper paper) | Role |
 |---|---:|---|---|

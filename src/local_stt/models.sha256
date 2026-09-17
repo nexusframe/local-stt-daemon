@@ -1,0 +1,10 @@
+# Pinned model checksums (sha256sum format). Read by local_stt.models.
+# whisper.cpp models: https://huggingface.co/ggerganov/whisper.cpp (LFS sha256, main @ 5359861c, 2024-10-29)
+422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898  ggml-base-q5_1.bin
+ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb  ggml-small-q5_1.bin
+49c8fb02b65e6049d5fa6c04f81f53b867b5ec9540406812c643f177317f779f  ggml-small-q8_0.bin
+1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b  ggml-small.bin
+19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f  ggml-medium-q5_0.bin
+394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2  ggml-large-v3-turbo-q5_0.bin
+# Silero VAD v6.2.1: src/silero_vad/data/silero_vad.onnx (2,327,524 B, git blob 80c5592e)
+1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3  silero_vad.onnx

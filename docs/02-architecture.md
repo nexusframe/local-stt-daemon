@@ -58,7 +58,6 @@ local-stt-daemon/
 ├── scripts/
 │   ├── install.sh
 │   ├── uninstall.sh
-│   ├── models.sha256
 │   └── fleurs_to_corpus.py
 ├── systemd/
 │   ├── local-stt.service
@@ -103,6 +102,7 @@ local-stt-daemon/
 │   ├── logging_setup.py               # TRACE, journald format
 │   ├── doctor.py
 │   ├── models.py                      # list/pull/verify
+│   ├── models.sha256                  # pinned model checksums (package data, sha256sum format)
 │   └── bench/
 │       ├── corpus.py                  # record-corpus
 │       ├── runner.py                  # matrix, temporary server, soak

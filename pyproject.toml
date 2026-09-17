@@ -35,6 +35,9 @@ version = { attr = "local_stt.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+local_stt = ["models.sha256"]
+
 # --- pytest (docs/14-tests.md) ---
 [tool.pytest.ini_options]
 testpaths = ["tests"]
