@@ -235,6 +235,8 @@ class TemporaryWhisperServer:
         *,
         model: str,
         threads: int = 4,
+        beam_size: int = -1,
+        dynamic_audio_ctx: bool = False,
         language: str = "pl",
         binary: Path = DEFAULT_BINARY,
         startup_timeout_s: float = 120.0,
@@ -242,12 +244,19 @@ class TemporaryWhisperServer:
         self.model_path = model_path
         self.model = model
         self.threads = threads
+        self.beam_size = beam_size
+        self.dynamic_audio_ctx = dynamic_audio_ctx
         self.language = language
         self.binary = binary
         self.startup_timeout_s = startup_timeout_s
         self._process: subprocess.Popen[bytes] | None = None
         self._stderr: collections.deque[str] = collections.deque(maxlen=20)
         self.engine: WhisperServerEngine | None = None
+
+    @property
+    def pid(self) -> int | None:
+        """PID of the whisper-server process (`nice` execs it, so this is the server itself)."""
+        return self._process.pid if self._process is not None else None
 
     def __enter__(self) -> WhisperServerEngine:
         return self.start()
@@ -280,14 +289,19 @@ class TemporaryWhisperServer:
             "nice", "-n", "5", str(self.binary),
             "--host", HOST, "--port", str(port), "--request-path", request_path,
             "-m", str(self.model_path), "-l", self.language, "-t", str(self.threads),
-            "-bs", "-1", "-sns",
+            "-bs", str(self.beam_size), "-sns",
         ]
         # fmt: on
         process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         self._process = process
         threading.Thread(target=self._drain_stderr, args=(process,), daemon=True).start()
 
-        engine = WhisperServerEngine(port=port, request_path=request_path, model=self.model)
+        engine = WhisperServerEngine(
+            port=port,
+            request_path=request_path,
+            model=self.model,
+            dynamic_audio_ctx=self.dynamic_audio_ctx,
+        )
         deadline = time.monotonic() + self.startup_timeout_s
         while time.monotonic() < deadline:
             if process.poll() is not None:

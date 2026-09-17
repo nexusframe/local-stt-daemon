@@ -44,6 +44,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="use a temporary server with this model instead of the running service",
     )
 
+    bench = commands.add_parser("bench", help="benchmark models on temporary servers (docs/13)")
+    bench.add_argument("--quick", action="store_true", help="stage 1 only (medium group)")
+    bench.add_argument("--dataset", type=Path, default=Path.home() / "stt-corpus")
+    bench.add_argument("--models", help="comma-separated (default: all six benchmark models)")
+    bench.add_argument("--threads", default="4,8", help="comma-separated (default: 4,8)")
+    bench.add_argument("--audio-ctx", default="false,true", help="dynamic_audio_ctx values")
+    bench.add_argument("--repeats", type=int, default=3)
+    bench.add_argument("--resume", type=Path, metavar="RUN_DIR", help="continue an interrupted run")
+    bench.add_argument("--no-beam", action="store_true", help="skip -bs 5 for the top two models")
+    bench.add_argument("--no-sanity", action="store_true", help="skip whisper-bench")
+    bench.add_argument("--allow-concurrent", action="store_true")
+    bench_commands = bench.add_subparsers(dest="bench_command", metavar="ACTION")
+    bench_report = bench_commands.add_parser("report", help="Markdown report of a run directory")
+    bench_report.add_argument("run_dir", type=Path, metavar="DIR")
+    bench_report.add_argument("--output", type=Path, help="write to a file instead of stdout")
+
     record = commands.add_parser("record-corpus", help="record the benchmark corpus (docs/13)")
     record.add_argument("dir", type=Path, metavar="DIR")
     record.add_argument(
@@ -116,6 +132,44 @@ def _transcribe(engine: "WhisperServerEngine", audio: "NDArray[np.float32]") -> 
     )
 
 
+def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from local_stt.bench import report, runner
+
+    if args.bench_command == "report":
+        try:
+            lines, info = report.load_results(args.run_dir)
+        except OSError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        markdown = report.render(lines, info)
+        if args.output:
+            args.output.write_text(markdown, encoding="utf-8")
+        else:
+            print(markdown, end="")
+        return 0
+
+    try:
+        threads = [int(t) for t in args.threads.split(",")]
+        audio_ctx = [
+            {"true": True, "false": False}[v.strip().lower()] for v in args.audio_ctx.split(",")
+        ]
+    except (ValueError, KeyError):
+        parser.error("--threads takes integers and --audio-ctx takes true/false values")
+    models = args.models.split(",") if args.models else list(runner.DEFAULT_MODELS)
+    return runner.run(
+        args.dataset.expanduser(),
+        args.resume or runner.default_out_dir(),
+        models=models,
+        threads=threads,
+        audio_ctx=audio_ctx,
+        repeats=args.repeats,
+        quick=args.quick,
+        beam=not args.no_beam,
+        sanity=not args.no_sanity,
+        allow_concurrent=args.allow_concurrent,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -123,6 +177,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_models(args)
     if args.command == "transcribe":
         return _run_transcribe(args)
+    if args.command == "bench":
+        return _run_bench(args, parser)
     if args.command == "record-corpus":
         from local_stt.bench.corpus import cmd_record_corpus
 

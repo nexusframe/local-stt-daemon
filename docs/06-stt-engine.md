@@ -152,6 +152,7 @@ audio_ctx = min(1500, ceil(duration_s * 50) + stt.audio_ctx_margin)    # margin 
 
 - For a 5-second utterance, the encoder runs several times faster.
 - Risk: the model was trained on the full window. With a heavily shortened context, quality may decline or repetitions may appear. Therefore `stt.dynamic_audio_ctx` (`true`/`false`) is a toggle, and the benchmark compares WER and latency for each model ([13](13-benchmark.md)). The default until benchmarking is `false`.
+- **Measured 2026-09-17 (whisper.cpp v1.9.4, `small-q5_1`, FLEURS medium group, 16 files):** in a long-running `whisper-server`, per-request `audio_ctx` makes the encoder ~1.7× faster but raises WER from ~22 % to 44–50 %, with hallucinated multilingual segments and loops on some files. `no_timestamps=true` does not fix it in a long-running server (43.9 %). The same files are transcribed correctly by `whisper-cli -ac N` and by a fresh server handling a single request, so the degradation depends on server state carried across requests with different `audio_ctx`, plus timestamp decoding (a fresh server with timestamps on still failed on one file). Until a fixed whisper.cpp version is verified, `dynamic_audio_ctx=true` is expected to fail the 13.5 WER rule; the benchmark still measures it because it reproduces the production setup (one long-running server).
 
 ### Separate models for PTT and continuous mode?
 
