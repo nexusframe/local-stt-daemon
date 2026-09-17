@@ -54,7 +54,6 @@ local-stt-daemon/
 ├── config.example.toml
 ├── README.md                          # brief: what it is, installation, link to docs/
 ├── docs/                              # this documentation
-├── bench/prompts_pl.txt               # corpus sentences
 ├── scripts/
 │   ├── install.sh
 │   ├── uninstall.sh
@@ -105,6 +104,8 @@ local-stt-daemon/
 │   ├── models.sha256                  # pinned model checksums (package data, sha256sum format)
 │   └── bench/
 │       ├── corpus.py                  # record-corpus
+│       ├── prompts_pl.txt             # corpus A sentences (package data)
+│       ├── long_pl.txt                # continuous-recording text, CC BY-SA 4.0 (+ .ATTRIBUTION.md)
 │       ├── runner.py                  # matrix, temporary server, soak
 │       ├── wer.py
 │       └── report.py

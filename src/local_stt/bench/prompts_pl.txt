@@ -1,0 +1,53 @@
+# Benchmark corpus A sentences (docs/13-benchmark.md §13.2).
+# [group] starts a section; each following non-empty line is one utterance.
+# Prompt numbers (NNN.wav) follow file order and must not change once a corpus is recorded:
+# add new sentences only at the end of the file.
+# Target spoken durations: short 1-3 s, medium 4-10 s, long_utt 12-25 s, difficult 5-10 s.
+
+[short]
+Otwórz nowy dokument.
+Zapisz zmiany w pliku.
+Dzisiaj pada deszcz.
+Zadzwoń do mnie wieczorem.
+Spotkanie przesunięto na jutro.
+Wyślij raport do końca tygodnia.
+Kup chleb i mleko.
+To brzmi całkiem rozsądnie.
+Nie zapomnij o kluczach.
+Proszę zamknąć okno.
+Wracam za pięć minut.
+Dziękuję za szybką odpowiedź.
+
+[medium]
+W przyszłym tygodniu musimy przygotować prezentację dla klienta i omówić z zespołem harmonogram kolejnych prac.
+Rano pojechałem rowerem nad jezioro, ale po godzinie zaczęło mocno wiać i musiałem wracać.
+Ta aplikacja działa szybko, jednak po każdej aktualizacji trzeba od nowa ustawiać wszystkie skróty klawiszowe.
+Moja siostra od kilku lat mieszka w Krakowie i pracuje jako lekarka w szpitalu dziecięcym.
+Jeżeli pogoda się utrzyma, w sobotę wybierzemy się w góry i przenocujemy w schronisku.
+Przed wysłaniem wiadomości sprawdź jeszcze raz, czy załączyłeś właściwą wersję umowy.
+Najbardziej lubię jesień, bo liście zmieniają kolor, a powietrze jest chłodne i przejrzyste.
+Wczoraj wieczorem obejrzeliśmy film dokumentalny o życiu pszczół i sposobach ich ochrony.
+Kierowca autobusu poprosił pasażerów, żeby przesunęli się w głąb pojazdu i nie blokowali drzwi.
+Po obiedzie usiądźmy razem i spokojnie zastanówmy się, jak podzielić obowiązki domowe.
+W bibliotece znalazłem starą książkę kucharską z przepisami na pierogi, żurek i sernik.
+Serwer przestał odpowiadać około północy, więc rano trzeba będzie przejrzeć wszystkie logi.
+Dziecko bawiło się w ogrodzie klockami, a pies leżał obok w cieniu starej jabłoni.
+Zanim podejmiesz decyzję, porozmawiaj z kimś, kto ma doświadczenie w podobnych sprawach.
+Na dworcu panował ogromny tłok, ponieważ z powodu awarii odwołano kilka porannych pociągów.
+Chciałbym zarezerwować stolik dla czterech osób na piątek na godzinę dziewiętnastą.
+
+[long_utt]
+Kiedy po latach wróciłem do rodzinnego miasteczka, okazało się, że prawie nic się nie zmieniło: na rynku wciąż stała ta sama piekarnia, w parku rosły stare kasztanowce, a sąsiedzi pamiętali mnie jeszcze z czasów, gdy jeździłem po ulicach na czerwonym rowerze i wracałem do domu dopiero po zmroku.
+Nowy system rezerwacji ma ułatwić pacjentom zapisywanie się do specjalistów, ale w pierwszych tygodniach działania wielu użytkowników skarżyło się na niejasne komunikaty, brak potwierdzeń wysyłanych pocztą elektroniczną oraz na to, że wolne terminy znikały z kalendarza, zanim zdążyli je wybrać.
+Podczas wczorajszego zebrania ustaliliśmy, że prace remontowe w budynku szkoły rozpoczną się na początku lipca, uczniowie przeniosą się tymczasowo do sal w domu kultury, a rodzice zostaną poinformowani o wszystkich zmianach w planie lekcji najpóźniej dwa tygodnie przed rozpoczęciem roku szkolnego.
+Wędrówka przez las trwała dłużej, niż zakładaliśmy, ponieważ szlak był miejscami zarośnięty, strumień po ulewie wystąpił z brzegów, a mapa kupiona w kiosku nie uwzględniała nowej drogi leśnej, więc kilka razy musieliśmy zawracać i szukać właściwego kierunku.
+W sprawozdaniu należy opisać cel badania, zastosowaną metodę oraz najważniejsze wyniki, a także wyraźnie zaznaczyć, które wnioski są dobrze uzasadnione danymi, a które pozostają jedynie przypuszczeniami wymagającymi dalszej weryfikacji na większej grupie uczestników.
+Babcia zawsze powtarzała, że najlepsza zupa powstaje wtedy, gdy nikt się nie spieszy, dlatego w każdą niedzielę od samego rana obierała warzywa, gotowała wywar na małym ogniu i dopiero w południe zapraszała całą rodzinę do stołu nakrytego białym obrusem.
+Jeżeli planujesz podróż samochodem przez kilka krajów, sprawdź wcześniej, czy potrzebujesz winiet lub elektronicznych opłat za autostrady, zabierz ze sobą aktualny dowód rejestracyjny i ubezpieczenie, a także zapisz numery alarmowe obowiązujące w każdym państwie na trasie.
+Po przeprowadzce do nowego mieszkania okazało się, że ściany są cieńsze, niż sugerował właściciel, więc każdego wieczoru słyszeliśmy rozmowy sąsiadów, szum telewizora i kroki na klatce schodowej, co w końcu skłoniło nas do zamontowania dodatkowej izolacji akustycznej.
+
+[difficult]
+Źdźbło trawy łaskotało Grześka, gdy żółw pełzł powoli przez gęstą, wilgotną łąkę.
+Spotkanie z Małgorzatą Żółkiewską odbędzie się 23 marca 2027 roku o 14:30 w Szczecinie.
+Zrób deploy nowej wersji na Kubernetesa, a potem sprawdź w Grafanie, czy latency nie przekracza 200 milisekund.
+Pociąg Intercity z Łodzi Fabrycznej do Wrocławia odjeżdża z peronu 3 i kosztuje 89 złotych 50 groszy.

@@ -13,7 +13,7 @@ The sequence follows the preliminary design principle: **first establish whether
 | 0.3 | `local_stt/models.py` + `local-stt models pull/list/verify` + `src/local_stt/models.sha256` (base-q5_1, small-q5_1, small-q8_0, small, medium-q5_0, large-v3-turbo-q5_0, silero-vad) | models on disk, checksums valid |
 | 0.4 | `audio/capture.py` (minimum: 16 kHz `pipewire` PCM, frames, `PIPEWIRE_NODE`) + `audio/wav.py` | `needs_audio` test; confirmation that `sounddevice` with `PIPEWIRE_NODE` reaches the selected node (already verified for `arecord`, [05](05-audio-and-vad.md) §5.2) |
 | 0.5 | `stt/whisper_server.py` + `local-stt transcribe FILE.wav` | Polish text from a file |
-| 0.6 | `bench/corpus.py` (`record-corpus`, including `--long`) + `bench/prompts_pl.txt` | corpus A recorded |
+| 0.6 | `bench/corpus.py` (`record-corpus`, including `--long`) + `bench/prompts_pl.txt` and `bench/long_pl.txt` (package data) | corpus A recorded |
 | 0.7 | `bench/wer.py`, `bench/runner.py` (stages 1–2 from [13](13-benchmark.md) §13.4; temporary server), `bench/report.py` | preliminary `docs/benchmark-results.md` |
 
 **Acceptance:**

@@ -16,19 +16,28 @@ The benchmark is the **first implementation step** ([15](15-implementation-plan.
 
 `local-stt record-corpus ~/stt-corpus`:
 
-- displays sentences from `bench/prompts_pl.txt`, records each after Enter is pressed (Enter stops recording), and saves `NNN.wav` (16 kHz mono s16) plus `NNN.txt` (reference text),
-- allows a recording to be repeated (`r`) or a sentence to be skipped (`s`).
+- displays sentences from `src/local_stt/bench/prompts_pl.txt`, records each after Enter is pressed (Enter stops recording), and saves `<group>/NNN.wav` (16 kHz mono s16) plus `<group>/NNN.txt` (reference text),
+- allows a recording to be repeated (`r`) or a sentence to be skipped (`s`); `q` quits, and running the command again resumes with the first prompt that has no recording,
+- warns (without rejecting the take) when the duration is outside the group's range.
 
-`bench/prompts_pl.txt` (part of the repository) contains about 40 utterances:
+`NNN` is the prompt's position in the file, and each group has its own subdirectory, so the benchmark selects a group by path:
+
+```text
+~/stt-corpus/short/001.wav … 012.wav      ~/stt-corpus/long_utt/029.wav … 036.wav
+~/stt-corpus/medium/013.wav … 028.wav     ~/stt-corpus/difficult/037.wav … 040.wav
+~/stt-corpus/long/001.wav                 (continuous recording, --long)
+```
+
+`src/local_stt/bench/prompts_pl.txt` (package data, so it is available in the installed venv) contains 40 utterances in `[short]`, `[medium]`, `[long_utt]`, and `[difficult]` sections. Numbers follow file order, so new sentences are only appended:
 
 | Group | Count | Length | Purpose |
 |---|---:|---|---|
 | short commands/sentences | 12 | 1–3 s | PTT, typical short notes |
 | medium | 16 | 4–10 s | primary N2 case |
-| long | 8 | 12–25 s | `max_segment_s` and `audio_ctx` boundaries |
+| long (`long_utt`) | 8 | 12–25 s | `max_segment_s` and `audio_ctx` boundaries |
 | difficult | 4 | 5–10 s | proper names, numbers, technical Anglicisms, many ą/ę/ł/ż/ź/ś/ć/ń characters |
 
-Also include a **continuous recording** under `long/` (`record-corpus --long`): about five minutes of read-aloud text with natural pauses (for example, a Polish Wikipedia article saved as the reference) for testing continuous mode.
+Also include a **continuous recording** under `long/` (`record-corpus --long`): about five minutes of read-aloud text with natural pauses for testing continuous mode. The text is `src/local_stt/bench/long_pl.txt` (~780 words from the Polish Wikipedia article “Maria Skłodowska-Curie”, revision 80747346, CC BY-SA 4.0; attribution and edits in `long_pl.ATTRIBUTION.md`), so the recording is reproducible and the reference text is known. Repeated takes are saved as `long/002.wav`, and so on.
 
 ### B. FLEURS pl_pl (optional—for comparability with the paper)
 

@@ -36,7 +36,7 @@ version = { attr = "local_stt.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-local_stt = ["models.sha256"]
+local_stt = ["models.sha256", "bench/prompts_pl.txt", "bench/long_pl.txt", "bench/long_pl.ATTRIBUTION.md"]
 
 # --- pytest (docs/14-tests.md) ---
 [tool.pytest.ini_options]

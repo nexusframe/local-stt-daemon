@@ -43,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         help="use a temporary server with this model instead of the running service",
     )
+
+    record = commands.add_parser("record-corpus", help="record the benchmark corpus (docs/13)")
+    record.add_argument("dir", type=Path, metavar="DIR")
+    record.add_argument(
+        "--long", action="store_true", help="record the ~5 min continuous text into DIR/long/"
+    )
     return parser
 
 
@@ -117,5 +123,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_models(args)
     if args.command == "transcribe":
         return _run_transcribe(args)
+    if args.command == "record-corpus":
+        from local_stt.bench.corpus import cmd_record_corpus
+
+        return cmd_record_corpus(args.dir, long=args.long)
     parser.print_help()
     return 2
