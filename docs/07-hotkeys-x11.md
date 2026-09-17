@@ -108,8 +108,8 @@ Wake-up pipe pozwala Controllerowi przerwać pętlę przy `reload` i `shutdown`.
 
 Przy starcie daemon ustala typ sesji graficznej przez `loginctl show-user $UID -p Display --value` → `loginctl show-session <id> -p Type --value` (zweryfikowane: `x11`). Zmienne `XDG_SESSION_TYPE` w środowisku menedżera użytkownika mogą być nieaktualne po zmianie sesji, a `XDG_SESSION_ID` nie jest tam w ogóle ustawiane. `XDG_SESSION_TYPE` służy tylko jako fallback, gdy `loginctl` zawiedzie.
 
-- typ ≠ `x11` lub brak `DISPLAY` → ERROR `unsupported session (only X11)` i wyjście z kodem 78 (`EX_CONFIG`). Unit ma `RestartPreventExitStatus=78`, więc systemd nie restartuje go w pętli.
-- Sesja X11, ale `Display()` rzuca błąd połączenia (np. wyścig przy logowaniu) → ERROR i wyjście z kodem **1**. `Restart=on-failure` ponawia start co 2 s, maks. 5 razy w 60 s.
+- typ ≠ `x11` → ERROR `unsupported session (only X11)` i wyjście z kodem 78 (`EX_CONFIG`). Unit ma `RestartPreventExitStatus=78`, więc systemd nie restartuje go w pętli.
+- Sesja X11, ale brak `DISPLAY` w środowisku albo `Display()` rzuca błąd połączenia (np. wyścig importu zmiennych przy logowaniu) → ERROR i wyjście z kodem **1**. `Restart=on-failure` ponawia start co 2 s, maks. 5 razy w 60 s.
 
 ## 7.6 Interfejs (dla przyszłego Waylanda)
 

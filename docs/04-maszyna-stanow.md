@@ -73,7 +73,7 @@ Dźwięki są opisane nazwami z [10](10-cli-ipc-status.md) §10.6 (jedyne źród
 
 | Zdarzenie | Warunek | Akcje | Nowy stan |
 |---|---|---|---|
-| `PttPressed` | `engine == READY` | `recorder.begin()`, `capture.open()` | PTT_RECORDING |
+| `PttPressed` | `engine == READY` | `recorder.begin()`, `capture.open()` (synchronicznie, 30–150 ms — akceptowalne, bo i tak czekamy na pierwszą ramkę); błąd otwarcia → jak `AudioError` w PTT_RECORDING | PTT_RECORDING |
 | `PttPressed` | `engine != READY` | dźwięk `error`, powiadomienie „Silnik STT niedostępny”, odmowa `engine_down`/`engine_starting` | IDLE |
 | `ContinuousToggle` | `engine == READY` i `vad.enabled` | dźwięk `start`, `session_id += 1`, `segmenter.reset()`, timer `CaptureOpenDue(session_id)` za 150 ms (po dźwięku, żeby nie trafił do mikrofonu; controller nie blokuje). Odpowiedź IPC wysyłana dopiero po próbie otwarcia | CONTINUOUS |
 | `ContinuousToggle` | `engine != READY` / `!vad.enabled` | dźwięk `error`, odmowa `engine_*` / `vad_disabled` | IDLE |

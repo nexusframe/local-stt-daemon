@@ -72,7 +72,7 @@ Decyzja: `injection.backend = "auto"`:
 
 Komponenty:
 
-- `ClipboardOwner` — wątek z **własnym połączeniem X11** i niewidocznym oknem 1×1. Obsługuje `SelectionRequest`, `SelectionClear` i `SelectionNotify`, a także przechowuje aktualnie serwowaną zawartość (`served: dict[target, bytes]`) oraz to, co zapisaliśmy od użytkownika (`user_saved`).
+- `ClipboardOwner` — wątek z **własnym połączeniem X11** i niewidocznym oknem 1×1. Obsługuje `SelectionRequest`, `SelectionClear` i `SelectionNotify`, a także przechowuje aktualnie serwowaną zawartość (`served: dict[target, (type, format, bytes)]`) oraz to, co zapisaliśmy od użytkownika (`user_saved`).
 - `KeySender` — XTest (`Xlib.ext.xtest.fake_input`) na połączeniu wątku roboczego.
 
 Kroki `inject(text)`:

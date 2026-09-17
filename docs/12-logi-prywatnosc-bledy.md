@@ -54,7 +54,7 @@ Zasada: **audio i tekst nie opuszczają komputera, a na dysk trafiają tylko na 
 |---|---|---|---|---|
 | E1 | Config niepoprawny przy starcie | walidator | proces kończy się kodem 78 (bez restartu); `systemctl status` pokazuje komunikat | ERROR z listą problemów |
 | E2 | Config niepoprawny przy reload | walidator | stary config zostaje; CLI wypisuje błędy | ERROR |
-| E3 | Sesja nie X11 / brak DISPLAY | start | kod 78 | ERROR |
+| E3 | Sesja nie X11 | start (`loginctl`, [07](07-hotkeys-x11.md) §7.5) | kod 78, bez restartu; brak `DISPLAY` w sesji X11 → kod 1 i restart (limit 5/60 s) | ERROR |
 | E4 | Hotkey zajęty (`BadAccess`) | grab | daemon działa; `hotkeys: degraded`; powiadomienie przy starcie | ERROR z nazwą skrótu |
 | E5 | Utrata połączenia X11 w trakcie pracy | `ConnectionClosedError` | wyjście 0 bez operacji X11, bez restartu ([07](07-hotkeys-x11.md) §7.4); błąd połączenia **przy starcie** → wyjście 1 i restart (limit 5/60 s) | WARNING |
 | E6 | Serwer nie odpowiada przy starcie | `/health` | `STARTING` do `startup_timeout_s`, potem `DOWN`; hotkey → dźwięk `error` + powiadomienie | WARNING → ERROR |

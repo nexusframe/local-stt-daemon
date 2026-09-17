@@ -186,7 +186,7 @@ Filtrowanie treści robi `TextProcessor`, a nie silnik ([08](08-text-injection.m
    - `napisy (stworzone|wykonane) przez społeczność amara\.org` — **potwierdzone** (openai/whisper#928)
    - `(zdjęcia|tłumaczenie) i napisy stworzone przez społeczność amara\.org` — potwierdzone (#928)
    - `^\s*dzięk(i|uję) za (uwagę|obejrzenie|oglądanie)[.!]?\s*$` — **niepotwierdzone**, dodane z analogii do angielskiego „Thanks for watching”. Wpis dopasowuje wyłącznie cały segment, żeby nie wycinać tych słów z normalnej wypowiedzi.
-   - `^\s*(subskrybuj|zasubskrybuj)[^.]*[.!]?\s*$` — niepotwierdzone, jw.
+   - `^\s*(za)?subskrybuj[^.]*[.!]?\s*$` — niepotwierdzone, jw.
 3. odrzucenie powtórzeń: segment identyczny z poprzednim w tym samym wyniku albo n-gram (n ≥ 3 słowa) powtórzony ≥ 4 razy z rzędu (pętla dekodera),
 4. odrzucenie całego wyniku, jeśli jest równy (po normalizacji) końcówce przekazanego promptu.
 

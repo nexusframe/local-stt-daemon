@@ -32,7 +32,8 @@
 | `pipeline` | kolejka zadań, bramka ciszy / przycinanie VAD PTT (własna instancja SileroVad), połączenie X11 #2 (XTest), kontekst promptu | `jobs: queue.Queue`; → `events` (`JobStarted/Finished/Discarded/Failed`, `EngineStateChanged`) | tak |
 | `clipboard-owner` | połączenie X11 #3 (okno 1×1, selekcje) | żądania z `pipeline` przez kolejkę + `Future` | tak |
 | `engine-monitor` | — | → `events` (`EngineStateChanged`) | nie |
-| `timers` (`threading.Timer`) | — | → `events` (`ReconnectTick`, opóźnione `capture.open()` w continuous) | nie |
+| `timers` (`threading.Timer`) | — | → `events` (`ReconnectTick`, `CaptureOpenDue`) | nie |
+| `server-restart` (krótkotrwały, tylko przy reload ⟳) | — | `systemctl --user restart local-stt-whisper` → `events` (`ServerRestartDone`) | nie |
 | `ipc-server` (+ wątki per połączenie) | — | → `events` z `Future` na odpowiedź; subskrypcje dostają kopie statusu | nie |
 
 \* Wyjątek w wątku krytycznym kończy proces kodem 1, a systemd go restartuje ([12](12-logi-prywatnosc-bledy.md), E14).

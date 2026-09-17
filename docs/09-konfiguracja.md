@@ -6,7 +6,7 @@
 - Plik: `$XDG_CONFIG_HOME/local-stt/config.toml` (domyślnie `~/.config/local-stt/config.toml`). Ścieżkę można nadpisać flagą `--config PATH` lub zmienną `LOCAL_STT_CONFIG`.
 - Brak pliku oznacza pracę na wartościach domyślnych. `install.sh` kopiuje `config.example.toml` z pełnym komentarzem.
 - Walidacja: dataclasses + ręczne walidatory w `local_stt/config.py`. Każdy błąd ma format `<sekcja>.<klucz>: <problem> (got <wartość>)`, np. `vad.end_threshold: must be < start_threshold (got 0.6)`. Nieznany klucz daje **błąd**, a nie ostrzeżenie, żeby literówki nie przechodziły po cichu.
-- Zmiany wchodzą w życie po `local-stt reload` według grup z [04](04-maszyna-stanow.md) §4.6. Klucze oznaczone ⟳ powodują, że daemon sam generuje nowy `whisper-server.env` i restartuje `local-stt-whisper.service`, gdy tryb to IDLE, a kolejka jest pusta.
+- Zmiany wchodzą w życie po `local-stt reload` według grup z [04](04-maszyna-stanow.md) §4.6. Klucze oznaczone ⟳ powodują, że daemon sam generuje nowy `whisper-server.env` i restartuje `local-stt-whisper.service`, gdy tryb to IDLE, a kolejka jest pusta (albo silnik jest DOWN).
 
 ## 9.2 Pełny plik z wartościami domyślnymi
 

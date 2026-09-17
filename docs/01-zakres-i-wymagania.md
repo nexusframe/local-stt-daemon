@@ -87,7 +87,7 @@ Wayland **nie jest celem** w wersjach v0.1–v0.3. Architektura go nie wyklucza:
 
 - Wayland, KDE, inne dystrybucje (mogą działać, ale nie są testowane).
 - GPU, CUDA, OpenVINO.
-- Transkrypcja częściowa „na żywo” z poprawianiem już wpisanego tekstu (wstępnie planowana na v0.3 jako podgląd w powiadomieniu, nigdy nie wpisywana — zob. [04](04-maszyna-stanow.md) i [15](15-plan-implementacji.md)).
+- Transkrypcja częściowa „na żywo” z poprawianiem już wpisanego tekstu (wstępnie planowana na v0.3 jako podgląd w powiadomieniu, nigdy nie wpisywana — zob. [03](03-decyzje.md) ADR-010 i [15](15-plan-implementacji.md) zadanie 3.2).
 - Komendy głosowe, GUI, tray, LLM do post-processingu — tylko jako punkty rozszerzeń ([15](15-plan-implementacji.md), sekcja „Po v0.3”).
 - Akcje `PAUSE`/`RESUME` z projektu wstępnego (§9): odłożone. Continuous włącza się i wyłącza jednym skrótem, a stan kolejki zostaje zachowany, więc osobna pauza nie wnosi nic nowego. Wrócimy do tego, jeśli pojawi się potrzeba zachowania kontekstu promptu między sesjami.
 - Konfigurowalne `sample_rate`/`channels` (projekt wstępny §5.1): odrzucone, patrz [05](05-audio-i-vad.md) §5.2.

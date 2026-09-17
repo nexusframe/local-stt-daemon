@@ -83,6 +83,7 @@ local-stt 0.1.0 — IDLE
   "state": "LISTENING",
   "mode": "CONTINUOUS",
   "speech": true,
+  "reconnecting": false,
   "engine": {"state": "READY", "name": "whisper.cpp", "model": "small-q5_1", "port": 8178},
   "hotkeys": {"state": "OK", "problems": []},
   "audio": {"device": "default", "open": true, "overflows": 0},
@@ -102,7 +103,7 @@ Sprawdza i wypisuje `OK` / `WARN` / `FAIL` z podpowiedzią naprawy:
 
 | Test | FAIL/WARN, gdy | Podpowiedź |
 |---|---|---|
-| sesja | `XDG_SESSION_TYPE != x11` | „Wybierz sesję Ubuntu on Xorg na ekranie logowania” |
+| sesja | typ z `loginctl show-session <Display> -p Type` ≠ `x11` ([07](07-hotkeys-x11.md) §7.5) | „Wybierz sesję Ubuntu on Xorg na ekranie logowania” |
 | `DISPLAY` w `systemctl --user show-environment` | brak | `dbus-update-activation-environment --systemd DISPLAY XAUTHORITY` |
 | config | błąd walidacji | komunikat walidatora |
 | model STT | brak pliku / zła suma | `local-stt models pull …` |
@@ -110,7 +111,7 @@ Sprawdza i wypisuje `OK` / `WARN` / `FAIL` z podpowiedzią naprawy:
 | `whisper-server` binarka | brak / nie uruchamia się (`--help`) / `.whisper-tag` ≠ tag z `install.sh` | `scripts/install.sh --rebuild-whisper` |
 | `secret`, `whisper-server.env` | brak / uprawnienia inne niż 0600 | `scripts/install.sh` |
 | usługa `local-stt-whisper` | nieaktywna | `systemctl --user status local-stt-whisper` |
-| `GET /health` | brak odpowiedzi / `loading model` > 60 s | `journalctl --user -u local-stt-whisper` |
+| `GET /health` (z prefiksem z `secret`) | brak odpowiedzi / `loading model` dłużej niż `stt.startup_timeout_s` | `journalctl --user -u local-stt-whisper` |
 | port | nasłuch nie tylko na loopback (`ss -ltn`) | FAIL prywatności |
 | hotkeye | daemon działa → stan `hotkeys` przez IPC (`degraded` = FAIL z listą problemów); daemon nie działa → grab testowy na osobnym połączeniu (`BadAccess` = FAIL) | wskazuje konfliktujący skrót GNOME (`gsettings list-recursively` + dopasowanie) |
 | mikrofon | otwarcie 1 s → RMS | WARN, gdy < -60 dBFS: „sprawdź wyciszenie/poziom wejścia w ustawieniach dźwięku” |
@@ -148,7 +149,7 @@ Daemon przy starcie generuje cztery krótkie pliki WAV (sinus z 5 ms fade-in/out
 | Tekst wpisany | brak (efekt widać w oknie) |
 | `JobFailed`, wklejenie niepotwierdzone | brak dźwięku, tylko powiadomienie |
 
-Odtwarzanie: `subprocess.Popen(["pw-play", path])` (fallback `paplay`), bez czekania na zakończenie. Osobny proces nie koliduje ze strumieniem wejściowym PortAudio. Wyjątek: przy starcie continuous controller planuje `capture.open()` timerem po długości dźwięku, żeby nie blokować.
+Odtwarzanie: `subprocess.Popen(["pw-play", path])` (fallback `paplay`), bez czekania na zakończenie. Osobny proces nie koliduje ze strumieniem wejściowym PortAudio. Przy starcie continuous mikrofon otwiera się dopiero po dźwięku `start` — zdarzenie `CaptureOpenDue` 150 ms później ([04](04-maszyna-stanow.md) §4.3).
 
 ### Powiadomienia (`feedback.notifications`)
 
