@@ -19,12 +19,13 @@ Options considered ([03](03-decisions.md), ADR-002):
 sudo apt install build-essential cmake git
 git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp ~/.local/share/local-stt/src/whisper.cpp
 cd ~/.local/share/local-stt/src/whisper.cpp
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF
-cmake --build build -j4 --config Release --target whisper-server whisper-cli whisper-bench
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=ON -DWHISPER_BUILD_TESTS=OFF
+cmake --build build -j"$(nproc)" --config Release --target whisper-server whisper-cli whisper-bench
 install -m755 build/bin/whisper-server build/bin/whisper-cli build/bin/whisper-bench ~/.local/share/local-stt/bin/
 ```
 
-- `GGML_NATIVE` is ON by default, so the build immediately uses this machine's AVX2/FMA. **The binary is not portable to older CPUs**, which is acceptable because it is built locally.
+- `GGML_NATIVE` is ON by default, so the build immediately uses this machine's AVX2/FMA. **The binary is not portable to older CPUs**, which is acceptable because it is built locally. We still pass `-DGGML_NATIVE=ON` explicitly: ggml switches the default to OFF when `SOURCE_DATE_EPOCH` is set in the environment (verified in `ggml/CMakeLists.txt`, v1.9.4).
+- `-DBUILD_SHARED_LIBS=OFF` is required: on Linux the default is ON, so the binaries would link `libwhisper.so`/`libggml*.so` from `build/` and break once copied to `bin/` or when `build/` is removed (verified in `CMakeLists.txt`, v1.9.4).
 - Flash attention is **enabled** by default (`-fa`) in the server, CLI, and library.
 - The version is pinned by tag, and `install.sh --whisper-tag TAG --rebuild-whisper` rebuilds it explicitly. `whisper-server` has no `--version` flag, so after the build we save the tag to `bin/.whisper-tag` and compare against that file.
 - **OpenBLAS** (`-DGGML_BLAS=1 -DGGML_BLAS_VENDOR=OpenBLAS`, package `libopenblas-dev`) is a benchmark option. It remains disabled by default until measurements show a benefit ([13](13-benchmark.md)).
