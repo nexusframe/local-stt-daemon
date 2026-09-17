@@ -1,59 +1,59 @@
-# 07. Globalne hotkeye (X11)
+# 07. Global hotkeys (X11)
 
-## 7.1 Domyślne przypisania
+## 7.1 Default bindings
 
-| Akcja | Domyślny klawisz | Typ |
+| Action | Default key | Type |
 |---|---|---|
-| Push-to-talk | **prawy Ctrl** (`Control_R`), trzymany | press + release |
-| Continuous start/stop | **Shift + prawy Ctrl** (`Shift+Control_R`) | toggle na press |
-| Anuluj nagranie PTT | **Esc** (`hotkeys.ptt_cancel_key`) wciśnięty *podczas trzymania* prawego Ctrl | press |
-| Anuluj continuous | `local-stt cancel` (opcjonalnie: własny skrót GNOME, zob. 7.7) | IPC |
+| Push-to-talk | **right Ctrl** (`Control_R`), held down | press + release |
+| Continuous start/stop | **Shift + right Ctrl** (`Shift+Control_R`) | toggle on press |
+| Cancel PTT recording | **Esc** (`hotkeys.ptt_cancel_key`) pressed *while holding* right Ctrl | press |
+| Cancel continuous | `local-stt cancel` (optionally: a custom GNOME shortcut; see 7.7) | IPC |
 
-### Dlaczego nie `Super+Space` z projektu wstępnego
+### Why not `Super+Space` from the preliminary design
 
-1. **Konflikt.** Na Ubuntu 24.04 `org.gnome.desktop.wm.keybindings switch-input-source = ['<Super>space', 'XF86Keyboard']`, a `switch-input-source-backward = ['<Shift><Super>space', ...]`. Oba skróty z projektu są zajęte (sprawdzone na maszynie referencyjnej).
-2. **Overlay key.** Mutter łapie `Super_L` i otwiera Activities, jeśli po jego puszczeniu nie przyszedł inny klawisz. Własne grabby na `Super+X` źle współpracują z tą logiką (znany problem Ulaunchera i Alberta w GNOME X11).
-3. **Ergonomia PTT.** Trzymanie dwóch klawiszy przez kilkanaście sekund mowy jest niewygodne. Jeden duży klawisz pod kciukiem lub małym palcem jest lepszy.
+1. **Conflict.** On Ubuntu 24.04, `org.gnome.desktop.wm.keybindings switch-input-source = ['<Super>space', 'XF86Keyboard']`, while `switch-input-source-backward = ['<Shift><Super>space', ...]`. Both shortcuts from the design are already taken (verified on the reference machine).
+2. **Overlay key.** Mutter grabs `Super_L` and opens Activities if no other key was pressed before it was released. Custom grabs for `Super+X` interact poorly with this logic (a known Ulauncher and Albert issue on GNOME X11).
+3. **PTT ergonomics.** Holding two keys for a dozen or more seconds of speech is uncomfortable. A single large key under the thumb or little finger is better.
 
-### Dlaczego prawy Ctrl
+### Why right Ctrl
 
-- Mutter go nie używa: `locate-pointer-key = 'Control_L'` i jest to tylko lewy Ctrl, a sama funkcja jest wyłączona.
-- **Prawego Alt nie można użyć.** To AltGr (`ISO_Level3_Shift`, `mod5`), bez którego nie da się wpisać ą, ę, ł itd.
-- Prawy Ctrl w praktyce służy rzadko jako modyfikator. Koszt: dopóki daemon działa, kombinacje `prawy Ctrl + klawisz` nie docierają do aplikacji, bo grab je przejmuje (lewy Ctrl działa normalnie).
-- Modyfikatory nie mają autorepeat, więc PTT nie generuje fałszywych par release/press.
-- **Zweryfikowano empirycznie** na maszynie referencyjnej (python-xlib 0.33, zdarzenia wstrzykiwane przez XTest):
-  - grab `Control_R` i `Shift+Control_R` z wariantami NumLock/CapsLock zostaje przyjęty bez `BadAccess`,
-  - `KeyPress` i `KeyRelease` docierają do daemona,
-  - przy kombinacji `Shift+Control_R` puszczenie Shifta *przed* Ctrl również trafia do daemona (aktywny grab), a `KeyRelease Control_R` przychodzi poprawnie.
+- Mutter does not use it: `locate-pointer-key = 'Control_L'` refers only to left Ctrl, and the feature itself is disabled.
+- **Right Alt cannot be used.** It is AltGr (`ISO_Level3_Shift`, `mod5`), without which characters such as ą, ę, and ł cannot be typed.
+- In practice, right Ctrl is rarely used as a modifier. The cost is that, while the daemon is running, `right Ctrl + key` combinations do not reach applications because the grab intercepts them (left Ctrl works normally).
+- Modifier keys do not auto-repeat, so PTT does not generate false release/press pairs.
+- **Empirically verified** on the reference machine (python-xlib 0.33, events injected through XTest):
+  - grabs for `Control_R` and `Shift+Control_R`, including NumLock/CapsLock variants, are accepted without `BadAccess`,
+  - `KeyPress` and `KeyRelease` reach the daemon,
+  - with `Shift+Control_R`, releasing Shift *before* Ctrl also reaches the daemon (active grab), and `KeyRelease Control_R` arrives correctly.
 
-Klawisze są konfigurowalne ([09](09-konfiguracja.md)). Dobra alternatywa na klawiaturach z `Menu`/`Pause`/`Insert`/`Scroll_Lock` to pojedynczy klawisz, którego nikt nie używa.
+The keys are configurable ([09](09-configuration.md)). On keyboards with `Menu`/`Pause`/`Insert`/`Scroll_Lock`, a good alternative is a single unused key.
 
-## 7.2 Składnia w konfiguracji
+## 7.2 Configuration syntax
 
 ```text
 hotkey  := (modifier "+")* keysym
 modifier:= "Ctrl" | "Shift" | "Alt" | "Super"
-keysym  := nazwa keysym X11, np. Control_R, Pause, F9, space, Menu
+keysym  := X11 keysym name, e.g. Control_R, Pause, F9, space, Menu
 ```
 
-`"Control_R"` oznacza klawisz bez dodatkowych modyfikatorów. `"Shift+Control_R"` oznacza klawisz z wciśniętym Shiftem. Nazwy modyfikatorów mapujemy na maski `ShiftMask`, `ControlMask`, `Mod1Mask` i `Mod4Mask`. Bezpośrednio przed grabem sprawdzamy mapowanie przez `get_modifier_mapping()`.
+`"Control_R"` means the key without additional modifiers. `"Shift+Control_R"` means the key with Shift held down. Modifier names map to the `ShiftMask`, `ControlMask`, `Mod1Mask`, and `Mod4Mask` masks. Immediately before grabbing, we check the mapping with `get_modifier_mapping()`.
 
-Walidacja przy starcie i przy `reload`:
+Validation at startup and on `reload`:
 
-- keysym musi istnieć i mieć keycode w bieżącej mapie (`keysym_to_keycode != 0`),
-- skrót PTT i skrót continuous nie mogą być identyczne,
-- `ptt_cancel_key` to pojedynczy keysym bez modyfikatorów, różny od keysymów PTT i continuous,
-- skrót, którego keysym to `ISO_Level3_Shift`, `Alt_R` albo `Super_L`, jest odrzucany z komunikatem o konflikcie z AltGr lub mutterem,
-- skrót, którego keysym to `Control_L` albo `Shift_L`, jest odrzucany, bo tych klawiszy używa XTest przy wklejaniu ([08](08-text-injection.md) §8.5).
+- the keysym must exist and have a keycode in the current map (`keysym_to_keycode != 0`),
+- the PTT and continuous shortcuts must not be identical,
+- `ptt_cancel_key` must be a single keysym without modifiers, distinct from the PTT and continuous keysyms,
+- a shortcut whose keysym is `ISO_Level3_Shift`, `Alt_R`, or `Super_L` is rejected with a message about the conflict with AltGr or Mutter,
+- a shortcut whose keysym is `Control_L` or `Shift_L` is rejected because XTest uses these keys when pasting ([08](08-text-injection.md) §8.5).
 
-## 7.3 Implementacja — `HotkeyListener`
+## 7.3 Implementation — `HotkeyListener`
 
-Moduł `local_stt/hotkeys/x11.py` działa w osobnym wątku i ma **własne połączenie** `Xlib.display.Display()`. Połączenia X11 nie są współdzielone między wątkami.
+The `local_stt/hotkeys/x11.py` module runs in a separate thread and has **its own** `Xlib.display.Display()` **connection**. X11 connections are not shared between threads.
 
 ### Grab
 
 ```python
-LOCKS = [0, LockMask, numlock_mask, LockMask | numlock_mask]  # + scroll_lock_mask, jeśli zmapowany
+LOCKS = [0, LockMask, numlock_mask, LockMask | numlock_mask]  # + scroll_lock_mask, if mapped
 
 for hk in hotkeys:
     for extra in LOCKS:
@@ -63,55 +63,55 @@ for hk in hotkeys:
 display.sync()
 ```
 
-- `numlock_mask` i `scrolllock_mask` wyznaczamy dynamicznie: szukamy, w którym wierszu `get_modifier_mapping()` jest keycode `Num_Lock` lub `Scroll_Lock`. Na maszynie referencyjnej NumLock to `mod2`.
-- Każdy grab wysyłamy z `onerror=CatchError(BadAccess)`, a potem wywołujemy `display.sync()`. Jeśli wystąpi `BadAccess`, logujemy ERROR `hotkey <X> is already grabbed by another client`. Daemon działa dalej bez tego skrótu, `status` pokazuje `hotkeys: degraded`, a `doctor` wypisuje przyczynę.
-- Nie używamy `AnyModifier`: kolidowałby z każdym istniejącym grabem na tym keycode.
-- Dopasowanie **KeyPress**: `event.detail == hk.keycode and (event.state & ~lock_masks & RELEVANT) == hk.mods`, gdzie `RELEVANT = Shift|Control|Mod1|Mod4`.
-- Dopasowanie **KeyRelease** — **tylko po keycode**. Stan w zdarzeniu release zawiera modyfikator zwalnianego klawisza (np. `ControlMask` przy puszczaniu `Control_R`, sprawdzone empirycznie: `state=20`), więc porównanie masek nigdy by nie trafiło. Release PTT liczy się wyłącznie przy `ptt_down == True`. Release klawisza continuous jest ignorowany, więc wspólny keycode `Control_R` w obu skrótach nie jest dwuznaczny: o znaczeniu decyduje KeyPress, który ustawił `ptt_down`.
+- `numlock_mask` and `scrolllock_mask` are determined dynamically by finding which row of `get_modifier_mapping()` contains the `Num_Lock` or `Scroll_Lock` keycode. On the reference machine, NumLock is `mod2`.
+- Each grab is sent with `onerror=CatchError(BadAccess)`, followed by `display.sync()`. If `BadAccess` occurs, we log ERROR `hotkey <X> is already grabbed by another client`. The daemon continues without that shortcut, `status` shows `hotkeys: degraded`, and `doctor` reports the cause.
+- We do not use `AnyModifier`, as it would conflict with every existing grab for that keycode.
+- **KeyPress** matching: `event.detail == hk.keycode and (event.state & ~lock_masks & RELEVANT) == hk.mods`, where `RELEVANT = Shift|Control|Mod1|Mod4`.
+- **KeyRelease** matching — **by keycode only**. The state in a release event includes the modifier of the key being released (for example, `ControlMask` when releasing `Control_R`; empirically verified as `state=20`), so comparing masks would never match. A PTT release counts only when `ptt_down == True`. Release of the continuous key is ignored, so the shared `Control_R` keycode in both shortcuts is unambiguous: its meaning is determined by the KeyPress that set `ptt_down`.
 
-### Pętla zdarzeń
+### Event loop
 
 ```python
 while running:
-    timeout = 0.25 if ptt_down else None      # 0,25 s: kontrola zgubionego release (niżej)
+    timeout = 0.25 if ptt_down else None      # 0.25 s: check for a lost release (below)
     ready = select([display.fileno(), wakeup_pipe], [], [], timeout)
     while display.pending_events():
         ev = display.next_event()
         handle(ev)
     if ptt_down:
-        check_lost_release_if_due()           # najwyżej raz na 250 ms
+        check_lost_release_if_due()           # at most once every 250 ms
 ```
 
-Wake-up pipe pozwala Controllerowi przerwać pętlę przy `reload` i `shutdown`. Grab i ungrab zawsze wykonuje wątek listenera: Controller zleca je przez kolejkę poleceń i wybudza pętlę przez pipe.
+The wake-up pipe lets the Controller interrupt the loop on `reload` and `shutdown`. Grabbing and ungrabbing are always performed by the listener thread: the Controller submits them through the command queue and wakes the loop through the pipe.
 
-### Semantyka press/release
+### Press/release semantics
 
-| Zdarzenie X11 | Warunek | Emitowane |
+| X11 event | Condition | Emitted |
 |---|---|---|
 | `KeyPress` PTT | `ptt_down == False` | `PttPressed`, `ptt_down = True` |
-| `KeyPress` PTT | `ptt_down == True` | nic (autorepeat) |
-| `KeyRelease` PTT | następne zdarzenie w kolejce to `KeyPress` tego samego keycode z tym samym `time` | nic, oba zdarzenia zjadamy (autorepeat) |
-| `KeyRelease` PTT | w pozostałych przypadkach | `PttReleased`, `ptt_down = False` |
-| `KeyPress` `hotkeys.ptt_cancel_key` (domyślnie `Escape`) | `ptt_down == True` | `PttCancelKey` |
+| `KeyPress` PTT | `ptt_down == True` | nothing (auto-repeat) |
+| `KeyRelease` PTT | the next queued event is a `KeyPress` with the same keycode and `time` | nothing; consume both events (auto-repeat) |
+| `KeyRelease` PTT | otherwise | `PttReleased`, `ptt_down = False` |
+| `KeyPress` `hotkeys.ptt_cancel_key` (default: `Escape`) | `ptt_down == True` | `PttCancelKey` |
 | `KeyPress` continuous | `ptt_down == False` | `ContinuousToggle` |
-| `KeyRelease` continuous | — | nic |
+| `KeyRelease` continuous | — | nothing |
 
-- **Klawisz anulowania bez osobnego grabu.** Dopóki PTT jest trzymany, trwa *aktywny* grab klawiatury i wszystkie zdarzenia klawiszy trafiają do daemona. `Esc` dociera więc bez grabowania go globalnie, a aplikacje nie tracą `Esc`. Inne klawisze wciśnięte w tym czasie są ignorowane.
-- **Autorepeat.** python-xlib 0.33 nie ma rozszerzenia XKB (`XkbSetDetectableAutoRepeat` jest niedostępne), więc stosujemy klasyczny test „ten sam keycode i timestamp”. Dla domyślnego `Control_R` nie ma to znaczenia, ale test jest potrzebny, gdy użytkownik ustawi np. `Pause` lub `F9`.
-- **Zabezpieczenie przed zgubionym release.** Release może zginąć, np. przy przełączeniu VT albo zablokowaniu ekranu. Gdy `ptt_down == True`, pętla budzi się co 250 ms (timeout `select`) i wywołuje `display.query_keymap()`. Jeśli bit keycode PTT jest zgaszony, emituje syntetyczny `PttReleased` i loguje WARNING.
+- **Cancel key without a separate grab.** While PTT is held, an *active* keyboard grab is in effect and all key events reach the daemon. `Esc` therefore arrives without being grabbed globally, so applications do not lose `Esc`. Other keys pressed during this time are ignored.
+- **Auto-repeat.** python-xlib 0.33 does not provide the XKB extension (`XkbSetDetectableAutoRepeat` is unavailable), so we use the classic “same keycode and timestamp” test. It does not matter for the default `Control_R`, but is required if the user configures, for example, `Pause` or `F9`.
+- **Protection against a lost release.** A release can be lost, for example when switching VTs or locking the screen. When `ptt_down == True`, the loop wakes every 250 ms (`select` timeout) and calls `display.query_keymap()`. If the PTT keycode bit is clear, it emits a synthetic `PttReleased` and logs a WARNING.
 
-## 7.4 Utrata połączenia z X
+## 7.4 Loss of the X connection
 
-`Xlib.error.ConnectionClosedError` w trakcie pracy (koniec sesji) oznacza, że nie da się dalej działać. Listener emituje `X11ConnectionLost`, a controller zamyka capture i gniazdo IPC **bez żadnych operacji X11** (ungrab jest niemożliwy i zbędny). Proces kończy się kodem **0**, więc `Restart=on-failure` nie restartuje go w pętli z martwym `DISPLAY`. Po wylogowaniu `PartOf=graphical-session.target` zatrzymuje unit, a przy następnym logowaniu startuje on z nowym środowiskiem ([11](11-daemon-systemd-instalacja.md)).
+An `Xlib.error.ConnectionClosedError` during operation (end of session) means the daemon cannot continue. The listener emits `X11ConnectionLost`, and the controller closes capture and the IPC socket **without any X11 operations** (ungrabbing is impossible and unnecessary). The process exits with code **0**, so `Restart=on-failure` does not restart it in a loop with a dead `DISPLAY`. After logout, `PartOf=graphical-session.target` stops the unit; at the next login it starts with the new environment ([11](11-daemon-systemd-installation.md)).
 
-## 7.5 Start
+## 7.5 Startup
 
-Przy starcie daemon ustala typ sesji graficznej przez `loginctl show-user $UID -p Display --value` → `loginctl show-session <id> -p Type --value` (zweryfikowane: `x11`). Zmienne `XDG_SESSION_TYPE` w środowisku menedżera użytkownika mogą być nieaktualne po zmianie sesji, a `XDG_SESSION_ID` nie jest tam w ogóle ustawiane. `XDG_SESSION_TYPE` służy tylko jako fallback, gdy `loginctl` zawiedzie.
+At startup, the daemon determines the graphical session type through `loginctl show-user $UID -p Display --value` → `loginctl show-session <id> -p Type --value` (verified: `x11`). `XDG_SESSION_TYPE` in the user manager environment may be stale after changing sessions, and `XDG_SESSION_ID` is not set there at all. `XDG_SESSION_TYPE` is used only as a fallback if `loginctl` fails.
 
-- typ ≠ `x11` → ERROR `unsupported session (only X11)` i wyjście z kodem 78 (`EX_CONFIG`). Unit ma `RestartPreventExitStatus=78`, więc systemd nie restartuje go w pętli.
-- Sesja X11, ale brak `DISPLAY` w środowisku albo `Display()` rzuca błąd połączenia (np. wyścig importu zmiennych przy logowaniu) → ERROR i wyjście z kodem **1**. `Restart=on-failure` ponawia start co 2 s, maks. 5 razy w 60 s.
+- type ≠ `x11` → ERROR `unsupported session (only X11)` and exit with code 78 (`EX_CONFIG`). The unit has `RestartPreventExitStatus=78`, so systemd does not restart it in a loop.
+- X11 session, but `DISPLAY` is absent from the environment or `Display()` raises a connection error (for example, a race while importing variables at login) → ERROR and exit with code **1**. `Restart=on-failure` retries startup every 2 s, at most 5 times in 60 s.
 
-## 7.6 Interfejs (dla przyszłego Waylanda)
+## 7.6 Interface (for future Wayland support)
 
 ```python
 class HotkeyBackend(Protocol):
@@ -120,18 +120,18 @@ class HotkeyBackend(Protocol):
     def stop(self) -> None: ...
 ```
 
-Jedyną implementacją w v0.1–v0.3 jest `X11GrabHotkeys`.
+The only implementation in v0.1–v0.3 is `X11GrabHotkeys`.
 
-## 7.7 Sterowanie bez grabów (alternatywa i skróty dodatkowe)
+## 7.7 Control without grabs (alternative and additional shortcuts)
 
-Każdą akcję można też wywołać z CLI:
+Every action can also be invoked from the CLI:
 
 ```bash
-local-stt ptt start|stop     # dla urządzeń / skryptów
+local-stt ptt start|stop     # for devices / scripts
 local-stt toggle             # continuous start/stop
 local-stt cancel
 ```
 
-Dzięki temu dodatkowe skróty można przypisać przez *Ustawienia → Klawiatura → Skróty własne* w GNOME, np. `Ctrl+Alt+End` → `local-stt cancel` (na maszynie referencyjnej wolny; `Ctrl+Alt+Esc` jest zajęty przez `cycle-panels`). GNOME obsługuje tylko press, więc do PTT z trzymaniem służy wyłącznie grab X11.
+This allows additional shortcuts to be assigned through *Settings → Keyboard → Custom Shortcuts* in GNOME, for example `Ctrl+Alt+End` → `local-stt cancel` (available on the reference machine; `Ctrl+Alt+Esc` is used by `cycle-panels`). GNOME handles only press events, so hold-to-talk PTT is available only through the X11 grab.
 
-Ustawienie `hotkeys.enabled = false` całkowicie wyłącza grabowanie. Wtedy działa tylko CLI.
+Setting `hotkeys.enabled = false` disables grabbing entirely. Only the CLI then remains available.

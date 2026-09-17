@@ -1,105 +1,118 @@
-# 13. Benchmark i wybór modelu
+# 13. Benchmarking and model selection
 
-Benchmark to **pierwszy krok implementacji** ([15](15-plan-implementacji.md), etap 0). Jego wyniki wyznaczają domyślny `stt.model`, `stt.threads` i `stt.dynamic_audio_ctx`. Dopóki nie istnieją, obowiązuje `small-q5_1`, `threads=4`, `dynamic_audio_ctx=false`.
+The benchmark is the **first implementation step** ([15](15-implementation-plan.md), stage 0). Its results determine the default `stt.model`, `stt.threads`, and `stt.dynamic_audio_ctx`. Until results are available, use `small-q5_1`, `threads=4`, and `dynamic_audio_ctx=false`.
 
-## 13.1 Pytania, na które odpowiada
+## 13.1 Questions it answers
 
-1. Który model daje najniższy WER dla polskiego przy p90 latencji PTT ≤ 2,5 s dla wypowiedzi 4–10 s (N2)?
-2. Czy ten sam model utrzyma continuous przez 10 minut bez rosnącej kolejki (N3), także po nagrzaniu CPU?
-3. 4 czy 8 wątków?
-4. Czy `audio_ctx` dopasowany do długości nagrania skraca latencję bez utraty jakości?
-5. Czy OpenBLAS coś daje (opcjonalnie, osobny build)?
+1. Which model delivers the lowest WER for Polish while keeping p90 PTT latency ≤ 2.5 s for 4–10 s utterances (N2)?
+2. Can the same model sustain continuous mode for 10 minutes without a growing queue (N3), including after the CPU heats up?
+3. Four or eight threads?
+4. Does matching `audio_ctx` to the recording length reduce latency without sacrificing quality?
+5. Does OpenBLAS help (optional, separate build)?
 
-## 13.2 Korpus
+## 13.2 Corpus
 
-### A. Własne nagrania (podstawowy — ten mikrofon, ten głos, to otoczenie)
+### A. Custom recordings (primary—the actual microphone, voice, and environment)
 
 `local-stt record-corpus ~/stt-corpus`:
 
-- wyświetla zdania z `bench/prompts_pl.txt`, nagrywa każde z nich po naciśnięciu Enter (Enter kończy) i zapisuje `NNN.wav` (16 kHz mono s16) + `NNN.txt` (tekst referencyjny),
-- pozwala powtórzyć nagranie (`r`) lub pominąć zdanie (`s`).
+- displays sentences from `bench/prompts_pl.txt`, records each after Enter is pressed (Enter stops recording), and saves `NNN.wav` (16 kHz mono s16) plus `NNN.txt` (reference text),
+- allows a recording to be repeated (`r`) or a sentence to be skipped (`s`).
 
-`bench/prompts_pl.txt` (część repozytorium) zawiera ok. 40 wypowiedzi:
+`bench/prompts_pl.txt` (part of the repository) contains about 40 utterances:
 
-| Grupa | Liczba | Długość | Cel |
+| Group | Count | Length | Purpose |
 |---|---:|---|---|
-| krótkie komendy/zdania | 12 | 1–3 s | PTT, typowe krótkie notatki |
-| średnie | 16 | 4–10 s | główny przypadek N2 |
-| długie | 8 | 12–25 s | granice `max_segment_s`, `audio_ctx` |
-| trudne | 4 | 5–10 s | nazwy własne, liczby, anglicyzmy techniczne, nagromadzenie ą/ę/ł/ż/ź/ś/ć/ń |
+| short commands/sentences | 12 | 1–3 s | PTT, typical short notes |
+| medium | 16 | 4–10 s | primary N2 case |
+| long | 8 | 12–25 s | `max_segment_s` and `audio_ctx` boundaries |
+| difficult | 4 | 5–10 s | proper names, numbers, technical Anglicisms, many ą/ę/ł/ż/ź/ś/ć/ń characters |
 
-Do tego **nagranie ciągłe** `long/` (`record-corpus --long`): ok. 5 min czytanego tekstu z naturalnymi pauzami (np. artykuł z polskiej Wikipedii zapisany jako referencja) do testu continuous.
+Also include a **continuous recording** under `long/` (`record-corpus --long`): about five minutes of read-aloud text with natural pauses (for example, a Polish Wikipedia article saved as the reference) for testing continuous mode.
 
-### B. FLEURS pl_pl (opcjonalny — porównywalność z paperem)
+### B. FLEURS pl_pl (optional—for comparability with the paper)
 
-`local-stt bench --dataset DIR`. Katalog w formacie jak A. Konwersję 50 losowych próbek ze zbioru testowego FLEURS (licencja CC-BY-4.0) robi `scripts/fleurs_to_corpus.py`. Pobranie danych jest ręczne i online, poza daemonem.
+`local-stt bench --dataset DIR`. The directory uses the format from A. `scripts/fleurs_to_corpus.py` converts 50 random samples from the FLEURS test set (CC-BY-4.0). Data is downloaded manually and online, outside the daemon.
 
-## 13.3 Metryki
+## 13.3 Metrics
 
-| Metryka | Definicja | Źródło |
+| Metric | Definition | Source |
 |---|---|---|
-| **WER** | odległość Levenshteina na słowach / liczba słów referencji, po normalizacji | `local_stt/bench/wer.py` (bez zależności) |
-| **CER** | jw. na znakach | jw. |
-| Normalizacja | małe litery, usunięcie interpunkcji `.,;:!?…„”"'()-–—`, zwinięcie spacji; **polskie znaki bez zmian** (ich brak to błąd); liczby bez normalizacji — rozbieżności `2024`/„dwa tysiące…” raportowane osobno jako `numeric_mismatch` | |
-| **RTF** | `processing_s / audio_s` | czas HTTP mierzony po stronie klienta |
-| **Latencja PTT** | czas od „puszczenia” do gotowego tekstu = `vad_trim + http + text_processing` (bez wklejania, które jest stałe ~0,1 s i mierzone osobno) | |
-| p50 / p90 | percentyle latencji dla grupy „średnie” | |
-| CPU | `utime+stime` procesu serwera z `/proc/<pid>/stat` / czas ścienny | |
-| Peak RAM | `VmHWM` z `/proc/<pid>/status` | |
-| Termika | `/sys/class/thermal/thermal_zone*/temp` (strefa `x86_pkg_temp`), `scaling_cur_freq` wszystkich CPU, próbkowane co 1 s | |
-| Kolejka | `queued_audio_s` w czasie (soak) | |
-| Segmentacja | liczba segmentów, % cięć `max_length`, liczba segmentów odfiltrowanych | |
-| **Błędne segmentacje** | cięcie wypadające **wewnątrz słowa** referencji: dla nagrania `long/` referencyjne granice słów wyznaczamy jednorazowo `whisper-cli -m large-v3-turbo-q5_0 -ml 1 -ojf` (znaczniki czasu słów, ręcznie przejrzane i zapisane jako `long/NNN.words.json`); segmentacja jest błędna, gdy punkt cięcia leży > 40 ms od najbliższej granicy słowa. Raportujemy liczbę i % cięć | soak |
+| **WER** | word-level Levenshtein distance / number of reference words, after normalization | `local_stt/bench/wer.py` (dependency-free) |
+| **CER** | the same calculation at character level | as above |
+| Normalization | lowercase, remove punctuation `.,;:!?…„”"'()-–—`, collapse whitespace; **leave Polish characters unchanged** (losing them is an error); do not normalize numbers—differences such as `2024`/“dwa tysiące…” are reported separately as `numeric_mismatch` | |
+| **RTF** | `processing_s / audio_s` | client-side HTTP timing |
+| **Time-to-text latency (`text_ready_s`)** | `vad_trim + http + text_processing`; benchmark excludes the injector, capture-finalization cost, and production queue; stage 0 uses the RMS gate, and v0.2 onward uses VAD trimming according to the config | measured by `bench` |
+| **PTT latency (`total`)** | from PTT release until the injector returns after successful insertion, including audio finalization, queueing, waiting, and clipboard restoration (12 §12.1); insertion cost is not constant | full daemon, `timings` logs |
+| p50 / p90 | separate `text_ready_s` and `total` percentiles for the “medium” group; these metrics are not equivalent | |
+| CPU | server-process `utime+stime` from `/proc/<pid>/stat` / wall-clock time | |
+| Peak RAM | `VmHWM` from `/proc/<pid>/status` | |
+| Thermals | `/sys/class/thermal/thermal_zone*/temp` (`x86_pkg_temp` zone), `scaling_cur_freq` for all CPUs, sampled every second | |
+| Queue | `queued_audio_s` over time (soak test) | |
+| Segmentation | segment count, percentage of `max_length` cuts, number of filtered segments | |
+| **Incorrect segmentations** | a cut at `t` is incorrect only if a reference word spans `[start, end]` and `start + 0.040 < t < end - 0.040` (seconds). Cuts in silence and between words are valid. Report the count and percentage of recording-internal cuts | soak test |
 
-## 13.4 Macierz
+The `long/NNN.words.json` reference contains the words actually spoken and manually verified `start`/`end` intervals in seconds. Obtain an initial transcript and token timestamps with `whisper-cli -m <path to ggml-large-v3-turbo-q5_0.bin> -l pl -ojf -f long/NNN.wav`, then combine tokens into words and correct the boundaries against the recording. `-ml 1 -ojf` alone does not produce a reliable word reference: without `-sow`, the division is token-based ([CLI v1.9.4 source](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/cli/cli.cpp)). Record the manually verified reference version in the report. Words shorter than 80 ms have no interior beyond the tolerance; report their count as a metric limitation. File boundaries and technical joins between soak-test loops are not Segmenter cuts and are excluded from the denominator.
 
-`local-stt bench` sam uruchamia **tymczasowy** `whisper-server` na porcie 8199 dla każdej konfiguracji: `nice -n 5` (jak `Nice=5` w unicie), losowy `--request-path`, start → `/health` → rozgrzewka (1 żądanie odrzucane) → pomiary → stop.
+## 13.4 Matrix
 
-Przed startem sprawdza, czy `local-stt-whisper.service` jest aktywny. Jeśli tak, odmawia z komunikatem `systemctl --user stop local-stt-whisper local-stt` (flaga `--allow-concurrent` pomija ten test), bo dwa serwery zafałszowałyby CPU i RAM.
+For each configuration, `local-stt bench` starts a **temporary** `whisper-server` on port 8199: `nice -n 5` (matching `Nice=5` in the unit), random `--request-path`, start → `/health` → warm-up (one discarded request) → measurements → stop.
 
-| Wymiar | Wartości |
+Before starting, it checks whether `local-stt-whisper.service` is active. If so, it refuses to proceed and displays `systemctl --user stop local-stt-whisper local-stt` (the `--allow-concurrent` flag skips this check), because two servers would distort CPU and RAM results.
+
+| Dimension | Values |
 |---|---|
 | model | `base-q5_1`, `small-q5_1`, `small-q8_0`, `small`, `medium-q5_0`, `large-v3-turbo-q5_0` |
 | threads | 4, 8 |
 | dynamic_audio_ctx | false, true |
-| beam | greedy (wszystkie); `-bs 5` tylko dla 2 najlepszych po etapie 1 |
+| beam | greedy (all); `-bs 5` only for the top two after stage 1 |
 
-Kolejność jest oszczędna, bo pełna macierz na tym CPU zajęłaby godziny:
+The sequence is economical because the full matrix would take hours on this CPU:
 
-1. **Etap 1 — `bench --quick`.** Wszystkie modele, `t=4`, `dynamic_audio_ctx=false`, tylko grupa „średnie” (16 plików). Modele z p50 latencji > 6 s odpadają od razu.
-2. **Etap 2.** Pozostałe modele × `t∈{4,8}` × `dynamic_audio_ctx∈{false,true}` na całym korpusie A.
-3. **Etap 3 — `bench --soak --model M --threads T --audio-ctx X`.** Dla 1–2 zwycięzców: nagranie `long/` odtwarzane przez prawdziwy `Segmenter` w tempie czasu rzeczywistego, zapętlone do 10 minut, z pomiarem kolejki, RTF i termiki. Wykonać na zasilaczu **i** na baterii (governor `powersave`).
-4. **Sanity.** `whisper-bench -m <model> -t 4` dla każdego modelu (surowy czas enkodera), żeby odróżnić narzut HTTP i pipeline'u od samego silnika.
+1. **Stage 1—`bench --quick`.** All models × `t∈{4,8}` × `dynamic_audio_ctx∈{false,true}`, using only the “medium” group (16 files). A model is eliminated for speed only when p50 `text_ready_s` > 6 s in **all four** configurations. This prevents the full encoder window from eliminating a model before `audio_ctx` is tested. `base-q5_1` remains a test control, not a production candidate.
+2. **Stage 2.** Remaining models × `t∈{4,8}` × `dynamic_audio_ctx∈{false,true}` over the entire A corpus.
+3. **Stage 3—`bench --soak --model M --threads T --audio-ctx X`.** For the top one or two: play the `long/` recording through the real `Segmenter` in real time, looped to 10 minutes, while measuring the queue, RTF, and thermals. Run on **AC power and battery** (`powersave` governor).
+4. **Sanity check.** Run `whisper-bench -m <model> -t 4` for each model (raw encoder time) to separate HTTP and pipeline overhead from engine performance.
 
-Każda odpowiedź jest greedy i deterministyczna, więc WER liczymy z jednego przebiegu. Latencję podajemy jako medianę z 3 powtórzeń.
+Measure each configuration three times. Report the WER for every run plus its mean and spread; do not assume identical answers because the production HTTP contract permits temperature fallback (06 §6.5), and the matrix also includes beam search. For each file, report the median time from three repetitions; calculate “medium” group percentiles from those medians. Record decoding parameters so equivalent settings are compared.
 
-## 13.5 Reguła decyzji
+## 13.5 Decision rule
 
 ```text
-kandydaci_ptt = { konfiguracje z p90_latencji(średnie) ≤ 2.4 s }     # N2 = 2.5 s z wklejaniem (~0.1 s)
-PTT_default   = argmin WER(korpus A) po kandydaci_ptt
-                remis (różnica WER < 1 pp) → niższy peak RAM → niższa latencja
+production = configurations excluding base-q5_1, with peak server RSS ≤ 1 GB (N1),
+             and with dynamic_audio_ctx=true only when
+             WER(true) − WER(false) ≤ 1.0 pp for the same model, threads, and beam
 
-dynamic_audio_ctx = true  tylko jeśli dla wybranego modelu WER(true) − WER(false) ≤ 1.0 pp
-threads           = wartość z niższą p50 latencji; remis (< 5%) → 4 (mniej grzania, mniej walki z pulpitem)
+# Stage 0: provisional selection, without N2 confirmation yet.
+provisional = { configurations from production with p90_text_ready_s(medium) ≤ 2.5 s }
 
-continuous: PTT_default przechodzi, jeśli w soak (na baterii):
-    średni RTF ≤ 0.5  ORAZ  queued_audio_s w ostatnich 5 min nie ma trendu rosnącego
-    (nachylenie regresji liniowej ≤ 0.05 s/min)  ORAZ  brak spadku częstotliwości CPU > 30% trwale
-jeśli nie przechodzi → sprawdź następny szybszy model; jeśli taki przechodzi, a różnica WER > 3 pp,
-    to dopiero wtedy implementujemy stt.continuous_model (15, v0.3); w przeciwnym razie wspólny szybszy model.
+# v0.1: full daemon + injector, at least 20 utterances of 4–10 s per configuration.
+ptt_candidates = { configurations from provisional with p90_total ≤ 2.5 s }
+PTT_default    = argmin mean WER(corpus A) over ptt_candidates
+                 tie (WER difference < 1 pp) → lower peak RAM → lower latency
+                 latency tie (< 5%) → 4 threads
+
+# Do not change threads or audio_ctx after selection without rechecking N1/N2.
+
+continuous: PTT_default passes if, in the soak test (on battery):
+    mean RTF ≤ 0.5  AND  queued_audio_s has no upward trend over the final 5 min
+    (linear-regression slope ≤ 0.05 s/min)  AND  no sustained CPU-frequency drop > 30%
+if it fails → test the next faster production model satisfying N1/N2; if that model passes and the WER difference > 3 pp,
+    only then implement stt.continuous_model (15, v0.3); otherwise use the same faster model for both modes.
 ```
 
-Jeśli żaden model nie spełnia N2 (np. nawet `small-q5_1` ma p90 > 2,5 s), celem nie jest zmiana wymagań po cichu. Raport zawiera wtedy **najlepszy dostępny kompromis i jawną rekomendację zmiany N2** do akceptacji.
+Stage 0 ranks configurations by quality and time to text; it does not claim N2 compliance. In v0.1, measure the full `total` for successive candidates until one meets the threshold. Do not subtract an arbitrary 100 ms or add separate stage percentiles. The measurement includes successful insertion into the applications listed in 14.4, including with existing clipboard content; the report states the backend, application, clipboard content type, wait times, and failed-paste rate. Do not classify failures as fast successes. Report `inject` separately alongside `total`; the additional 150 ms before restoration is part of it.
 
-## 13.6 Wyniki
+If no model satisfies N2 (for example, even `small-q5_1` has p90 > 2.5 s), do not silently change the requirement. Instead, the report presents the **best available compromise and an explicit recommendation to change N2** for approval.
 
-- Surowe: `~/.local/share/local-stt/bench/<ISO-timestamp>/results.jsonl` (jedna linia = jeden plik × konfiguracja) + `system.json` (CPU, governor, zasilanie, wersja whisper.cpp, kernel).
-- Raport: `local-stt bench report DIR` generuje Markdown z tabelami. Wynik, który ustala defaulty, kopiujemy do `docs/benchmark-results.md` w repozytorium razem z datą i uzasadnieniem wyboru.
-- Transkrypcje korpusu zapisywane w wynikach to treść nagrana przez użytkownika na potrzeby testu, zgodnie z zasadą z [12](12-logi-prywatnosc-bledy.md) §12.2.
+## 13.6 Results
 
-## 13.7 Hipotezy do weryfikacji (nie fakty)
+- Raw data: `~/.local/share/local-stt/bench/<ISO-timestamp>/results.jsonl` (one line = one file × configuration) plus `system.json` (CPU, governor, power source, whisper.cpp version, kernel).
+- Report: `local-stt bench report DIR` generates Markdown tables. Copy the result that establishes the defaults to `docs/benchmark-results.md` in the repository, together with the date and selection rationale.
+- Corpus transcripts stored in the results are content recorded by the user for testing, under the rule in [12](12-logging-privacy-errors.md) §12.2.
 
-- Z tabel paperu Whisper dla polskiego (FLEURS): base 30,8%, small 14,7%, medium 8,0% WER. Na własnym mikrofonie i przy mowie swobodnej WER będzie wyższy, ale ranking modeli powinien się utrzymać.
-- Publiczne wyniki `whisper-bench` z 4-rdzeniowych laptopowych CPU tej generacji (issue ggml-org/whisper.cpp#89) mają duży rozrzut (np. i7-8750H: enkoder small ~4,2 s, medium ~13 s na 4 wątkach; 8 wątków nie przyspieszało). Na i5-8365U (U-series, niższe TDP) spodziewamy się wolniej, więc **`medium` i `large-v3-turbo` bez `audio_ctx` prawdopodobnie nie zmieszczą się w N2**. Dlatego etap 2 testuje `audio_ctx`.
-- Kwantyzacja q5_1 vs f16 dla `small`: oczekiwany mały wpływ na WER. Do zmierzenia.
+## 13.7 Hypotheses to verify (not facts)
+
+- The Whisper paper's Polish (FLEURS) tables report WER of 30.8% for base, 14.7% for small, and 8.0% for medium. WER will be higher with the user's microphone and spontaneous speech, but the model ranking should remain similar.
+- Public `whisper-bench` results from four-core laptop CPUs of this generation (ggml-org/whisper.cpp issue #89) vary widely (for example, on an i7-8750H: small encoder ~4.2 s, medium ~13 s with four threads; eight threads did not improve speed). The i5-8365U (U-series, lower TDP) is expected to be slower, so **`medium` and `large-v3-turbo` without `audio_ctx` will probably fail N2**. This is why stages 1–2 test `audio_ctx`.
+- q5_1 versus f16 quantization for `small` is expected to have little effect on WER. This must be measured.

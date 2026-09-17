@@ -1,12 +1,12 @@
-# 08. Przetwarzanie tekstu i wpisywanie do okna
+# 08. Text processing and injection into a window
 
 ```text
 Transcript ──► TextProcessor ──► str | None ──► Injector ──► InjectResult
 ```
 
-`TextProcessor` nie wie nic o X11. `Injector` nie wie nic o Whisperze.
+`TextProcessor` knows nothing about X11. `Injector` knows nothing about Whisper.
 
-## 8.1 Kontekst przetwarzania
+## 8.1 Processing context
 
 ```python
 @dataclass(frozen=True)
@@ -15,29 +15,29 @@ class TextContext:
     session_id: int | None
     seq: int | None
     cut: Literal["release", "max_duration", "silence", "max_length", "flush"]
-    prev_cut: str | None          # cut poprzedniego fragmentu z tej sesji (continuous)
-    prompt_tail: str | None       # końcówka promptu przekazana do silnika
+    prev_cut: str | None          # cut of the previous segment from this session (continuous)
+    prompt_tail: str | None       # end of the prompt passed to the engine
 ```
 
-## 8.2 `TextProcessor` — kroki (w tej kolejności)
+## 8.2 `TextProcessor` — steps (in this order)
 
-1. **Filtr segmentów** ([06](06-silnik-stt.md) §6.8): `no_speech_prob` razem z `avg_logprob`, lista halucynacji, pętle powtórzeń, echo promptu.
-2. **Złożenie** pozostałych segmentów: `" ".join(s.text.strip())`.
-3. **Normalizacja białych znaków**: sekwencje spacji i tabulatorów → jedna spacja, `strip()`. Znaki nowej linii z Whispera zamieniamy na spację.
-4. **Zamiany użytkownika** `text.replacements`: lista `{pattern, replace, regex}` stosowana po kolei, np. `{pattern = "(?i)\\bnowa linia\\b", replace = "\n", regex = true}`. To jedyny mechanizm „komend” w v0.1–v0.3.
-5. **Ciągłość continuous**:
-   - jeśli `cut in ("max_length", "max_duration")` (fragment kończy się w środku wypowiedzi) i tekst kończy się pojedynczą kropką, ta kropka jest usuwana (`?`, `!` i `…` zostają),
-   - jeśli `prev_cut == "max_length"`, a pierwsza litera jest wielka i drugie słowo nie jest pisane wielką literą (heurystyka „to nie nazwa własna”), pierwsza litera jest zamieniana na małą.
-6. **Separator**: przy `text.append_space = true` (domyślnie) do każdego niepustego wyniku dopisujemy **spację na końcu**. Kolejne fragmenty i następne dyktowania kleją się wtedy naturalnie, bez pamiętania stanu okna.
-7. Pusty wynik → `None`, pipeline pomija wpisywanie.
+1. **Segment filter** ([06](06-stt-engine.md) §6.8): `no_speech_prob` together with `avg_logprob`, the hallucination list, repetition loops, and prompt echo.
+2. **Assembly**: adjacent retained segments are joined with `"".join(s.text for s in run)`, without applying `strip()` to individual segments and without adding spaces. A Whisper segment boundary can occur inside a word: `" trans"` + `"krypcja"` must produce `" transkrypcja"`. If the filter removed a segment between two retained runs, insert one separator in its place so that words on either side of the removed content are not joined. The engine adapter preserves whitespace in `TranscriptSegment.text` (06 §6.8).
+3. **Whitespace normalization**: sequences of spaces and tabs → one space, `strip()`. Replace Whisper line breaks with spaces.
+4. **User replacements** from `text.replacements`: a list of `{pattern, replace, regex}` applied in order, e.g. `{pattern = "(?i)\\bnowa linia\\b", replace = "\n", regex = true}`. This is the only “command” mechanism in v0.1–v0.3.
+5. **Continuous-mode continuity**:
+   - if `cut in ("max_length", "max_duration")` (the segment ends in the middle of an utterance) and the text ends with a single period, remove that period (`?`, `!`, and `…` remain),
+   - if `prev_cut == "max_length"`, the first letter is uppercase, and the second word is not capitalized (the “not a proper name” heuristic), lowercase the first letter.
+6. **Separator**: when `text.append_space = true` (the default), append a **trailing space** to every non-empty result. Subsequent segments and dictations then join naturally without tracking window state.
+7. Empty result → `None`; the pipeline skips injection.
 
-Każdy krok jest czystą funkcją z testami jednostkowymi ([14](14-testy.md)).
+Each step is a pure function with unit tests ([14](14-tests.md)).
 
-## 8.3 Interfejs Injector
+## 8.3 Injector interface
 
 ```python
 class Injector(Protocol):
-    def inject(self, text: str) -> InjectResult: ...
+    def inject(self, text: str, *, cancel: CancellationToken) -> InjectResult: ...
 
 @dataclass(frozen=True)
 class InjectResult:
@@ -45,66 +45,71 @@ class InjectResult:
     backend: str                     # "clipboard" | "type"
     chars: int
     window_class: str | None
-    left_in_clipboard: bool          # tekst celowo zostawiony w schowku
+    left_in_clipboard: bool          # text intentionally left in the clipboard
     error: str | None
+    cancelled: bool = False          # cancellation; no emergency clipboard fallback
 ```
 
-Implementacje (v0.1): `ClipboardPasteInjector`, `XdotoolTypeInjector`, `AutoInjector` (wybór per okno). W testach `RecordingInjector`.
+Implementations (v0.1): `ClipboardPasteInjector`, `XdotoolTypeInjector`, and `AutoInjector` (selected per window). Tests use `RecordingInjector`.
 
-## 8.4 Wybór metody — dlaczego domyślnie schowek + wklejenie
+`CancellationToken` is shared by a job generation. It allows waits to be interrupted and validity to be checked atomically while marking the start of an injection operation under the same short lock used by `pipeline.cancel_all()`. An XTest sequence and each `type` chunk are separate operations; after each completes, the injector clears the in-progress marker. The lock does not cover waiting for the clipboard or subprocess execution.
 
-| Kryterium | `xdotool type` | schowek + Ctrl+V (własny właściciel selekcji) |
+If cancellation stops a job before all text is entered, the injector returns `cancelled=True`, and the pipeline reports `JobDiscarded(cancelled)` instead of an error or retry. An operation started before cancellation may finish (including releasing synthetic modifiers and handling the clipboard); text in another application is not undone. The `cancel` response then reports `injection_in_flight=true`. No subsequent operation from the old generation may start. If text was partially entered, the result contains the number of characters sent; the job is not counted as fully injected. If one started operation manages to inject the entire result, return a normal `InjectResult` and `JobFinished`, even if the remaining jobs were cancelled in the meantime. The in-progress flag remains set until all paste handling, including confirmation and clipboard restoration, is complete.
+
+## 8.4 Method selection — why clipboard + paste is the default
+
+| Criterion | `xdotool type` | clipboard + Ctrl+V (custom selection owner) |
 |---|---|---|
-| Polskie znaki | zależne od keymapy. Ubuntu 24.04 ma xdotool **3.20160805** (bez poprawek z 2025–2026); znane błędy z wieloma układami (#150, #354) i wyścigi `MappingNotify` przy remapowaniu keycode'ów → zgubione/złe znaki w Chrome/Electron | niezależne od układu klawiatury, Unicode 1:1 |
-| Szybkość | ~12 ms/znak → 300 znaków ≈ 4 s, użytkownik nie może pisać w tym czasie | jedna operacja, < 100 ms |
-| Atomowość | wpisywanie można przerwać zmianą fokusu w trakcie | atomowe |
-| Terminale | działa | wymaga `Ctrl+Shift+V` (wybór po `WM_CLASS`) |
-| Skutki uboczne | brak | nadpisuje CLIPBOARD → zapis i przywrócenie wszystkich celów ≤ 256 KiB (większa treść → fallback `type`); menedżery historii schowka zobaczą tekst |
-| Aplikacje ignorujące XTest | nie działa | nie działa (ten sam XTest do Ctrl+V) |
+| Polish characters | keymap-dependent. Ubuntu 24.04 has xdotool **3.20160805** (without the 2025–2026 fixes); known bugs with multiple layouts (#150, #354) and `MappingNotify` races when remapping keycodes → missing/incorrect characters in Chrome/Electron | keyboard-layout-independent, Unicode 1:1 |
+| Speed | ~12 ms/character → 300 characters ≈ 4 s; the user cannot type during this time | one paste; the full operation includes saving the clipboard, confirmation, and an additional 150 ms before restoration; duration is measured |
+| Atomicity | injection can be interrupted by a focus change | atomic |
+| Terminals | works | requires `Ctrl+Shift+V` (selected by `WM_CLASS`) |
+| Side effects | none | overwrites CLIPBOARD → save and restore all targets ≤ 256 KiB (larger content → `type` fallback); clipboard history managers will see the text |
+| Applications that ignore XTest | does not work | does not work (the same XTest is used for Ctrl+V) |
 
-Decyzja: `injection.backend = "auto"`:
+Decision: `injection.backend = "auto"`:
 
-- domyślnie **clipboard**,
-- **type** dla okien z `injection.type_window_classes` (domyślnie `["xterm", "URxvt"]`, bo xterm nie ma wklejania CLIPBOARD pod Ctrl+Shift+V),
-- **type** także wtedy, gdy obecnej zawartości schowka **nie da się wiernie zapisać i przywrócić** (8.5, krok 3), żeby jej nie zniszczyć.
+- **clipboard** by default,
+- **type** for windows in `injection.type_window_classes` (default: `["xterm", "URxvt"]`, because xterm does not paste CLIPBOARD with Ctrl+Shift+V),
+- **type** also when the current clipboard contents **cannot be saved and restored faithfully** (8.5, step 3), to avoid destroying them.
 
-## 8.5 `ClipboardPasteInjector` — algorytm
+## 8.5 `ClipboardPasteInjector` — algorithm
 
-Komponenty:
+Components:
 
-- `ClipboardOwner` — wątek z **własnym połączeniem X11** i niewidocznym oknem 1×1. Obsługuje `SelectionRequest`, `SelectionClear` i `SelectionNotify`, a także przechowuje aktualnie serwowaną zawartość (`served: dict[target, (type, format, bytes)]`) oraz to, co zapisaliśmy od użytkownika (`user_saved`).
-- `KeySender` — XTest (`Xlib.ext.xtest.fake_input`) na połączeniu wątku roboczego.
+- `ClipboardOwner` — a thread with **its own X11 connection** and an invisible 1×1 window. It handles `SelectionRequest`, `SelectionClear`, and `SelectionNotify`, and stores both the content currently being served (`served: dict[target, (type, format, bytes)]`) and what was saved from the user (`user_saved`).
+- `KeySender` — XTest (`Xlib.ext.xtest.fake_input`) on the worker thread's connection.
 
-Kroki `inject(text)`:
+Steps in `inject(text, cancel=token)`:
 
-1. **Poczekaj na puszczenie modyfikatorów.** Co 20 ms wywołujemy `query_keymap()` i sprawdzamy bity keycode'ów z `get_modifier_mapping()`, maks. `injection.modifier_wait_ms` (1000). Jeśli czas minie, logujemy WARNING `modifiers still held` i kontynuujemy. Nie używamy `--clearmodifiers` ani sztucznego zwalniania, bo zostawia „zawieszone” modyfikatory, gdy użytkownik puści klawisz w trakcie. **Wyjątek:** gdy wciśnięty jest klawisz PTT (trwa nowe nagranie, aktywny grab przechwyciłby wstrzyknięte klawisze), czekamy bez limitu do jego puszczenia, a wpisanie następuje zaraz po nim.
-2. **Okno docelowe.** Czytamy `_NET_ACTIVE_WINDOW` z roota, a potem `WM_CLASS` (instance, class).
-   - Wartość `0` lub okno pulpitu → **brak celu**: tekst trafia do schowka bez przywracania, `left_in_clipboard = true`, powiadomienie „Brak aktywnego pola — tekst jest w schowku”. Koniec.
-3. **Zapis schowka.**
-   - **My jesteśmy właścicielem** (serwujemy przywróconą treść użytkownika albo tekst z nieudanego wklejenia) → `saved = user_saved` (to, co było u użytkownika *przed* naszą pierwszą ingerencją; tekst z nieudanego wklejenia nie nadpisuje `user_saved`).
-   - **Właścicielem jest inny klient** → `ConvertSelection(CLIPBOARD, TARGETS)` (timeout 300 ms), potem pobranie **każdego** celu poza meta (`TARGETS`, `TIMESTAMP`, `MULTIPLE`, `SAVE_TARGETS`, `DELETE`). Dla każdego zapamiętujemy bajty, typ właściwości i format (8/16/32). Limity: maks. 32 cele, każdy ≤ 256 KiB, łącznie ≤ 1 MiB, cała operacja ≤ 500 ms.
-     - Wszystko w limitach → `saved = {target: (type, format, bytes)}`, `user_saved = saved`. Bajty odtwarzamy 1:1, więc nie musimy rozumieć formatu. Dzięki temu kopia z Firefoksa/Chrome (tekst, `text/html` i metadane przeglądarki) czy pliki z Nautilusa (`x-special/gnome-copied-files`) wracają w całości.
-     - Przekroczony limit albo właściciel odpowiada przez INCR (typowo obrazy, duże dokumenty) → **przełączenie na `XdotoolTypeInjector`** (nie potrafimy wiernie odtworzyć schowka, więc go nie ruszamy).
-     - Brak odpowiedzi lub brak właściciela → `saved = None`.
-4. **Przejęcie schowka.** `set_selection_owner(CLIPBOARD, our_window, time)` i sprawdzenie `get_selection_owner` == nasze okno. Serwujemy cele `TARGETS`, `UTF8_STRING`, `text/plain;charset=utf-8`, `TEXT`, `STRING` (`STRING` tylko, gdy tekst mieści się w Latin-1). Limit tekstu: 64 KiB bez obsługi INCR, a dłuższy tekst → backend `type` (w praktyce nie występuje).
-5. **Skrót wklejania** wybierany po `WM_CLASS` (porównanie bez wielkości liter):
-   - `injection.paste_shortcut_overrides` (mapa klasa → skrót),
-   - klasy z `injection.terminal_window_classes` → `Ctrl+Shift+V`,
-   - pozostałe → `Ctrl+V`.
-6. **Wysłanie skrótu przez XTest.** Zawsze używamy keycode'ów **`Control_L` i `Shift_L`**, nigdy `Control_R`/`Shift_R`. Walidator ([09](09-konfiguracja.md) §9.3) odrzuca skróty daemona zawierające `Control_L` lub `Shift_L` jako keysym, więc wstrzyknięty klawisz nie może uruchomić naszego własnego grabu PTT. Sekwencja: press modyfikatorów → press/release `v` (keycode z `keysym_to_keycode(XK_v)`) → release modyfikatorów, każdy krok z `sync()` i 8 ms przerwy. Zapamiętujemy `t_sent` (czas monotoniczny tuż przed pierwszym press).
-7. **Potwierdzenie.** `ClipboardOwner` liczy tylko żądania celu tekstowego (nie `TARGETS`), które spełniają oba warunki:
-   - przyszły **po `t_sent`** (odrzuca menedżery schowka, które pobierają treść od razu po zmianie właściciela, przez XFixes),
-   - okno `requestor` należy **do tego samego klienta X co okno aktywne**: `requestor & ~resource_id_mask == active_window & ~resource_id_mask`, gdzie maska pochodzi z `display.info.resource_id_mask`. Identyfikatory zasobów X zawierają bazę klienta, więc nie potrzeba rozszerzenia XRes.
+1. **Wait for modifiers to be released.** Every 20 ms, call `query_keymap()` and check the keycode bits from `get_modifier_mapping()`, for at most `injection.modifier_wait_ms` (1000). On timeout, log WARNING `modifiers still held` and continue. Do not use `--clearmodifiers` or synthetic releases, because they leave modifiers “stuck” if the user releases a key during the operation. **Exception:** when the PTT key is held (a new recording is in progress and the active grab would intercept injected keys), wait until release or cancellation. Every wait before injection begins, including waits for clipboard responses, checks the token at least every 20 ms. After sending the shortcut, complete the confirmation and restoration protocol even if the token is cancelled. Cancellation before injection begins ends the method without sending keys.
+2. **Target window.** Read `_NET_ACTIVE_WINDOW` from the root window, then `WM_CLASS` (instance, class).
+   - Value `0` or a desktop window → **no target**: after atomically checking the token and starting the operation, place the text in the clipboard without restoring it, set `left_in_clipboard = true`, and show “No active field — text is in the clipboard”. End.
+3. **Save the clipboard.** To roll back a cancelled takeover, also remember the content immediately preceding this operation (`rollback_saved`); if we already own it, this is a copy of `served`, which may differ from historical `user_saved`.
+   - **We are the owner** (serving restored user content or text from a failed paste) → `saved = user_saved` (what the user had *before* our first intervention; text from a failed paste does not overwrite `user_saved`).
+   - **Another client is the owner** → `ConvertSelection(CLIPBOARD, TARGETS)` (300 ms timeout), then retrieve **every** non-meta target (`TARGETS`, `TIMESTAMP`, `MULTIPLE`, `SAVE_TARGETS`, `DELETE`). For each target, save its bytes, property type, and format (8/16/32). Limits: at most 32 targets, each ≤ 256 KiB, total ≤ 1 MiB, entire operation ≤ 500 ms.
+     - Everything within limits → `saved = {target: (type, format, bytes)}`, `user_saved = saved`. Restore bytes 1:1, so their format need not be understood. Thus a Firefox/Chrome copy (text, `text/html`, and browser metadata) or Nautilus files (`x-special/gnome-copied-files`) are fully restored.
+     - Limit exceeded or the owner responds via INCR (typically images or large documents) → **switch to `XdotoolTypeInjector`** (the clipboard cannot be faithfully restored, so leave it untouched).
+     - No response or no owner → `saved = None`.
+4. **Take ownership of the clipboard.** Check the token again, call `set_selection_owner(CLIPBOARD, our_window, time)`, and verify that `get_selection_owner` equals our window. Serve `TARGETS`, `UTF8_STRING`, `text/plain;charset=utf-8`, `TEXT`, and `STRING` (`STRING` only if the text fits Latin-1). Text limit: 64 KiB without INCR support; longer text uses the `type` backend (not expected in practice). If cancellation arrives after takeover but before sending the shortcut, restore `rollback_saved` regardless of `restore_clipboard`, provided we still own the clipboard, and finish with `cancelled=True`. Do not overwrite a clipboard taken over by the user in the meantime.
+5. **Paste shortcut**, selected by `WM_CLASS` (case-insensitive comparison):
+   - `injection.paste_shortcut_overrides` (class → shortcut map),
+   - classes in `injection.terminal_window_classes` → `Ctrl+Shift+V`,
+   - all others → `Ctrl+V`.
+6. **Send the shortcut through XTest.** Immediately before the first press, atomically check the token and mark the operation as started (8.3). A cancelled token blocks the entire sequence. Always use the **`Control_L` and `Shift_L`** keycodes, never `Control_R`/`Shift_R`. The validator ([09](09-configuration.md) §9.3) rejects daemon shortcuts containing `Control_L` or `Shift_L` as the keysym, so an injected key cannot trigger our own PTT grab. Sequence: press modifiers → press/release `v` (keycode from `keysym_to_keycode(XK_v)`) → release modifiers, with `sync()` and an 8 ms pause after each step. Record `t_sent` (monotonic time immediately before the first press).
+7. **Confirmation.** `ClipboardOwner` counts only text-target requests (not `TARGETS`) that meet both conditions:
+   - they arrived **after `t_sent`** (rejecting clipboard managers that fetch content through XFixes immediately after the owner changes),
+   - the `requestor` window belongs **to the same X client as the active window**: `requestor & ~resource_id_mask == active_window & ~resource_id_mask`, where the mask comes from `display.info.resource_id_mask`. X resource IDs contain the client base, so the XRes extension is unnecessary.
 
-   Czekamy maks. `injection.paste_timeout_ms` (1000):
-   - potwierdzone → po dodatkowych 150 ms (aplikacje czasem pobierają kilka celów) przechodzimy do przywracania,
-   - brak potwierdzenia → aplikacja nie wkleiła (fokus nie w polu tekstowym albo okno ignoruje XTest). **Nie przywracamy schowka**: tekst zostaje w schowku, `left_in_clipboard = true`, WARNING w logu i powiadomienie „Nie udało się wkleić — tekst jest w schowku (Ctrl+V)”. Dyktowanie nigdy nie ginie po cichu. `user_saved` zostaje zachowane i posłuży przy kolejnym udanym wklejeniu.
-8. **Przywrócenie** (`injection.restore_clipboard = true`):
-   - `saved` niepuste → nadal jesteśmy właścicielem, ale serwujemy już `saved` (wszystkie zapisane cele), dopóki inna aplikacja nie przejmie schowka. Wtedy `SelectionClear` → czyścimy `served` i `user_saved`,
+   Wait at most `injection.paste_timeout_ms` (1000):
+   - confirmed → after an additional 150 ms (applications sometimes fetch several targets), proceed to restoration,
+   - no confirmation → the application did not paste (focus is not in a text field or the window ignores XTest). **Do not restore the clipboard**: leave the text there, set `left_in_clipboard = true`, log a WARNING, and show “Could not paste — text is in the clipboard (Ctrl+V)”. Dictation is never silently lost. Preserve `user_saved` for the next successful paste.
+8. **Restoration** (`injection.restore_clipboard = true`), only if we still own CLIPBOARD; after `SelectionClear`, do not reclaim it:
+   - non-empty `saved` → remain the owner but now serve `saved` (all saved targets) until another application takes over the clipboard. Then `SelectionClear` → clear `served` and `user_saved`,
    - `saved is None` → `set_selection_owner(CLIPBOARD, X.NONE)`.
-   - Po wyjściu daemona przywrócona treść znika, jeśli oryginalny właściciel już jej nie serwuje. To samo zachowanie ma `xclip`. Akceptujemy to.
+   - After the daemon exits, restored content disappears if its original owner no longer serves it. `xclip` behaves the same way. This is accepted.
 
-PRIMARY (zaznaczenie środkowym przyciskiem) **nie jest ruszane**.
+PRIMARY (middle-button selection) is **not modified**.
 
 ## 8.6 `XdotoolTypeInjector`
 
@@ -112,22 +117,22 @@ PRIMARY (zaznaczenie środkowym przyciskiem) **nie jest ruszane**.
 xdotool type --delay 12 -- "<text>"
 ```
 
-- Uruchamiany przez `subprocess.run([...], timeout=max(5, len(text)*0.05))`. Tekst przekazujemy jako argument (nie przez powłokę), więc nie ma problemu z escapingiem.
-- Najpierw ten sam krok 1 (czekanie na puszczenie modyfikatorów). **Bez `--clearmodifiers`.**
-- Tekst dzielimy na kawałki po 200 znaków, żeby timeout i anulowanie działały między kawałkami (sprawdzenie generacji pipeline).
-- `\n` → xdotool wysyła `Return`.
-- `injection.type_delay_ms` (12) to parametr. Wartości < 8 ms w Chrome gubią znaki.
+- Run via `subprocess.run([...], timeout=max(5, len(text)*0.05))`. Pass the text as an argument (not through the shell), so escaping is not an issue.
+- First perform the same step 1 (wait for modifiers to be released). **No `--clearmodifiers`.**
+- Split text into chunks of 200 characters. Immediately before each subprocess invocation, atomically check the token and mark the operation as started (8.3). Cancellation blocks subsequent chunks; the current one may finish. Cancellation does not trigger the clipboard fallback, even after partial text entry.
+- `\n` → xdotool sends `Return`.
+- `injection.type_delay_ms` (12) is configurable. Values < 8 ms cause Chrome to lose characters.
 
-## 8.7 Zachowania brzegowe
+## 8.7 Edge cases
 
-| Sytuacja | Zachowanie |
+| Situation | Behavior |
 |---|---|
-| Użytkownik zmienił okno między nagraniem a wpisaniem | tekst trafia do okna aktywnego w chwili wpisywania (świadoma prostota; log DEBUG z klasami obu okien) |
-| Pole hasła / okno blokady ekranu | nie wykrywamy; ekran blokady GNOME ma własny grab, więc XTest tam nie trafia |
-| Użytkownik pisze na klawiaturze w trakcie continuous | wklejenie jest atomowe, więc może wstawić się między jego znaki; akceptowane, udokumentowane |
-| `xdotool` nieobecny | backend `type` niedostępny → `doctor` WARN; `auto` używa wtedy wyłącznie schowka, a gdy schowka nie da się zapisać (krok 3), wkleja bez przywracania i loguje WARNING |
-| Błąd X11 w injectorze | `InjectResult(ok=False)`, tekst w schowku (jeśli się da), powiadomienie |
+| User changes windows between recording and injection | text goes to the window active at injection time (deliberate simplicity; DEBUG log with both window classes) |
+| Password field / screen-lock window | not detected; the GNOME lock screen has its own grab, so XTest does not reach it |
+| User types during continuous mode | the paste is atomic, so it may be inserted between the user's characters; accepted and documented |
+| `xdotool` absent | `type` backend unavailable → `doctor` WARN; `auto` then uses only the clipboard, and when the clipboard cannot be saved (step 3), it pastes without restoration and logs a WARNING |
+| X11 error in the injector | `InjectResult(ok=False)`, text in the clipboard (if possible), notification |
 
-## 8.8 Wayland (przyszłość)
+## 8.8 Wayland (future)
 
-Na Waylandzie obie implementacje przestają działać. Nowe backendy (`wl-copy` + `ydotool`/`dotool`, portal RemoteDesktop) implementują ten sam `Injector`. Wybór backendu `auto` zależy wtedy od `XDG_SESSION_TYPE`. Poza zakresem v0.1–v0.3.
+On Wayland, both implementations stop working. New backends (`wl-copy` + `ydotool`/`dotool`, RemoteDesktop portal) implement the same `Injector`. The `auto` backend selection then depends on `XDG_SESSION_TYPE`. This is outside the scope of v0.1–v0.3.

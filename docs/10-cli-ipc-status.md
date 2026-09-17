@@ -1,66 +1,70 @@
-# 10. CLI, IPC i status
+# 10. CLI, IPC, and status
 
-## 10.1 Polecenia `local-stt`
+## 10.1 `local-stt` commands
 
-Jeden entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), subkomendy przez `argparse`. **To jedyna pełna lista poleceń** — inne dokumenty odsyłają tutaj.
+One entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), with subcommands implemented through `argparse`. **This is the only complete command list** — other documents refer here.
 
-| Polecenie | Wersja | Działanie | Wymaga działającego daemona |
+| Command | Version | Action | Requires a running daemon |
 |---|---|---|---|
-| `local-stt daemon [--config P] [--log-level L]` | v0.1 | uruchamia daemon na pierwszym planie (tak startuje go systemd) | — |
-| `local-stt status [--json] [--watch]` | v0.1 / `--watch` v0.2 | stan daemona (10.4) | tak (inaczej: `daemon not running`, kod 3) |
-| `local-stt ptt start\|stop` | v0.1 | jak wciśnięcie/puszczenie klawisza PTT | tak |
-| `local-stt toggle` | v0.2 | włącz/wyłącz continuous | tak |
-| `local-stt cancel` | v0.1 | anuluj nagrywanie/continuous i odrzuć niewpisane zadania | tak |
-| `local-stt reload` | v0.1 | wczytaj config ponownie; wypisuje zastosowane, odroczone i czy serwer zostanie zrestartowany ([04](04-maszyna-stanow.md) §4.6) | tak |
-| `local-stt doctor` | v0.1 | diagnostyka środowiska (10.5) | nie |
-| `local-stt devices` | v0.1 | lista źródeł PipeWire (`pactl -f json list sources`, bez `.monitor`): nazwa węzła do `audio.device` + opis; oznaczenie domyślnego | nie |
-| `local-stt models list\|pull NAME\|verify` | etap 0 | modele w `models_dir`, pobieranie z HF, weryfikacja SHA256 (jedyne polecenie korzystające z Internetu) | nie |
-| `local-stt models list --bench` | v0.3 | lista modeli z wynikami ostatniego benchmarku | nie |
-| `local-stt transcribe FILE.wav [--model M]` | etap 0 | jednorazowa transkrypcja pliku (test bez mikrofonu i hotkeyów); bez `--model` przez działający serwer, z `--model` przez **tymczasowy** serwer na porcie 8199 (jak `bench`), żeby nie zmieniać modelu usługi | bez `--model`: serwer tak |
-| `local-stt record-corpus DIR [--long]` | etap 0 | nagrywanie korpusu do benchmarku ([13](13-benchmark.md) §13.2) | nie |
-| `local-stt bench [--quick] [--dataset DIR] …` | etap 0 | macierz modeli na tymczasowych serwerach ([13](13-benchmark.md) §13.4) | nie (usługa serwera powinna być zatrzymana) |
-| `local-stt bench --soak …` | v0.2 | test continuous 10 min przez prawdziwy Segmenter | nie |
-| `local-stt bench report DIR` | etap 0 | raport Markdown z wyników | nie |
+| `local-stt daemon [--config P] [--log-level L]` | v0.1 | runs the daemon in the foreground (as systemd starts it) | — |
+| `local-stt status [--json] [--watch [--preview]]` | v0.1 / `--watch` v0.2 / `--preview` v0.3 | daemon status (10.4) | yes (otherwise: `daemon not running`, code 3) |
+| `local-stt ptt start\|stop` | v0.1 | equivalent to pressing/releasing the PTT key | yes |
+| `local-stt toggle` | v0.2 | enables/disables continuous mode | yes |
+| `local-stt cancel` | v0.1 | cancels recording/continuous mode and pending jobs; an injection operation already underway may finish (08 §8.3) | yes |
+| `local-stt reload` | v0.1 | reloads the config; reports applied and deferred changes and whether the server will restart ([04](04-state-machine.md) §4.6) | yes |
+| `local-stt doctor` | v0.1 | environment diagnostics (10.5) | no |
+| `local-stt devices` | v0.1 | lists PipeWire sources (`pactl -f json list sources`, excluding `.monitor`): node name for `audio.device` + description; marks the default | no |
+| `local-stt models list\|pull NAME\|verify` | stage 0 | models in `models_dir`, HF download, SHA256 verification (the only command that uses the Internet) | no |
+| `local-stt models list --bench` | v0.3 | lists models with the latest benchmark results | no |
+| `local-stt transcribe FILE.wav [--model M]` | stage 0 | one-shot file transcription (test without microphone or hotkeys); without `--model`, uses the running server; with `--model`, uses a **temporary** server on port 8199 (like `bench`) to avoid changing the service model | without `--model`: yes |
+| `local-stt record-corpus DIR [--long]` | stage 0 | records the benchmark corpus ([13](13-benchmark.md) §13.2) | no |
+| `local-stt bench [--quick] [--dataset DIR] …` | stage 0 | model matrix on temporary servers ([13](13-benchmark.md) §13.4) | no (the server service should be stopped) |
+| `local-stt bench --soak …` | v0.2 | 10-minute continuous-mode test through the real Segmenter | no |
+| `local-stt bench report DIR` | stage 0 | Markdown results report | no |
 
-Kody wyjścia: `0` OK, `1` błąd ogólny, `2` błąd użycia, `3` daemon nie działa, `4` odrzucone przez daemon (np. `toggle`, gdy silnik DOWN), `78` błąd konfiguracji.
+Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, `4` rejected by the daemon (for example `toggle` when the engine is DOWN), `78` configuration error.
 
-## 10.2 IPC — gniazdo sterujące
+## 10.2 IPC — control socket
 
-- Ścieżka: `$XDG_RUNTIME_DIR/local-stt/control.sock` (`/run/user/1000/…`, tmpfs, prywatne dla użytkownika).
-- Katalog ma uprawnienia `0700`, gniazdo `0600`. Dodatkowo daemon sprawdza `SO_PEERCRED`: `uid` klienta musi równać się `os.getuid()`, inaczej zamyka połączenie.
-- Protokół: **JSON Lines** (jedno żądanie = jedna linia UTF-8 zakończona `\n`, jedna odpowiedź = jedna linia).
-- Serwer: wątek `ipc-server` (`socketserver.ThreadingUnixStreamServer`). Polecenia zmieniające stan są zamieniane na zdarzenia Controllera. Odpowiedź czeka na ich przetworzenie przez `concurrent.futures.Future` z timeoutem 5 s.
-- Stale gniazdo: przy starcie, jeśli plik istnieje, a `connect()` się nie udaje, plik jest usuwany. Jeśli `connect()` się uda, daemon już działa: ERROR `another instance is running` i wyjście z kodem 1.
+- Path: `$XDG_RUNTIME_DIR/local-stt/control.sock` (`/run/user/1000/…`, tmpfs, private to the user).
+- The directory has `0700` permissions and the socket `0600`. The daemon also checks `SO_PEERCRED`: the client's `uid` must equal `os.getuid()`, otherwise it closes the connection.
+- Protocol: **JSON Lines** (one request = one UTF-8 line terminated by `\n`; one response = one line).
+- Server: the `ipc-server` thread (`socketserver.ThreadingUnixStreamServer`). State-changing commands become Controller events. The response waits for their processing through a `concurrent.futures.Future` with a 5 s timeout.
+- Stale socket: at startup, if the file exists and `connect()` fails, the file is removed. If `connect()` succeeds, the daemon is already running: ERROR `another instance is running`, exit code 1.
 
-### Żądania i odpowiedzi
+### Requests and responses
 
 ```json
 → {"cmd": "status"}
-← {"ok": true, "status": { ...patrz 10.4... }}
+← {"ok": true, "status": { ...see 10.4... }}
 
 → {"cmd": "ptt", "action": "start"}
 ← {"ok": true}
 
 → {"cmd": "toggle"}
-← {"ok": false, "error": "engine_down", "message": "Silnik STT niedostępny"}
+← {"ok": false, "error": "engine_down", "message": "STT engine unavailable"}
 
 → {"cmd": "reload"}
 ← {"ok": true, "applied": ["vad.min_silence_ms"], "deferred": [], "server_restart": true}
 
 → {"cmd": "subscribe"}
-← {"event": "state", "status": {...}}        // strumień – linia przy każdej zmianie stanu
+← {"event": "state", "status": {...}}        // stream – one line on every state change
 ← {"event": "job", "job_id": 17, "source": "continuous", "audio_s": 4.1, "processing_s": 1.9, "chars": 62, "result": "injected"}
 ```
 
-Zdarzenia `job` **nie zawierają tekstu**.
+`job` events **do not contain text**.
 
-## 10.3 Sygnały
+Response to `cancel`: `{"ok": true, "injection_in_flight": false}`, or `true` in the second field if injection began before cancellation. With `true`, the CLI prints “Remaining jobs cancelled; injection already in progress may finish.” This applies to a single paste sequence or the current `type` chunk, never subsequent chunks or jobs.
 
-| Sygnał | Działanie |
+In v0.3, `status --watch --preview` requires `continuous.preview=true` and explicitly subscribes to a separate `preview` stream containing partial text. Regular `subscribe`, `status --watch`, and `status --json` do not receive preview content; having no subscribers disables those STT requests. Preview text remains in daemon RAM and the subscriber's terminal; users may redirect CLI output to a file themselves. It is never sent to logs or notifications.
+
+## 10.3 Signals
+
+| Signal | Action |
 |---|---|
-| `SIGTERM`, `SIGINT` | `ShutdownRequested` — czyste zamknięcie (ungrab, zamknięcie strumienia, usunięcie gniazda), kod 0 |
+| `SIGTERM`, `SIGINT` | `ShutdownRequested` — clean shutdown (ungrab, stream close, socket removal), code 0 |
 | `SIGHUP` | `ReloadRequested` (`systemctl --user reload local-stt`) |
-| `SIGUSR1` | zrzut stanu wewnętrznego (kolejki, wątki, liczniki) na log INFO — diagnostyka zawieszeń |
+| `SIGUSR1` | dumps internal state (queues, threads, counters) to the INFO log — hang diagnostics |
 
 ## 10.4 Status
 
@@ -93,73 +97,73 @@ local-stt 0.1.0 — IDLE
 }
 ```
 
-`state` jest wyliczany według priorytetów z [04](04-maszyna-stanow.md) §4.7.
+`state` is calculated according to the priorities in [04](04-state-machine.md) §4.7.
 
-`status --watch` subskrybuje zdarzenia i przepisuje jedną linię w terminalu. Można go użyć w pasku stanu (np. rozszerzenie GNOME „Executor” albo przyszły tray, zob. [15](15-plan-implementacji.md)).
+`status --watch` subscribes to events and rewrites one terminal line. It can be used in a status bar (for example, the GNOME “Executor” extension or a future tray; see [15](15-implementation-plan.md)).
 
 ## 10.5 `local-stt doctor`
 
-Sprawdza i wypisuje `OK` / `WARN` / `FAIL` z podpowiedzią naprawy:
+Checks and prints `OK` / `WARN` / `FAIL` with a suggested fix:
 
-| Test | FAIL/WARN, gdy | Podpowiedź |
+| Test | FAIL/WARN when | Suggestion |
 |---|---|---|
-| sesja | typ z `loginctl show-session <Display> -p Type` ≠ `x11` ([07](07-hotkeys-x11.md) §7.5) | „Wybierz sesję Ubuntu on Xorg na ekranie logowania” |
-| `DISPLAY` w `systemctl --user show-environment` | brak | `dbus-update-activation-environment --systemd DISPLAY XAUTHORITY` |
-| config | błąd walidacji | komunikat walidatora |
-| model STT | brak pliku / zła suma | `local-stt models pull …` |
-| model VAD | brak/zła suma | `local-stt models pull silero-vad` |
-| `whisper-server` binarka | brak / nie uruchamia się (`--help`) / `.whisper-tag` ≠ tag z `install.sh` | `scripts/install.sh --rebuild-whisper` |
-| `secret`, `whisper-server.env` | brak / uprawnienia inne niż 0600 | `scripts/install.sh` |
-| usługa `local-stt-whisper` | nieaktywna | `systemctl --user status local-stt-whisper` |
-| `GET /health` (z prefiksem z `secret`) | brak odpowiedzi / `loading model` dłużej niż `stt.startup_timeout_s` | `journalctl --user -u local-stt-whisper` |
-| port | nasłuch nie tylko na loopback (`ss -ltn`) | FAIL prywatności |
-| hotkeye | daemon działa → stan `hotkeys` przez IPC (`degraded` = FAIL z listą problemów); daemon nie działa → grab testowy na osobnym połączeniu (`BadAccess` = FAIL) | wskazuje konfliktujący skrót GNOME (`gsettings list-recursively` + dopasowanie) |
-| mikrofon | otwarcie 1 s → RMS | WARN, gdy < -60 dBFS: „sprawdź wyciszenie/poziom wejścia w ustawieniach dźwięku” |
-| `xdotool` | brak | WARN: backend `type` niedostępny |
-| `pw-play` / `paplay` | brak obu | WARN: brak dźwięków |
-| `notify-send` | brak | WARN: brak powiadomień |
-| CPU governor / zasilanie | `powersave` na baterii | INFO: wpływ na latencję |
+| session | type from `loginctl show-session <Display> -p Type` ≠ `x11` ([07](07-hotkeys-x11.md) §7.5) | “Select the Ubuntu on Xorg session on the login screen” |
+| `DISPLAY` in `systemctl --user show-environment` | missing | `dbus-update-activation-environment --systemd DISPLAY XAUTHORITY` |
+| config | validation error | validator message |
+| STT model | missing file / bad checksum | `local-stt models pull …` |
+| VAD model | missing/bad checksum | `local-stt models pull silero-vad` |
+| `whisper-server` binary | missing / fails to run (`--help`) / `.whisper-tag` ≠ tag from `install.sh` | `scripts/install.sh --rebuild-whisper` |
+| `secret`, `whisper-server.env` | missing / permissions other than 0600 | `scripts/install.sh` |
+| `local-stt-whisper` service | inactive | `systemctl --user status local-stt-whisper` |
+| `GET /health` (with the prefix from `secret`) | no response / `loading model` longer than `stt.startup_timeout_s` | `journalctl --user -u local-stt-whisper` |
+| port | listening on more than loopback (`ss -ltn`) | privacy FAIL |
+| hotkeys | daemon running → `hotkeys` state over IPC (`degraded` = FAIL with problem list); daemon not running → test grab on a separate connection (`BadAccess` = FAIL) | identifies the conflicting GNOME shortcut (`gsettings list-recursively` + matching) |
+| microphone | open for 1 s → RMS | WARN when < -60 dBFS: “check mute/input level in sound settings” |
+| `xdotool` | missing | WARN: `type` backend unavailable |
+| `pw-play` / `paplay` | both missing | WARN: no sounds |
+| `notify-send` | missing | WARN: no notifications |
+| CPU governor / power | `powersave` on battery | INFO: latency impact |
 
-## 10.6 Sygnalizacja dla użytkownika
+## 10.6 User feedback
 
-### Dźwięki (`feedback.sounds`)
+### Sounds (`feedback.sounds`)
 
-Daemon przy starcie generuje cztery krótkie pliki WAV (sinus z 5 ms fade-in/out, głośność `sound_volume`) do `$XDG_RUNTIME_DIR/local-stt/sounds/`:
+At startup, the daemon generates four short WAV files (sine waves with 5 ms fade-in/out, volume `sound_volume`) in `$XDG_RUNTIME_DIR/local-stt/sounds/`:
 
-| Dźwięk | Brzmienie | Długość |
+| Sound | Pattern | Duration |
 |---|---|---|
-| `start` | 2 tony rosnące 660→880 Hz | 130 ms |
-| `stop` | 2 tony opadające 880→660 Hz | 130 ms |
-| `cancel` | 1 ton 440 Hz | 120 ms |
-| `error` | 3× 330 Hz z przerwami | 250 ms |
+| `start` | 2 ascending tones, 660→880 Hz | 130 ms |
+| `stop` | 2 descending tones, 880→660 Hz | 130 ms |
+| `cancel` | 1 tone at 440 Hz | 120 ms |
+| `error` | 3× 330 Hz with pauses | 250 ms |
 
-**Macierz zdarzeń → dźwięk** (jedyne źródło prawdy; [04](04-maszyna-stanow.md) i [05](05-audio-i-vad.md) się do niej odwołują):
+**Event → sound matrix** (the single source of truth; [04](04-state-machine.md) and [05](05-audio-and-vad.md) refer to it):
 
-| Sytuacja | Dźwięk |
+| Situation | Sound |
 |---|---|
-| PTT: pierwsza ramka z mikrofonu (`RecordingStarted`); próbki do końca dźwięku + 80 ms są odrzucane | `start` |
-| PTT puszczone, nagranie przyjęte do kolejki | `stop` |
-| PTT krótsze niż `ptt.min_duration_ms` | **brak** (przypadkowe tapnięcie) |
-| PTT anulowane (klawisz anulowania, `local-stt cancel`) | `cancel` |
-| Nagranie PTT bez mowy (`JobDiscarded(no_speech)`) | `cancel` |
-| Continuous włączony (dźwięk **przed** otwarciem mikrofonu) | `start` |
-| Continuous wyłączony (toggle, backlog, silnik DOWN, mikrofon po 3 próbach) | `stop`; dla backlog/DOWN/mikrofonu dodatkowo `error` |
-| `local-stt cancel` z odrzuceniem czegokolwiek | `cancel` |
-| Odmowa: silnik niedostępny, błąd otwarcia mikrofonu, błąd audio w trakcie PTT | `error` |
-| Tekst wpisany | brak (efekt widać w oknie) |
-| `JobFailed`, wklejenie niepotwierdzone | brak dźwięku, tylko powiadomienie |
+| PTT: first microphone frame (`RecordingStarted`); samples through the end of the sound + 80 ms are discarded | `start` |
+| PTT released, recording accepted into the queue | `stop` |
+| PTT shorter than `ptt.min_duration_ms` (press→release time) | no `stop` and no transcription; `start` may already have sounded after the first frame |
+| PTT cancelled (cancel key, `local-stt cancel`) | `cancel` |
+| PTT recording with no speech (`JobDiscarded(no_speech)`) | `cancel` |
+| Continuous mode enabled (sound **before** opening the microphone) | `start` |
+| Continuous mode disabled (toggle, backlog, engine DOWN, microphone after 3 attempts) | `stop`; additionally `error` for backlog/DOWN/microphone |
+| `local-stt cancel` discarding anything | `cancel` |
+| Rejection: engine unavailable, microphone open error, audio error during PTT | `error` |
+| Text injected | none (the result is visible in the window) |
+| `JobFailed`, unconfirmed paste | no sound, notification only |
 
-Odtwarzanie: `subprocess.Popen(["pw-play", path])` (fallback `paplay`), bez czekania na zakończenie. Osobny proces nie koliduje ze strumieniem wejściowym PortAudio. Przy starcie continuous mikrofon otwiera się dopiero po dźwięku `start` — zdarzenie `CaptureOpenDue` 150 ms później ([04](04-maszyna-stanow.md) §4.3).
+Playback: `subprocess.Popen(["pw-play", path])` (fallback `paplay`), without waiting for completion. The separate process does not interfere with the PortAudio input stream. When continuous mode starts, the microphone opens only after the `start` sound—the `CaptureOpenDue` event occurs 150 ms later ([04](04-state-machine.md) §4.3).
 
-### Powiadomienia (`feedback.notifications`)
+### Notifications (`feedback.notifications`)
 
-`notify-send -a local-stt -i audio-input-microphone -p [-r <id>] [-e] "<tytuł>" "<treść>"` (libnotify-bin 0.8.3 na Ubuntu 24.04):
+`notify-send -a local-stt -i audio-input-microphone -p [-r <id>] [-e] "<title>" "<body>"` (libnotify-bin 0.8.3 on Ubuntu 24.04):
 
-- `-p` wypisuje ID powiadomienia, a daemon je zapamiętuje. Kolejne wywołanie z `-r <id>` **zastępuje** poprzednie, więc powiadomienia się nie mnożą. GNOME Shell ignoruje wskazówkę `x-canonical-private-synchronous` i `-t`, dlatego ich nie używamy.
-- `-e` (transient) dla powiadomień informacyjnych (poziom `all`), żeby nie zostawały w centrum powiadomień. Błędy nie są transient.
+- `-p` prints the notification ID, which the daemon remembers. The next invocation with `-r <id>` **replaces** the preceding notification, so they do not accumulate. GNOME Shell ignores the `x-canonical-private-synchronous` hint and `-t`, so we do not use them.
+- `-e` (transient) is used for informational notifications (`all` level), so they do not remain in the notification center. Errors are not transient.
 
-| Poziom `errors` (domyślny) | Dodatkowo przy `all` |
+| `errors` level (default) | Additionally with `all` |
 |---|---|
-| silnik niedostępny, błąd mikrofonu, „mikrofon wydaje się wyciszony”, „osiągnięto limit nagrania”, transkrypcja nie powiodła się (zbiorczo), „nie udało się wkleić — tekst w schowku”, „brak aktywnego pola — tekst w schowku”, „transkrypcja nie nadąża — dyktowanie zatrzymane”, konflikt hotkeya przy starcie, nieudany restart silnika po reload | „Dyktowanie włączone/wyłączone”, „Silnik gotowy: <model>” |
+| engine unavailable, microphone error, “microphone appears muted,” “recording limit reached,” transcription failed (aggregated), “paste failed—text is in the clipboard,” “no active field—text is in the clipboard,” “transcription cannot keep up—dictation stopped,” hotkey conflict at startup, engine restart failed after reload | “Dictation enabled/disabled,” “Engine ready: <model>” |
 
-Powiadomienia **nigdy nie zawierają transkrybowanego tekstu**.
+Notifications **never contain transcribed text**.

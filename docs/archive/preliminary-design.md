@@ -1,5 +1,7 @@
 # Local Offline Voice-to-Text Daemon for Ubuntu
 
+> **Archiwum — dokument nieaktualny.** To wstępny projekt, zastąpiony przez specyfikację w [`docs/`](../README.md). Zachowany wyłącznie jako kontekst dla odwołań „preliminary design” w specyfikacji. Nie implementować na jego podstawie.
+
 ## 1. Cel projektu
 
 Projekt ma zapewnić lokalny, działający całkowicie offline system **speech-to-text (STT)** dla Ubuntu, zoptymalizowany pod laptop bez dedykowanego GPU.
