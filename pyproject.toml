@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-stt"
+description = "Offline Polish speech-to-text daemon for Ubuntu (X11), backed by whisper.cpp"
+readme = "docs/README.md"
+requires-python = ">=3.12,<3.13"
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "sounddevice",
+    "onnxruntime",
+    "python-xlib",
+    "soxr",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-timeout",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "pip-tools",
+]
+
+[project.scripts]
+local-stt = "local_stt.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "local_stt.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# --- pytest (docs/14-tests.md) ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+timeout = 60
+markers = [
+    "needs_whisper: requires a local whisper-server build and a model",
+    "needs_x11: requires an X server (run under xvfb-run)",
+    "needs_audio: requires a real PipeWire session and microphone",
+    "e2e: full daemon end-to-end test",
+]
+
+# --- ruff ---
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+# ruff also formats Python blocks inside Markdown; spec snippets in docs/ stay as written
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
+
+# --- mypy (docs/14-tests.md: --strict for src/local_stt, excluding bench/) ---
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/local_stt"]
+exclude = ["^src/local_stt/bench/"]
+
+# python-xlib ships no type information; Xlib use is confined to hotkeys/x11.py
+# and inject/ behind fully typed signatures.
+[[tool.mypy.overrides]]
+module = ["Xlib.*"]
+ignore_missing_imports = true
