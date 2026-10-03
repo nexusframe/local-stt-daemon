@@ -315,10 +315,10 @@ def _timing_line(
 ) -> str:
     """12 §12.1 job timing line; never contains text."""
     rtf = transcript.processing_s / job.duration_s if job.duration_s > 0 else 0.0
-    if not result.ok:
-        outcome = "failed"
-    elif result.left_in_clipboard:
+    if result.left_in_clipboard:
         outcome = "clipboard"
+    elif not result.ok:
+        outcome = "failed"
     else:
         outcome = "injected"
     seq = f" seq={job.seq}" if job.seq is not None else ""

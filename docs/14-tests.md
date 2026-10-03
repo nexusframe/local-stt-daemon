@@ -8,7 +8,7 @@ Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` f
 |---|---|---|---|
 | Unit | pure logic | no external resources | — |
 | Integration: engine | `WhisperServerEngine` ↔ real `whisper-server` (`ggml-base-q5_1` for speed) | local build | `needs_whisper` |
-| Integration: X11 | hotkeys, clipboard, XTest | `xvfb-run` (`xvfb` package installed by `install.sh --dev`; no Mutter) | `needs_x11` |
+| Integration: X11 | hotkeys, clipboard, XTest | a private `Xvfb -displayfd` started by the test fixture (`tests/integration/x11_clients.py`; `xvfb` package installed by `install.sh --dev`; no Mutter). Helpers take the display name explicitly and never read `$DISPLAY`, so a test cannot type into the real session | `needs_x11` |
 | Integration: audio | device opening, resampling | real PipeWire | `needs_audio` |
 | End-to-end | complete daemon | Xvfb + `FileAudioSource` + real server | `e2e`, `needs_x11`, `needs_whisper` |
 | Manual acceptance | real GNOME session, microphone, applications | reference machine | 14.4 checklist |
