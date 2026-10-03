@@ -40,7 +40,7 @@ Coverage target: ≥ 90% of lines for `controller`, `pipeline`, `segmenter`, `te
    - non-empty text,
    - time < 30 s,
    - no connection during startup → `/health` returns 200; 503 is not required during loading (the server begins listening after loading the model). A separate HTTP stub verifies defensive 503 handling and the STARTING → READY transition,
-   - kill the server mid-job → `engine=DOWN`, queue paused; after restart the job succeeds (E7); without restart → `JobFailed` after `startup_timeout_s` (shortened in the test),
+   - kill the server mid-job → `engine=DOWN`, queue paused; after restart the job succeeds (E7); without restart → `JobFailed` after `startup_timeout_s` (shortened in the test). The pause and resume belong to the Controller, so these two run the whole daemon in `tests/e2e/` (markers `e2e`, `needs_x11`, `needs_whisper`); the kill must fall after the startup grace period, otherwise a dead server reads as STARTING (04 §4.5),
    - request without the `--request-path` prefix → 404.
 2. **`needs_x11` (Xvfb).** Warning: Xvfb does not include Mutter, so these tests **do not** detect GNOME conflicts. The 14.4 checklist covers them.
    - grab `Control_R` + XTest press/release → `PttPressed`/`PttReleased` events (release with `ControlMask` state); `Shift+Control_R` with Shift released before Ctrl → only `ContinuousToggle`; autorepeat (XTest press-release-press with the same timestamp on `F9`) → no false release (the test brackets the batch with server timestamps and retries when it crosses a millisecond, [07](07-hotkeys-x11.md) §7.3),
@@ -53,11 +53,13 @@ Coverage target: ≥ 90% of lines for `controller`, `pipeline`, `segmenter`, `te
    - `cancel` while waiting for PTT, modifiers, or clipboard saving → no paste after release; cancellation after taking clipboard ownership but before the shortcut → restore previous content without overwriting a new owner,
    - controlled cancel/XTest-start race: either no shortcut, or `injection_in_flight=true` and exactly one started operation completes with modifiers correctly released; no subsequent segment starts,
    - `type` backend: cancellation between chunks does not start the next subprocess or clipboard fallback; the current chunk may finish.
-3. **`e2e`.** Daemon with `FileAudioSource` (plays WAV in real time instead of using a microphone), Xvfb, the receiving window above, and a real server:
+3. **`e2e`.** Daemon with `FileAudioSource` (plays WAV in real time instead of using a microphone; silence after the end of the file), Xvfb, the receiving window above, and a real server:
    - IPC `ptt start` → 3 s → `ptt stop` → within 30 s the window receives text containing the expected keywords,
    - continuous mode with a recording of three sentences and pauses → three insertions in order,
    - `cancel` before insertion begins (including while waiting for the injector) → no insertions; a started operation is reported according to 08 §8.3, and the next one does not start.
-4. **No network.** `unshare -rn sh -c 'ip link set lo up && XDG_RUNTIME_DIR=$(mktemp -d) pytest -m e2e'`. In the new namespace, `lo` is disabled by default and `/run/user/1000` belongs to an unmapped uid, hence both setup steps. The E2E fixture starts `whisper-server` and Xvfb **inside** this namespace. The test must pass, confirming F1/N5.
+
+   The daemon runs in the test process (`app.Daemon` with a `capture` factory returning `FileAudioSource`, user decision 2026-10-03), `DISPLAY` set to the private Xvfb only inside the test, sounds and notifications off, and is driven through its real IPC socket.
+4. **No network.** `unshare -rn sh -c 'ip link set lo up && XDG_RUNTIME_DIR=$(mktemp -d) pytest -m e2e'`. In the new namespace, `lo` is disabled by default and `/run/user/1000` belongs to an unmapped uid, hence both setup steps. The E2E fixture starts `whisper-server` and Xvfb **inside** this namespace. The test must pass, confirming F1/N5. Verified 2026-10-03 with the v0.1 PTT E2E suite (`tests/e2e/test_ptt_e2e.py`, 5 tests).
 
 ## 14.4 Acceptance checklist (manual, on the reference machine, before every release)
 

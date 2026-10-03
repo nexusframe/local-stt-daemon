@@ -290,11 +290,21 @@ class TemporaryWhisperServer:
     ) -> None:
         self.stop()
 
-    def start(self) -> WhisperServerEngine:
+    def start(
+        self, *, port: int | None = None, request_path: str | None = None
+    ) -> WhisperServerEngine:
+        """Starts on a random free port, or on `port` in one attempt (to bring a stopped
+        server back where its clients expect it); the request path is random if not given."""
         if not self.binary.is_file():
             raise EngineError(f"{self.binary} not found (run scripts/install.sh)")
         if not self.model_path.is_file():
             raise EngineError(f"{self.model_path} not found (run: local-stt models pull ...)")
+        if port is not None:
+            engine = self._start_once(port, request_path or "/" + secrets.token_hex(16))
+            if engine is None:
+                raise EngineError(f"port {port} is taken")
+            self.engine = engine
+            return engine
         for _ in range(self._BIND_ATTEMPTS):
             engine = self._start_once(_free_port(), "/" + secrets.token_hex(16))
             if engine is not None:

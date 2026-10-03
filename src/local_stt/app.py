@@ -23,7 +23,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -31,10 +31,11 @@ from numpy.typing import NDArray
 from local_stt import __version__, doctor
 from local_stt import events as ev
 from local_stt.config import Config, ConfigError, check_model_files, config_dir, load_config
-from local_stt.interfaces import EngineHealth, SttEngine, Transcript
+from local_stt.interfaces import AudioCaptureControl, EngineHealth, SttEngine, Transcript
 from local_stt.logging_setup import resolve_level, set_level, setup_logging
 
 if TYPE_CHECKING:
+    from local_stt.audio.capture import DeviceLostCallback, FrameSink
     from local_stt.sdnotify import SdNotifier
 
 log = logging.getLogger("local_stt.controller")
@@ -223,15 +224,34 @@ SIGNAL_EVENTS: dict[int, Callable[[], ev.Event]] = {
 }
 
 
+class AudioSource(AudioCaptureControl, Protocol):
+    """The microphone as the daemon holds it: `device` is replaced on reload (04 §4.6)."""
+
+    device: str
+
+
+# (frames, audio.device, on_device_lost) -> the source; FileAudioSource in E2E tests (14 §14.3)
+CaptureFactory = Callable[["FrameSink", str, "DeviceLostCallback"], AudioSource]
+
+
+def microphone(frames: "FrameSink", device: str, on_lost: "DeviceLostCallback") -> AudioSource:
+    from local_stt.audio.capture import AudioCapture
+
+    return AudioCapture(frames, device, on_device_lost=on_lost)
+
+
 # --- the daemon ------------------------------------------------------------------------------
 
 
 class Daemon:
     """Builds the components from a passed preflight and runs them until shutdown."""
 
-    def __init__(self, pre: Preflight, notifier: "SdNotifier"):
+    def __init__(
+        self, pre: Preflight, notifier: "SdNotifier", *, capture: CaptureFactory = microphone
+    ):
         self._pre = pre
         self.notifier = notifier
+        self._capture_factory = capture
         self._stack = contextlib.ExitStack()
         self._controller_thread: threading.Thread | None = None
         self.exit_code = EXIT_FAILURE  # replaced by the controller's own exit code
@@ -241,7 +261,6 @@ class Daemon:
 
     def build(self) -> None:
         """Constructs components; X11 connections are opened here (raises StartupError)."""
-        from local_stt.audio.capture import AudioCapture
         from local_stt.audio.consumer import AudioConsumer
         from local_stt.controller import Controller
         from local_stt.engine_monitor import EngineMonitor
@@ -256,10 +275,10 @@ class Daemon:
 
         pre, config, post = self._pre, self._pre.config, self._post
         self.frames: queue.SimpleQueue[Any] = queue.SimpleQueue()
-        self.capture = AudioCapture(
+        self.capture = self._capture_factory(
             self.frames,
             config.audio.device,
-            on_device_lost=lambda rid, cid, why: post(ev.AudioError(rid, cid, "device_lost", why)),
+            lambda rid, cid, why: post(ev.AudioError(rid, cid, "device_lost", why)),
         )
         self.consumer = AudioConsumer(self.frames, post, max_duration_s=config.ptt.max_duration_s)
         self.engine = SwitchableEngine(make_engine(config, pre.request_path))

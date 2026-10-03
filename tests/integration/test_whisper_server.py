@@ -1,6 +1,8 @@
 """WhisperServerEngine against a real whisper-server (docs/14-tests.md §14.3, needs_whisper)."""
 
 import http.client
+import os
+import signal
 import time
 from pathlib import Path
 
@@ -82,3 +84,33 @@ def test_retries_when_port_is_taken(monkeypatch: pytest.MonkeyPatch) -> None:
             assert engine.health() is EngineHealth.READY
         finally:
             srv.stop()
+
+
+def test_restart_on_the_same_port_and_path_after_kill() -> None:
+    if not ws.DEFAULT_BINARY.is_file() or not MODEL_PATH.is_file():
+        pytest.skip("whisper-server binary or base-q5_1 model not installed")
+    srv = ws.TemporaryWhisperServer(MODEL_PATH, model=MODEL)
+    engine = srv.start()
+    try:
+        assert srv.pid is not None
+        os.kill(srv.pid, signal.SIGKILL)
+        srv.stop()  # reaps the killed process
+        assert engine.health() is EngineHealth.DOWN
+        again = srv.start(port=engine.port, request_path=engine.request_path)
+        assert (again.port, again.request_path) == (engine.port, engine.request_path)
+        assert engine.health() is EngineHealth.READY  # the old client reaches it again
+    finally:
+        srv.stop()
+
+
+def test_fixed_port_taken_is_an_error() -> None:
+    if not ws.DEFAULT_BINARY.is_file() or not MODEL_PATH.is_file():
+        pytest.skip("whisper-server binary or base-q5_1 model not installed")
+    import socket
+
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        srv = ws.TemporaryWhisperServer(MODEL_PATH, model=MODEL)
+        with pytest.raises(ws.EngineError, match="is taken"):
+            srv.start(port=occupied.getsockname()[1])
