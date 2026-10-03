@@ -12,11 +12,10 @@ import numpy as np
 import pytest
 
 from local_stt import cli, doctor, ipc, models
-from local_stt.audio.capture import AudioOpenError
 from local_stt.config import Config, HotkeysConfig
 from local_stt.doctor import Probes, Result, Status
 from local_stt.hotkeys.x11 import HotkeyConnectError
-from local_stt.interfaces import EngineHealth, HotkeyProblem
+from local_stt.interfaces import AudioOpenError, EngineHealth, HotkeyProblem
 from local_stt.stt import whisper_server as ws
 
 REPO = Path(__file__).resolve().parents[2]

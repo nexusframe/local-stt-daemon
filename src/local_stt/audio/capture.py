@@ -20,6 +20,8 @@ import numpy as np
 import sounddevice as sd
 from numpy.typing import NDArray
 
+from local_stt.interfaces import AudioOpenError  # the type the Controller catches (E10)
+
 SAMPLE_RATE = 16000
 FRAME_SAMPLES = 512
 DEFAULT_DEVICE = "default"
@@ -42,10 +44,6 @@ class DeviceInfo:
     name: str  # PipeWire node name, the value for audio.device
     description: str
     is_default: bool
-
-
-class AudioOpenError(Exception):
-    pass
 
 
 class FrameSink(Protocol):
@@ -91,7 +89,7 @@ class AudioCapture:
         """Unique PipeWire node name of the current stream, used to verify routing."""
         return f"local-stt.capture.{os.getpid()}.{self._capture_id}"
 
-    def open(self, *, recording_id: int, capture_id: int) -> None:
+    def open(self, recording_id: int, capture_id: int) -> None:
         if self._stream is not None:
             raise AudioOpenError("stream is already open")
         self._recording_id = recording_id

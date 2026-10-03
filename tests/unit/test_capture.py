@@ -2,6 +2,7 @@ import queue
 
 import pytest
 
+from local_stt import interfaces
 from local_stt.audio import capture as capture_mod
 from local_stt.audio.capture import AudioCapture, parse_sources, resolve_routed_source
 
@@ -65,3 +66,16 @@ def test_device_loss_reported_only_without_close(monkeypatch: pytest.MonkeyPatch
     assert isinstance(stream, FakeStream)
     stream.finished()  # type: ignore[operator]  # the device disappeared
     assert lost == [(2, 5, "microphone stream stopped")]
+
+
+def test_open_matches_the_controller_interface(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Controller calls open(rid, cid) positionally and catches interfaces.AudioOpenError."""
+
+    def failing(**kwargs: object) -> None:
+        raise capture_mod.sd.PortAudioError("Device unavailable")
+
+    monkeypatch.setattr(capture_mod, "_pcm_name", lambda: "pipewire")
+    monkeypatch.setattr(capture_mod.sd, "InputStream", failing)
+    capture = AudioCapture(queue.SimpleQueue())
+    with pytest.raises(interfaces.AudioOpenError, match="Device unavailable"):
+        capture.open(3, 4)

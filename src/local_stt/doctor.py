@@ -495,7 +495,8 @@ def measure_microphone(device: str) -> tuple[NDArray[np.float32], str | None]:
 def check_microphone(
     device: str, measure: Callable[[str], tuple[NDArray[np.float32], str | None]]
 ) -> Result:
-    from local_stt.audio.capture import DEFAULT_DEVICE, AudioOpenError
+    from local_stt.audio.capture import DEFAULT_DEVICE
+    from local_stt.interfaces import AudioOpenError
 
     try:
         samples, routed = measure(device)
