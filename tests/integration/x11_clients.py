@@ -218,10 +218,16 @@ class Receiver(_Client):
     """A focused text field: on Ctrl+V (or Ctrl+Shift+V) it pastes CLIPBOARD UTF8_STRING."""
 
     def __init__(
-        self, name: str, wm_class: tuple[str, str] = ("gedit", "Gedit"), *, pastes: bool = True
+        self,
+        name: str,
+        wm_class: tuple[str, str] = ("gedit", "Gedit"),
+        *,
+        pastes: bool = True,
+        paste_via: "Paster | None" = None,
     ):
         super().__init__(name, mapped=True, event_mask=X.KeyPressMask)
         self.pastes = pastes
+        self.paste_via = paste_via  # another connection reads the clipboard (Chromium/CEF)
         self.received: list[str] = []
         self.keys: list[KeyEvent] = []
         self.pasted = threading.Event()
@@ -238,12 +244,36 @@ class Receiver(_Client):
         if ev.type == X.KeyPress:
             keysym = keysym_name(self.d.keycode_to_keysym(ev.detail, 0))
             self.keys.append(KeyEvent(keysym, ev.state))
-            if self.pastes and keysym == "v" and ev.state & X.ControlMask:
+            if self.paste_via is not None and keysym == "v" and ev.state & X.ControlMask:
+                self.paste_via.paste()
+            elif self.pastes and keysym == "v" and ev.state & X.ControlMask:
                 self.window.convert_selection(
                     self.atom("CLIPBOARD"), self.atom("UTF8_STRING"), self.atom("PASTE"), ev.time
                 )
                 self.d.flush()
         elif ev.type == X.SelectionNotify and ev.property != X.NONE:
+            p = self.window.get_full_property(self.atom("PASTE"), X.AnyPropertyType)
+            self.received.append(bytes(p.value).decode("utf-8"))
+            self.pasted.set()
+
+
+class Paster(_Client):
+    """A second X connection that reads CLIPBOARD UTF8_STRING when asked."""
+
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.received: list[str] = []
+        self.pasted = threading.Event()
+        self.start()
+
+    def paste(self) -> None:
+        self.window.convert_selection(
+            self.atom("CLIPBOARD"), self.atom("UTF8_STRING"), self.atom("PASTE"), X.CurrentTime
+        )
+        self.d.flush()
+
+    def handle(self, ev: Any) -> None:
+        if ev.type == X.SelectionNotify and ev.property != X.NONE:
             p = self.window.get_full_property(self.atom("PASTE"), X.AnyPropertyType)
             self.received.append(bytes(p.value).decode("utf-8"))
             self.pasted.set()
@@ -271,6 +301,39 @@ class ClipboardManager(_Client):
             self.d.flush()
         elif ev.type == X.SelectionNotify and ev.property != X.NONE:
             self.fetched.set()
+
+
+class TargetsWatcher(_Client):
+    """Fetches TARGETS after every owner change (XFixes) and remembers them, like GTK4
+    apps that enable “Paste” from cached formats (Nautilus)."""
+
+    def __init__(self, name: str):
+        super().__init__(name)
+        self.snapshots: list[list[str]] = []
+        self.d.xfixes_query_version()
+        self.d.xfixes_select_selection_input(
+            self.window, self.atom("CLIPBOARD"), xfixes.XFixesSetSelectionOwnerNotifyMask
+        )
+        self.d.sync()
+        self.start()
+
+    def handle(self, ev: Any) -> None:
+        if type(ev).__name__ == "SetSelectionOwnerNotify":
+            self.window.convert_selection(
+                self.atom("CLIPBOARD"), self.atom("TARGETS"), self.atom("WATCH"), X.CurrentTime
+            )
+            self.d.flush()
+        elif ev.type == X.SelectionNotify and ev.property != X.NONE:
+            p = self.window.get_full_property(self.atom("WATCH"), X.AnyPropertyType)
+            self.snapshots.append([self.d.get_atom_name(a) for a in p.value])
+
+    def wait_for(self, target: str) -> bool:
+        deadline = time.monotonic() + WAIT_S
+        while time.monotonic() < deadline:
+            if self.snapshots and target in self.snapshots[-1]:
+                return True
+            time.sleep(0.02)
+        return False
 
 
 def set_desktop_active(name: str) -> None:

@@ -25,8 +25,10 @@ from .x11_clients import (
     WAIT_S,
     ClipboardManager,
     Content,
+    Paster,
     Receiver,
     SelectionOwner,
+    TargetsWatcher,
     clipboard_owner,
     held_key,
     read_selection,
@@ -79,6 +81,28 @@ class Env:
             c.close()
         self.session.close()
         self.owner.stop()
+
+
+# Every helper client runs in this test process, so real XRes PIDs would all match: the
+# PID rule of 08 §8.5 step 7 is tested with assigned PIDs (client base → PID) instead.
+PIDS: dict[int, int] = {}
+REAL_CLIENT_PID = ClipboardOwner._client_pid
+
+
+@pytest.fixture(autouse=True)
+def assigned_pids(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[int, int]]:
+    PIDS.clear()
+
+    def client_pid(self: ClipboardOwner, resource: int) -> int | None:
+        return PIDS.get(resource & ~self._d.display.info.resource_id_mask)
+
+    monkeypatch.setattr(ClipboardOwner, "_client_pid", client_pid)
+    yield PIDS
+
+
+def base(client: Any) -> int:
+    mask: int = client.d.display.info.resource_id_mask
+    return int(client.window.id) & ~mask
 
 
 @pytest.fixture
@@ -141,6 +165,45 @@ def test_shortcut_override(env: Env) -> None:
     assert result.left_in_clipboard
 
 
+NAUTILUS_LIKE = {
+    "x-special/gnome-copied-files": Content(
+        "x-special/gnome-copied-files", 8, b"copy\nfile:///tmp/a.txt"
+    ),
+    "text/uri-list": Content("text/uri-list", 8, b"file:///tmp/a.txt\r\n"),
+}
+
+
+def test_restore_announces_the_restored_targets(env: Env) -> None:
+    """Acceptance 14.4 item 16: Nautilus caches TARGETS on owner changes; a silent swap
+    left it believing the clipboard held our text."""
+    env.client(SelectionOwner(env.name, NAUTILUS_LIKE))
+    watcher = env.client(TargetsWatcher(env.name))
+    receiver = env.client(Receiver(env.name))
+    assert env.inject().ok
+    assert receiver.received == [TEXT]
+    assert watcher.wait_for("x-special/gnome-copied-files"), watcher.snapshots
+    assert_restored(env.name, NAUTILUS_LIKE)
+
+
+def test_restore_announcement_never_takes_back_a_newer_clipboard(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.client(SelectionOwner(env.name, NAUTILUS_LIKE))
+    env.client(Receiver(env.name))
+    newer = {"UTF8_STRING": Content("UTF8_STRING", 8, b"nowszy")}
+
+    def restore_after_takeover(self: ClipboardOwner, saved: Any) -> bool:
+        # Someone copies between our ownership check and the announcement.
+        env.client(SelectionOwner(env.name, newer))
+        monkeypatch.setattr(ClipboardOwner, "_owner_is_us", lambda self: True)
+        return restore(self, saved)
+
+    restore = ClipboardOwner._restore
+    monkeypatch.setattr(ClipboardOwner, "_restore", restore_after_takeover)
+    assert env.inject().ok
+    assert_restored(env.name, newer)
+
+
 # --- confirmation (08 §8.5 step 7) ----------------------------------------------------------
 
 
@@ -172,6 +235,49 @@ def test_paste_confirmed_with_clipboard_manager_present(env: Env) -> None:
     receiver = env.client(Receiver(env.name))
     assert env.inject().ok
     assert receiver.received == [TEXT]
+
+
+def test_paste_by_another_connection_of_the_same_process_confirms(env: Env) -> None:
+    paster = env.client(Paster(env.name))
+    receiver = env.client(Receiver(env.name, paste_via=paster))
+    PIDS.update({base(receiver): 100, base(paster): 100})
+    result = env.inject()
+    assert result.ok and not result.left_in_clipboard
+    assert paster.received == [TEXT]
+
+
+def test_paste_by_a_child_process_confirms(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code's CLI in VS Code's terminal: code → node service → zsh → claude."""
+    paster = env.client(Paster(env.name))
+    receiver = env.client(Receiver(env.name, paste_via=paster))
+    PIDS.update({base(receiver): 100, base(paster): 400})
+    parents = {400: 300, 300: 200, 200: 100, 100: 50}
+    monkeypatch.setattr(clipboard_mod, "parent_pid", parents.get)
+    assert env.inject().ok
+
+
+@pytest.mark.parametrize("pid", [50, 999, None])  # parent (gnome-shell), unrelated, unknown
+def test_paste_by_another_process_is_not_confirmed(
+    env: Env, monkeypatch: pytest.MonkeyPatch, pid: int | None
+) -> None:
+    paster = env.client(Paster(env.name))
+    receiver = env.client(Receiver(env.name, paste_via=paster))
+    PIDS[base(receiver)] = 100
+    if pid is not None:
+        PIDS[base(paster)] = pid
+    monkeypatch.setattr(clipboard_mod, "parent_pid", {100: 50, 999: 1}.get)
+    result = env.inject(paste_timeout_ms=300)
+    assert paster.pasted.wait(WAIT_S)  # the text did arrive, but from another process
+    assert result.left_in_clipboard and not result.ok
+
+
+def test_client_pid_from_xres(env: Env) -> None:
+    import os
+
+    receiver = env.client(Receiver(env.name))
+    assert env.owner._xres
+    assert REAL_CLIENT_PID(env.owner, receiver.window.id) == os.getpid()
+    assert REAL_CLIENT_PID(env.owner, 0x7F00000) is None  # no such client
 
 
 # --- target window (08 §8.5 step 2) ---------------------------------------------------------

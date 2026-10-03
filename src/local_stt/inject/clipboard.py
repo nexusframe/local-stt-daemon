@@ -17,10 +17,12 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, TypeVar
 
 from Xlib import X, Xatom, display
 from Xlib.error import ConnectionClosedError, XError
+from Xlib.ext import res
 from Xlib.protocol import event as xevent
 from Xlib.protocol import request
 
@@ -87,6 +89,42 @@ class _Waiter:
     client_base: int
     mask: int
     future: "Future[bool]" = field(default_factory=Future)
+    pid: int | None = None  # of the active window's client (XRes), set on the owner thread
+
+
+_MAX_ANCESTRY = 64
+
+
+def _describe_pid(pid: int | None) -> str:
+    """`pid <n> <comm>` for DEBUG diagnostics."""
+    if pid is None:
+        return "pid ?"
+    try:
+        comm = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip()
+    except OSError:
+        comm = "?"
+    return f"pid {pid} {comm}"
+
+
+def parent_pid(pid: int) -> int | None:
+    """Parent PID from /proc/<pid>/stat (field 4, after the parenthesized comm)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def is_same_or_descendant(pid: int, ancestor: int) -> bool:
+    """True if `pid` is `ancestor` or one of its descendants (08 §8.5 step 7)."""
+    current: int | None = pid
+    for _ in range(_MAX_ANCESTRY):
+        if current is None or current <= 1:
+            return False
+        if current == ancestor:
+            return True
+        current = parent_pid(current)
+    return False
 
 
 class ClipboardOwner:
@@ -119,7 +157,8 @@ class ClipboardOwner:
         self._waiters: list[_Waiter] = []
         # Text requests since our last takeover: a paste may be handled before the waiter
         # command is, so a new waiter also checks this history.
-        self._requests: list[tuple[float, int]] = []
+        self._requests: list[tuple[float, int, int | None]] = []  # (time, requestor, pid)
+        self._xres = bool(self._d.has_extension("X-Resource"))
         self._commands: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
         self._wake_r, self._wake_w = os.pipe()
         self._stop = False
@@ -257,6 +296,9 @@ class ClipboardOwner:
                     ok = True
             except XError as e:
                 log.debug("clipboard request from 0x%x failed: %s", ev.requestor.id, e)
+        # Looked up before SelectionNotify, while the requestor is still waiting for it: Claude
+        # Code's CLI closes its connection right after the reply (v0.1 acceptance).
+        pid = self._client_pid(ev.requestor.id) if self._serving_text else None
         notify = xevent.SelectionNotify(
             time=ev.time,
             requestor=ev.requestor,
@@ -269,28 +311,63 @@ class ClipboardOwner:
             self._d.flush()
         except XError as e:
             log.debug("SelectionNotify to 0x%x failed: %s", ev.requestor.id, e)
+        if self._serving_text and log.isEnabledFor(logging.DEBUG):
+            # Diagnoses unconfirmed pastes (08 §8.5 step 7); never the content.
+            log.debug(
+                "clipboard request while serving text: target=%s requestor=0x%x (%s) %s",
+                self._d.get_atom_name(ev.target),
+                ev.requestor.id,
+                _describe_pid(pid),
+                "served" if ok else "refused",
+            )
         if ok and self._serving_text and ev.target in self._text_targets:
-            self._record_request(ev.requestor.id)
+            self._record_request(ev.requestor.id, pid)
 
-    def _record_request(self, requestor: int) -> None:
+    def _record_request(self, requestor: int, pid: int | None) -> None:
         now = self._clock()
-        self._requests.append((now, requestor))
+        self._requests.append((now, requestor, pid))
         for waiter in list(self._waiters):
-            if self._confirms(waiter, now, requestor):
+            if self._confirms(waiter, now, requestor, pid):
                 self._waiters.remove(waiter)
                 waiter.future.set_result(True)
 
     def _add_waiter(self, waiter: _Waiter) -> None:
-        if any(self._confirms(waiter, at, requestor) for at, requestor in self._requests):
+        waiter.pid = self._client_pid(waiter.client_base)
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "waiting for a paste request from client 0x%x (%s)",
+                waiter.client_base,
+                _describe_pid(waiter.pid),
+            )
+        if any(self._confirms(waiter, *request) for request in self._requests):
             waiter.future.set_result(True)
         else:
             self._waiters.append(waiter)
 
+    def _client_pid(self, resource: int) -> int | None:
+        """PID of the local X client owning `resource` (XRes), None if unknown."""
+        if not self._xres:
+            return None
+        try:
+            reply = self._d.res_query_client_ids(
+                [{"client": resource, "mask": res.LocalClientPIDMask}]
+            )
+        except XError:  # the client is gone
+            return None
+        return next((int(c.value[0]) for c in reply.ids if c.value), None)
+
     @staticmethod
-    def _confirms(waiter: _Waiter, at: float, requestor: int) -> bool:
-        # After t_sent (clipboard managers fetch right after the owner changes) and from the
-        # X client of the active window: resource IDs carry the client base.
-        return at > waiter.t_sent and requestor & ~waiter.mask == waiter.client_base
+    def _confirms(waiter: _Waiter, at: float, requestor: int, pid: int | None) -> bool:
+        """08 §8.5 step 7: a text request after t_sent (clipboard managers fetch right after
+        the owner changes) from the active window's X client (resource IDs carry the client
+        base), or from its process or a descendant: Chromium/CEF apps read the clipboard on
+        another connection (ONLYOFFICE), Claude Code's CLI in VS Code's terminal reads it
+        itself (v0.1 acceptance, 2026-10-04)."""
+        if at <= waiter.t_sent:
+            return False
+        if requestor & ~waiter.mask == waiter.client_base:
+            return True
+        return pid is not None and waiter.pid is not None and is_same_or_descendant(pid, waiter.pid)
 
     def _server_time(self) -> int:
         """A server timestamp from a zero-length property append (ICCCM §2.1)."""
@@ -403,6 +480,12 @@ class ClipboardOwner:
             self._user_saved = None
         else:
             self._served = dict(saved)
+            # Announce the new content (XFixes SetSelectionOwnerNotify): GTK4 apps cache the
+            # targets per owner change, and Nautilus kept seeing our text after a silent swap
+            # (v0.1 acceptance, 2026-10-04). The original timestamp makes the server ignore
+            # the request if another client has taken the clipboard since (X11 protocol).
+            self._window.set_selection_owner(self._clipboard, self._owned_since)
+            self._d.flush()
         return True
 
 
