@@ -23,6 +23,7 @@ job=17 src=continuous seq=4 audio=3.84s queued=0.21s stt=1.62s rtf=0.42 text=2ms
 
 Field meanings:
 
+- `audio` — duration of the audio sent to the engine: for PTT with `vad.enabled`, after VAD trimming (05 §5.3); `rtf` uses it too,
 - `queued` — time spent waiting in the queue,
 - `inject` — full injector call duration: waiting for modifiers/PTT, writing the clipboard, sending keys, confirmation, and restoration (including the additional 150 ms).
 - `total` — time from releasing PTT or the end of VAD silence detection until the injector returns, including audio finalization and the entire `inject`. For PTT, this is metric N2. The measurement start is not reset after draining the frame queue; the sum of stage fields may not include all finalization overhead.

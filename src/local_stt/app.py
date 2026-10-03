@@ -262,6 +262,7 @@ class Daemon:
     def build(self) -> None:
         """Constructs components; X11 connections are opened here (raises StartupError)."""
         from local_stt.audio.consumer import AudioConsumer
+        from local_stt.audio.vad import VadTrimmer
         from local_stt.controller import Controller
         from local_stt.engine_monitor import EngineMonitor
         from local_stt.feedback import DesktopFeedback
@@ -286,6 +287,7 @@ class Daemon:
             self.engine.health, post, startup_timeout_s=config.stt.startup_timeout_s
         )
         self.processor = DefaultTextProcessor(config)
+        self.trimmer = VadTrimmer(config)  # the pipeline's own ONNX session (05 §5.3)
         try:
             self.hotkeys = X11GrabHotkeys()
             self.owner = ClipboardOwner(on_connection_lost=lambda: post(ev.X11ConnectionLost()))
@@ -301,6 +303,7 @@ class Daemon:
             post=post,
             report_connection_failure=self.monitor.report_connection_failure,
             config=config,
+            trimmer=self.trimmer,
         )
         self.feedback = DesktopFeedback(config.feedback)
         self.ipc = IpcServer(socket_path(), post)
@@ -324,7 +327,7 @@ class Daemon:
                 lambda c: self.monitor.set_startup_timeout(c.stt.startup_timeout_s),
             ],
             # the injectors wait for the PTT key's release, so they follow hotkeys.* too
-            at_idle=[set_audio_device, self.injector.update_config],
+            at_idle=[set_audio_device, self.trimmer.update, self.injector.update_config],
             hotkeys=self.hotkeys,
             switch_server=switch_server,
         )

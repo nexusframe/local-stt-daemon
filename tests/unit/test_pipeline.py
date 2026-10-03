@@ -115,8 +115,22 @@ class RecordingInjector:
         return InjectResult(True, "clipboard", len(text), "gedit", False, None)
 
 
+class FakeTrimmer:
+    """VadTrimmer stand-in: keeps the middle half, or reports no speech."""
+
+    def __init__(self, active: bool = True) -> None:
+        self.active = active
+        self.speech = True
+        self.calls: list[int] = []
+
+    def trim(self, audio: NDArray[np.float32]) -> NDArray[np.float32] | None:
+        self.calls.append(len(audio))
+        quarter = len(audio) // 4
+        return audio[quarter : len(audio) - quarter] if self.speech else None
+
+
 class Harness:
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, trimmer: FakeTrimmer | None = None) -> None:
         self.events: queue.SimpleQueue[Event] = queue.SimpleQueue()
         self.engine = FakeEngine()
         self.processor = FakeProcessor()
@@ -129,6 +143,7 @@ class Harness:
             post=self.events.put,
             report_connection_failure=self._report,
             config=config,
+            trimmer=trimmer,
         )
         self._next_id = 0
 
@@ -288,6 +303,67 @@ def test_silent_ptt_job_is_discarded_without_request(h: Harness) -> None:
     job = h.submit(silence(2))
     assert h.outcome() == JobDiscarded(job.id, "ptt", "no_speech")
     assert h.engine.calls == []
+
+
+# --- VAD trimming (05 §5.3, task 2.6 brought forward) -------------------------------------
+
+
+@pytest.fixture
+def trimmed() -> Iterator[tuple[Harness, FakeTrimmer]]:
+    trimmer = FakeTrimmer()
+    harness = Harness(config(), trimmer)
+    harness.worker.start()
+    yield harness, trimmer
+    harness.worker.stop()
+
+
+def test_vad_trimmed_audio_is_transcribed(
+    trimmed: tuple[Harness, FakeTrimmer], caplog: pytest.LogCaptureFixture
+) -> None:
+    h, trimmer = trimmed
+    caplog.set_level(logging.INFO, logger="local_stt.timings")
+    h.submit(speech(4.0))
+    assert isinstance(h.outcome(), JobFinished)
+    assert trimmer.calls == [4 * SR]
+    assert [c["samples"] for c in h.engine.calls] == [2 * SR]
+    assert "audio=2.00s" in caplog.text  # the duration actually transcribed
+
+
+def test_vad_without_speech_discards_without_request(trimmed: tuple[Harness, FakeTrimmer]) -> None:
+    h, trimmer = trimmed
+    trimmer.speech = False
+    job = h.submit(speech(2.0))  # loud enough for the RMS gate: VAD decides alone
+    assert h.outcome() == JobDiscarded(job.id, "ptt", "no_speech")
+    assert h.engine.calls == []
+
+
+def test_inactive_vad_falls_back_to_the_rms_gate() -> None:
+    trimmer = FakeTrimmer(active=False)
+    h = Harness(config(), trimmer)
+    h.worker.start()
+    try:
+        silent = h.submit(silence(2))
+        assert h.outcome() == JobDiscarded(silent.id, "ptt", "no_speech")
+        h.submit(speech(2.0))
+        assert isinstance(h.outcome(), JobFinished)
+    finally:
+        h.worker.stop()
+    assert trimmer.calls == []
+    assert [c["samples"] for c in h.engine.calls] == [2 * SR]  # not trimmed
+
+
+def test_requeued_job_is_trimmed_again_from_the_original(
+    trimmed: tuple[Harness, FakeTrimmer],
+) -> None:
+    h, trimmer = trimmed
+    h.engine.outcomes = [EngineConnectionError("refused")]
+    h.submit(speech(4.0))
+    assert isinstance(h.next_event(), JobStarted)
+    assert h.no_more_events()
+    h.worker.resume()
+    assert isinstance(h.outcome(), JobFinished)
+    assert trimmer.calls == [4 * SR, 4 * SR]
+    assert [c["samples"] for c in h.engine.calls] == [2 * SR, 2 * SR]
 
 
 def test_empty_processor_result_is_filtered(h: Harness) -> None:

@@ -72,8 +72,8 @@ strict = true
 files = ["src/local_stt"]
 exclude = ["^src/local_stt/bench/"]
 
-# python-xlib and sounddevice ship no type information; their use is confined to
-# hotkeys/x11.py, inject/ and audio/capture.py behind fully typed signatures.
+# python-xlib, sounddevice and onnxruntime ship no type information; their use is confined to
+# hotkeys/x11.py, inject/, audio/capture.py and audio/vad.py behind fully typed signatures.
 [[tool.mypy.overrides]]
-module = ["Xlib.*", "sounddevice"]
+module = ["Xlib.*", "sounddevice", "onnxruntime"]
 ignore_missing_imports = true

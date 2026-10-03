@@ -1,11 +1,12 @@
 """Job queue and the single PipelineWorker thread (docs/04-state-machine.md §4.4-4.5).
 
-v0.1 scope: PTT RMS gate, generations, one retry for 5xx/timeouts, pause on DOWN with a
-startup_timeout_s limit, timing line. Per-session prompt context and VAD trimming arrive in
-v0.2 (tasks 2.4, 2.6).
+v0.1 scope: PTT speech gate (VAD trimming when `vad.enabled`, brought forward from task 2.6;
+otherwise the RMS gate), generations, one retry for 5xx/timeouts, pause on DOWN with a
+startup_timeout_s limit, timing line. Per-session prompt context arrives in v0.2 (task 2.4).
 """
 
 import collections
+import dataclasses
 import functools
 import logging
 import math
@@ -13,7 +14,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -62,6 +63,15 @@ def has_speech_rms(audio: NDArray[np.float32], threshold_dbfs: float) -> bool:
     return False
 
 
+class SpeechTrimmer(Protocol):
+    """`audio.vad.VadTrimmer`: the PTT gate when `active` (05 §5.3)."""
+
+    @property
+    def active(self) -> bool: ...
+
+    def trim(self, audio: NDArray[np.float32]) -> NDArray[np.float32] | None: ...
+
+
 @dataclass
 class _Queued:
     job: Job
@@ -84,6 +94,7 @@ class PipelineWorker:
         post: Callable[[Event], None],
         report_connection_failure: Callable[[], None],
         config: Config,
+        trimmer: SpeechTrimmer | None = None,
         clock: Callable[[], float] = time.monotonic,
     ):
         self._engine = engine
@@ -92,6 +103,7 @@ class PipelineWorker:
         self._post = post
         self._report_connection_failure = report_connection_failure
         self._config = config
+        self._trimmer = trimmer
         self._clock = clock
         # One lock for the queue, generation and the injector's operation marker (08 §8.3).
         self._lock = threading.Lock()
@@ -206,8 +218,11 @@ class PipelineWorker:
         try:
             self._post(JobStarted(job.id))
             config = self._config
-            if job.source == "ptt" and not has_speech_rms(job.audio, config.ptt.silence_rms_dbfs):
-                return self._discard(job, "no_speech")
+            if job.source == "ptt":
+                speech = self._ptt_speech(job.audio, config)
+                if speech is None:
+                    return self._discard(job, "no_speech")
+                job = dataclasses.replace(job, audio=speech)  # requeue keeps the original
             if self._stale(job):
                 return self._discard(job, "cancelled")
 
@@ -253,6 +268,12 @@ class PipelineWorker:
         finally:
             with self._lock:
                 self._current = None
+
+    def _ptt_speech(self, audio: NDArray[np.float32], config: Config) -> NDArray[np.float32] | None:
+        """05 §5.3: the speech to transcribe, or None for no speech."""
+        if self._trimmer is not None and self._trimmer.active:
+            return self._trimmer.trim(audio)
+        return audio if has_speech_rms(audio, config.ptt.silence_rms_dbfs) else None
 
     def _transcribe(self, job: Job, token: CancellationToken, config: Config) -> Transcript:
         """One retry after 1 s for HTTP 5xx and timeouts; raises `_CancelledBeforeRetry` if

@@ -75,10 +75,12 @@ The “keep the stream open for another N seconds after PTT” option was reject
 
 **The silence gate and trimming run in PipelineWorker**, not in the Controller ([04](04-state-machine.md) §4.4):
 
-- **v0.1 — RMS gate.** We calculate RMS in 100 ms windows. If no window exceeds `ptt.silence_rms_dbfs` (default -50 dBFS), the job ends with `JobDiscarded(no_speech)` and the `cancel` sound. We calculate over windows rather than the whole recording because 1 s of speech in 20 s of silence must not be lost. The reason for the gate: Whisper hallucinates on silence alone (for example, “Napisy stworzone przez społeczność Amara.org”).
-- **v0.2 — VAD trimming** (when `vad.enabled`). The recording passes through Silero offline:
+- **RMS gate** (v0.1 design; since the 2026-10-03 acceptance used only with `vad.enabled = false` or when the VAD model fails to load). We calculate RMS in 100 ms windows. If no window exceeds `ptt.silence_rms_dbfs` (default -50 dBFS), the job ends with `JobDiscarded(no_speech)` and the `cancel` sound. We calculate over windows rather than the whole recording because 1 s of speech in 20 s of silence must not be lost. The reason for the gate: Whisper hallucinates on silence alone (for example, “Napisy stworzone przez społeczność Amara.org”).
+- **VAD trimming** (when `vad.enabled`, the default). Planned for v0.2 (task 2.6), brought forward to v0.1 together with task 2.1 (user decision 2026-10-03): on the reference machine room noise measured −40 dBFS (−29 dBFS with an air purifier) in every 100 ms window, so the −50 dBFS RMS gate never rejected silence and Whisper inserted hallucinations, and a key click reached −8 dBFS ([acceptance](acceptance-v0.1.md#finding-the-rms-gate-cannot-reject-silence)). No fixed RMS threshold separates that noise from speech. The recording passes through Silero offline (`VadTrimmer`, `audio/vad.py`):
   - no frame with `p ≥ start_threshold` → `JobDiscarded(no_speech)`,
-  - otherwise, trim leading and trailing silence while preserving `vad.speech_pad_ms`.
+  - otherwise, keep the frames from the first one with `p ≥ start_threshold` to the last one with `p ≥ end_threshold` (the Segmenter's hysteresis, 5.5) plus `vad.speech_pad_ms` on each side, clipped to the recording. The last partial frame is zero-padded for the model.
+
+  The Silero session is reset before each recording. `vad.*` and `stt.models_dir` reload at IDLE (04 §4.6); the model is reloaded only when its path changes. If it cannot be loaded, the error is logged and the RMS gate is used.
 
   This shortens the audio and therefore also lets more recordings fit the fixed `stt.audio_ctx` window (06 §6.7). The worker uses **its own instance** of `SileroVad`, because an ONNX session is stateful and cannot be shared with audio-consumer.
 

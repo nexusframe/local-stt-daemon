@@ -56,12 +56,12 @@ Preliminary-design requirements covered by v0.1:
 
 | # | Task | Document |
 |---|---|---|
-| 2.1 | `audio/vad.py` (Silero ONNX) | 05 §5.4 |
+| 2.1 | `audio/vad.py` (Silero ONNX) — **done in v0.1** (brought forward during the v0.1 acceptance, 2026-10-03) | 05 §5.4 |
 | 2.2 | `audio/segmenter.py` with hysteresis and cutting at `max_segment_s` | 05 §5.5 |
 | 2.3 | Controller: CONTINUOUS state, toggle with flush, cancel, backlog, reconnect, `EngineStateChanged(DOWN)`, deferred reload | 04 §4.3, §4.6 |
 | 2.4 | Pipeline: per-session prompt context; TextProcessor step 5 (continuity) | 04 §4.4, 08 §8.2 |
 | 2.5 | Hotkey continuous toggle; CLI `toggle`, `status --watch` (IPC `subscribe`) | 07, 10 |
-| 2.6 | VAD trimming for PTT (replaces the RMS gate when `vad.enabled`) | 05 §5.3 |
+| 2.6 | VAD trimming for PTT (replaces the RMS gate when `vad.enabled`) — **done in v0.1** together with 2.1: the RMS gate could not reject room noise ([acceptance](acceptance-v0.1.md#finding-the-rms-gate-cannot-reject-silence)) | 05 §5.3 |
 | 2.7 | Audio error handling: reconnect ×3, overflow, digital silence | 05 §5.6 |
 | 2.8 | systemd `STATUS=`; `all` notifications | 11, 10 |
 | 2.9 | `bench --soak` (using v0.1's `FileAudioSource`) | 13 §13.4 stage 3 |
