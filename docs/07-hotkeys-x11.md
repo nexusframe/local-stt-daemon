@@ -36,7 +36,7 @@ modifier:= "Ctrl" | "Shift" | "Alt" | "Super"
 keysym  := X11 keysym name, e.g. Control_R, Pause, F9, space, Menu
 ```
 
-`"Control_R"` means the key without additional modifiers. `"Shift+Control_R"` means the key with Shift held down. Modifier names map to the `ShiftMask`, `ControlMask`, `Mod1Mask`, and `Mod4Mask` masks. Immediately before grabbing, we check the mapping with `get_modifier_mapping()`.
+`"Control_R"` means the key without additional modifiers. `"Shift+Control_R"` means the key with Shift held down. Modifier names map to the `ShiftMask`, `ControlMask`, `Mod1Mask`, and `Mod4Mask` masks. Immediately before grabbing, we check the mapping with `get_modifier_mapping()`. *Implementation (task 1.9):* the mask of each name is taken from the row that contains its keys (`Alt_L`/`Alt_R`/`Meta_L`, `Super_L`/`Super_R`; on Xvfb and the reference machine: `mod1`, `mod4`); a name with no row makes that shortcut a problem (`modifier Alt is not mapped`). The parser and the rules below live in `hotkeys/spec.py`; `config.py` calls them.
 
 Validation at startup and on `reload`:
 
@@ -64,7 +64,7 @@ display.sync()
 ```
 
 - `numlock_mask` and `scrolllock_mask` are determined dynamically by finding which row of `get_modifier_mapping()` contains the `Num_Lock` or `Scroll_Lock` keycode. On the reference machine, NumLock is `mod2`.
-- Each grab is sent with `onerror=CatchError(BadAccess)`, followed by `display.sync()`. If `BadAccess` occurs, we log ERROR `hotkey <X> is already grabbed by another client`. The daemon continues without that shortcut, `status` shows `hotkeys: degraded`, and `doctor` reports the cause.
+- Each grab is sent with `onerror=CatchError(BadAccess)`, followed by `display.sync()`. If `BadAccess` occurs, we log ERROR `hotkey <X> is already grabbed by another client`. The daemon continues without that shortcut, `status` shows `hotkeys: degraded`, and `doctor` reports the cause. If only some lock variants fail, all variants of that shortcut are ungrabbed (it would otherwise work only in some NumLock/CapsLock states). A keysym without a keycode (§7.2) is reported the same way, `<keysym> has no keycode in the current keyboard map`; this also applies to `ptt_cancel_key`, which is never grabbed.
 - We do not use `AnyModifier`, as it would conflict with every existing grab for that keycode.
 - **KeyPress** matching: `event.detail == hk.keycode and (event.state & ~lock_masks & RELEVANT) == hk.mods`, where `RELEVANT = Shift|Control|Mod1|Mod4`.
 - **KeyRelease** matching — **by keycode only**. The state in a release event includes the modifier of the key being released (for example, `ControlMask` when releasing `Control_R`; empirically verified as `state=20`), so comparing masks would never match. A PTT release counts only when `ptt_down == True`. Release of the continuous key is ignored, so the shared `Control_R` keycode in both shortcuts is unambiguous: its meaning is determined by the KeyPress that set `ptt_down`.
@@ -82,6 +82,8 @@ while running:
         check_lost_release_if_due()           # at most once every 250 ms
 ```
 
+**Draining must repeat until Xlib's own queue is empty** (task 1.9, tested). Any round trip on the listener's connection — `refresh_keyboard_mapping()` after `MappingNotify`, `query_keymap()`, grabs — can read subsequent key events from the socket into python-xlib's internal queue; `select()` on the socket then does not wake for them. Found on Xvfb: XTest's first use of a keyboard sends `MappingNotify`, and in 10–20 % of runs the following `KeyPress`/`KeyRelease` stayed queued with the loop asleep. On GNOME, `MappingNotify` also arrives on a layout switch. The implementation drains in a loop (`while pending_events(): batch…; process(batch)`) and re-checks `pending_events()` after the keymap check before calling `select()`. `MappingNotify` only refreshes Xlib's keyboard mapping; grabs are not redone (that the configured keycodes survive a layout switch is a hypothesis, not tested on GNOME).
+
 The wake-up pipe lets the Controller interrupt the loop on `reload` and `shutdown`. Grabbing and ungrabbing are always performed by the listener thread: the Controller submits them through the command queue and wakes the loop through the pipe.
 
 ### Press/release semantics
@@ -97,7 +99,7 @@ The wake-up pipe lets the Controller interrupt the loop on `reload` and `shutdow
 | `KeyRelease` continuous | — | nothing |
 
 - **Cancel key without a separate grab.** While PTT is held, an *active* keyboard grab is in effect and all key events reach the daemon. `Esc` therefore arrives without being grabbed globally, so applications do not lose `Esc`. Other keys pressed during this time are ignored.
-- **Auto-repeat.** python-xlib 0.33 does not provide the XKB extension (`XkbSetDetectableAutoRepeat` is unavailable), so we use the classic “same keycode and timestamp” test. It does not matter for the default `Control_R`, but is required if the user configures, for example, `Pause` or `F9`.
+- **Auto-repeat.** python-xlib 0.33 does not provide the XKB extension (`XkbSetDetectableAutoRepeat` is unavailable), so we use the classic “same keycode and timestamp” test. It does not matter for the default `Control_R`, but is required if the user configures, for example, `Pause` or `F9`. Tested on Xvfb: XTest events sent in one batch carry the same server timestamp while they fit within one server millisecond (in 1000 press-release-press-release batches, 6 crossed a millisecond boundary). When a `KeyRelease` is the last event read, the listener reads once more before deciding. The test (`tests/integration/test_hotkeys_x11.py`) brackets the batch with server timestamps and retries when they differ.
 - **Protection against a lost release.** A release can be lost, for example when switching VTs or locking the screen. When `ptt_down == True`, the loop wakes every 250 ms (`select` timeout) and calls `display.query_keymap()`. If the PTT keycode bit is clear, it emits a synthetic `PttReleased` and logs a WARNING.
 
 ## 7.4 Loss of the X connection
@@ -120,7 +122,7 @@ class HotkeyBackend(Protocol):
     def stop(self) -> None: ...
 ```
 
-The only implementation in v0.1–v0.3 is `X11GrabHotkeys`.
+The only implementation in v0.1–v0.3 is `X11GrabHotkeys`. `HotkeyProblem(hotkey, value, reason)` (in `interfaces.py`) is what `status`/`doctor` show for `hotkeys: degraded`. `apply()` replaces all grabs, runs in the listener thread and blocks the caller until done; after the listener ends (X connection lost, `stop()`) `apply()` and `stop()` return immediately without X operations. The press/release table is implemented by `KeyRouter` (no X calls; unit-tested); `X11GrabHotkeys` adds the grabs, the auto-repeat filter and the lost-release check.
 
 ## 7.7 Control without grabs (alternative and additional shortcuts)
 

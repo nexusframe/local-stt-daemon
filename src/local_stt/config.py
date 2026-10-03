@@ -15,12 +15,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, get_type_hints
 
-from Xlib import XK
-
+from local_stt.hotkeys.spec import parse_hotkey, validate_hotkeys
 from local_stt.stt.whisper_server import FULL_AUDIO_CTX, HOST
-
-# python-xlib loads only the latin1 and miscellany keysyms by default; ISO_Level3_Shift is in xkb.
-XK.load_keysym_group("xkb")
 
 CONFIG_ENV_VAR = "LOCAL_STT_CONFIG"
 DEFAULT_MODELS_DIR = Path.home() / ".local/share/local-stt/models"
@@ -43,16 +39,6 @@ _MANAGED_FLAGS = frozenset(
 _CONTENT_LOGGING_FLAGS = frozenset({"-pr", "--print-realtime", "-debug", "--debug-mode"})
 # systemd splits an unbraced $VAR on whitespace and interprets quotes and backslashes.
 _UNSAFE_ARG = re.compile(r"[\s\"'\\$]")
-
-HOTKEY_MODIFIERS = frozenset({"Ctrl", "Shift", "Alt", "Super"})
-# Keysyms rejected in daemon shortcuts (07 §7.2): AltGr/Mutter conflicts, keys used by XTest paste.
-_CONFLICTING_KEYSYMS = {
-    "ISO_Level3_Shift": "conflicts with AltGr",
-    "Alt_R": "conflicts with AltGr",
-    "Super_L": "conflicts with Mutter (overview key)",
-    "Control_L": "used by XTest when pasting (08 §8.5)",
-    "Shift_L": "used by XTest when pasting (08 §8.5)",
-}
 
 
 @dataclass(frozen=True)
@@ -490,7 +476,7 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
     if not vad.enabled:
         warnings.append("vad.enabled=false: continuous dictation unavailable")
 
-    _validate_hotkeys(config.hotkeys, errors)
+    errors += validate_hotkeys(config.hotkeys)
 
     for i, pattern in enumerate(config.text.hallucination_patterns):
         _check_regex(pattern, f"text.hallucination_patterns[{i}]", errors)
@@ -547,61 +533,6 @@ def _check_regex(pattern: str, key: str, errors: list[str]) -> None:
         re.compile(pattern)
     except re.error as e:
         errors.append(f"{key}: invalid regex: {e} (got {_show(pattern)})")
-
-
-# --- hotkeys (07 §7.2) -------------------------------------------------------------------
-
-
-def parse_hotkey(text: str) -> tuple[frozenset[str], str]:
-    """`(modifier "+")* keysym` → (modifiers, keysym); raises ValueError.
-
-    Checks only that the keysym name exists; whether it has a keycode in the current keyboard
-    map is checked when grabbing (hotkeys/x11.py).
-    """
-    *mods, keysym = text.split("+")
-    unknown = [m for m in mods if m not in HOTKEY_MODIFIERS]
-    if unknown:
-        raise ValueError(f"unknown modifier {unknown[0]!r} (use Ctrl, Shift, Alt, Super)")
-    if len(set(mods)) != len(mods):
-        raise ValueError("repeated modifier")
-    if not keysym or XK.string_to_keysym(keysym) == XK.NoSymbol:
-        raise ValueError(f"unknown keysym {keysym!r}")
-    return frozenset(mods), keysym
-
-
-def _validate_hotkeys(hk: HotkeysConfig, errors: list[str]) -> None:
-    parsed: dict[str, tuple[frozenset[str], str]] = {}
-    for name in ("push_to_talk", "continuous_toggle", "ptt_cancel_key"):
-        value = getattr(hk, name)
-        key = f"hotkeys.{name}"
-        try:
-            mods, keysym = parse_hotkey(value)
-        except ValueError as e:
-            errors.append(f"{key}: {e} (got {_show(value)})")
-            continue
-        if keysym in _CONFLICTING_KEYSYMS:
-            errors.append(f"{key}: {keysym} {_CONFLICTING_KEYSYMS[keysym]} (got {_show(value)})")
-            continue
-        parsed[name] = (mods, keysym)
-
-    ptt, toggle = parsed.get("push_to_talk"), parsed.get("continuous_toggle")
-    if ptt is not None and ptt == toggle:
-        errors.append(
-            f"hotkeys.continuous_toggle: must differ from push_to_talk "
-            f"(got {_show(hk.continuous_toggle)})"
-        )
-    cancel = parsed.get("ptt_cancel_key")
-    if cancel is not None:
-        if cancel[0]:
-            errors.append(
-                f"hotkeys.ptt_cancel_key: must be a single keysym without modifiers "
-                f"(got {_show(hk.ptt_cancel_key)})"
-            )
-        elif cancel[1] in {k for _, k in (s for s in (ptt, toggle) if s is not None)}:
-            errors.append(
-                f"hotkeys.ptt_cancel_key: must differ from the push_to_talk and "
-                f"continuous_toggle keysyms (got {_show(hk.ptt_cancel_key)})"
-            )
 
 
 # --- files the daemon needs --------------------------------------------------------------

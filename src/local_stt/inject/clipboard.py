@@ -25,7 +25,8 @@ from Xlib.protocol import event as xevent
 from Xlib.protocol import request
 
 from local_stt.cancellation import CancellationToken, Cancelled
-from local_stt.config import Config, parse_hotkey
+from local_stt.config import Config
+from local_stt.hotkeys.spec import parse_hotkey
 from local_stt.inject.x11util import (
     POLL_S,
     TargetWindow,

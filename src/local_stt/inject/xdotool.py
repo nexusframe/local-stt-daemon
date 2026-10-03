@@ -11,7 +11,8 @@ from collections.abc import Callable
 from typing import Any
 
 from local_stt.cancellation import CancellationToken, Cancelled
-from local_stt.config import Config, parse_hotkey
+from local_stt.config import Config
+from local_stt.hotkeys.spec import parse_hotkey
 from local_stt.inject.clipboard import ClipboardOwner
 from local_stt.inject.x11util import X11InjectError, X11Session
 from local_stt.interfaces import InjectResult

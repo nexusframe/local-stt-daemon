@@ -43,7 +43,7 @@ Coverage target: ≥ 90% of lines for `controller`, `pipeline`, `segmenter`, `te
    - kill the server mid-job → `engine=DOWN`, queue paused; after restart the job succeeds (E7); without restart → `JobFailed` after `startup_timeout_s` (shortened in the test),
    - request without the `--request-path` prefix → 404.
 2. **`needs_x11` (Xvfb).** Warning: Xvfb does not include Mutter, so these tests **do not** detect GNOME conflicts. The 14.4 checklist covers them.
-   - grab `Control_R` + XTest press/release → `PttPressed`/`PttReleased` events (release with `ControlMask` state); `Shift+Control_R` with Shift released before Ctrl → only `ContinuousToggle`; autorepeat (XTest press-release-press with the same timestamp on `F9`) → no false release,
+   - grab `Control_R` + XTest press/release → `PttPressed`/`PttReleased` events (release with `ControlMask` state); `Shift+Control_R` with Shift released before Ctrl → only `ContinuousToggle`; autorepeat (XTest press-release-press with the same timestamp on `F9`) → no false release (the test brackets the batch with server timestamps and retries when it crosses a millisecond, [07](07-hotkeys-x11.md) §7.3),
    - `BadAccess`: a second client grabs the same key → `hotkeys: degraded`,
    - `ClipboardOwner`: another client sets text + `text/html` → save → take ownership → receiving client (test window that sends `ConvertSelection` on `Ctrl+V`) receives `UTF8_STRING` with Polish characters → restore all targets byte-for-byte (including type and format); target > 256 KiB or INCR response → `type` backend,
    - a “clipboard manager” (third client fetching content immediately after the owner changes) **does not** confirm the paste,

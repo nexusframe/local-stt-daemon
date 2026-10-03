@@ -3,6 +3,7 @@
 Components depend on each other only through these types; `app.py` wires implementations.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -12,7 +13,8 @@ from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     from local_stt.cancellation import CancellationToken
-    from local_stt.config import Config
+    from local_stt.config import Config, HotkeysConfig
+    from local_stt.events import Event
 
 
 class EngineHealth(Enum):
@@ -214,3 +216,25 @@ class ReloadTarget(Protocol):
 
     def use_server(self, config: "Config") -> None:
         """Points the STT client and EngineMonitor at the restarted server."""
+
+
+# --- hotkeys (07 §7.6) ---------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HotkeyProblem:
+    """A configured hotkey that is not active; reported as `hotkeys: degraded` (10 §10.4)."""
+
+    hotkey: str  # config key: "push_to_talk" | "continuous_toggle" | "ptt_cancel_key"
+    value: str  # e.g. "Shift+Control_R"
+    reason: str
+
+
+class HotkeyBackend(Protocol):
+    def start(self, sink: "Callable[[Event], None]") -> None: ...
+
+    def apply(self, config: "HotkeysConfig") -> list[HotkeyProblem]:
+        """Replaces all grabs; blocks until applied. Called at startup and on reload at IDLE."""
+
+    def stop(self) -> None:
+        """Ungrabs (if the X connection is alive) and ends the listener thread."""
