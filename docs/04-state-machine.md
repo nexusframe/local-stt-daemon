@@ -188,6 +188,8 @@ Transitions:
 - `503 loading model` → `STARTING`,
 - connection error → `STARTING` if less than `stt.startup_timeout_s` has elapsed since daemon startup (or a requested server restart); otherwise `DOWN`.
 
+PipelineWorker reports a connection failure through `EngineMonitor.report_connection_failure()` instead of posting `DOWN` itself: the monitor posts `DOWN` and switches to 500 ms polling. Otherwise the monitor, still in READY, would see no change when the server returns and the Controller would stay DOWN. A requested restart (4.6) calls `EngineMonitor.restarted()`, which starts a new startup grace period and polls immediately; a health result started before a restart or reported failure is discarded. Verified 2026-10-03 against a real `whisper-server`: READY 0.1 s after start; after the server was stopped, DOWN at the next READY poll (≤ 10 s).
+
 **Paused queue.** After `EngineStateChanged(DOWN)` (including one reported by the worker), the pipeline has `paused = true`. Jobs wait while systemd restarts the server (`RestartSec=2` + model loading), which takes several seconds.
 
 - `READY` → `paused = false`; the worker resumes with the job that failed.
