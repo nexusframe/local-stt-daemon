@@ -8,7 +8,7 @@
 > - `audio_ctx = 1000` costs at most 0.8 pp WER (`small-q8_0` 23.3 → 24.1 %) and saves 30–37 % latency; for `small-q5_1` it slightly improved WER (22.7 → 22.3 %). Both stay inside the 1 pp limit of 13 §13.5.
 > - Request history matters (06 §6.7): `small-q8_0` @1000 scores 23.8 % WER on the medium group alone (stage 1) and 24.2 % when the same files are interleaved with longer full-window recordings (stage 2). Stage 2 is the production-like order.
 > - `medium-q5_0` is eliminated even with `audio_ctx = 1000` (p50 15.1 s), and `large-v3-turbo-q5_0` is far slower still (whisper-bench encoder 39.3 s vs 20.6 s for medium).
-> - **Untested gap:** `small` (f16) was eliminated in the first run on full-window latency (p50 6.72 s, WER 22.0 %) and was not re-measured with `audio_ctx = 1000`. The 30–37 % saving seen elsewhere would put it near 4.4–4.7 s p50, so it could be a candidate with better WER than the provisional default at the cost of ~660 MB RSS. Measure it before the defaults are fixed on corpus A.
+> - `small` (f16), measured separately on 2026-09-18 (run `2026-09-18T18-53-52Z-small-f16`, same runner and order): @1000 WER 23.7 %, p90 4.56 s, peak RSS 658 MB; full window WER 22.7 %, p90 6.67 s. @1000 meets N2 but is within 1 pp of the default (−0.4 pp), so the 13 §13.5 tie-break (lower peak RAM) keeps `small-q8_0` (442 MB) as the default. Cross-run comparison: WER is deterministic, latency on this machine repeats within a few %.
 > - Not measured here: 8 threads (≤ 3 % gain in the first run), the `short` group (missing from the public corpus), and `total` with injection (v0.1, 13 §13.5).
 
 # Benchmark results
