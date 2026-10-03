@@ -74,6 +74,8 @@ Decision: `injection.backend = "auto"`:
 - **type** for windows in `injection.type_window_classes` (default: `["xterm", "URxvt"]`, because xterm does not paste CLIPBOARD with Ctrl+Shift+V),
 - **type** also when the current clipboard contents **cannot be saved and restored faithfully** (8.5, step 3), to avoid destroying them.
 
+Explicit backends (implementation decision, task 1.8c): `backend = "clipboard"` always pastes; an unrestorable clipboard is pasted without restoration (WARNING), as `auto` does without xdotool (8.7). `backend = "type"` always types; without xdotool it falls back to the clipboard with a WARNING.
+
 ## 8.5 `ClipboardPasteInjector` — algorithm
 
 Components:
@@ -118,10 +120,11 @@ PRIMARY (middle-button selection) is **not modified**.
 xdotool type --delay 12 -- "<text>"
 ```
 
-- Run via `subprocess.run([...], timeout=max(5, len(text)*0.05))`. Pass the text as an argument (not through the shell), so escaping is not an issue.
+- Run via `subprocess.run([...], timeout=max(5, len(text)*0.05))` per chunk; with `type_delay_ms` above 25 ms the per-character allowance grows to `2 × type_delay_ms` so slower typing does not hit the timeout. Pass the text as an argument (not through the shell), so escaping is not an issue.
 - First perform the same step 1 (wait for modifiers to be released). **No `--clearmodifiers`.**
 - Split text into chunks of 200 characters. Immediately before each subprocess invocation, atomically check the token and mark the operation as started (8.3). Cancellation blocks subsequent chunks; the current one may finish. Cancellation does not trigger the clipboard fallback, even after partial text entry.
-- `\n` → xdotool sends `Return`.
+- `\n` → `Return`. **Tested 2026-10-03 (Xvfb, xdotool 3.20160805):** xdotool sends `Linefeed` (keysym `0xff0a`) for `\n` and `Return` (`0xff0d`) for `\r`, so the injector replaces `\n` with `\r` before calling it. (That GTK text fields ignore `Linefeed` is an untested assumption.)
+- xdotool failure (exit code, timeout, binary missing) — E13: the part not yet typed, starting with the failed chunk, is left in the clipboard (`left_in_clipboard = true`, the previous clipboard content is sacrificed); `chars` counts the characters already typed. Cancellation never triggers this fallback.
 - `injection.type_delay_ms` (12) is configurable. Values < 8 ms cause Chrome to lose characters.
 
 ## 8.7 Edge cases

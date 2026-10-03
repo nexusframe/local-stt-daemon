@@ -438,7 +438,7 @@ class ClipboardPasteInjector:
     ):
         self._owner = owner
         self._x = session
-        self._type_fallback = type_fallback
+        self.type_fallback = type_fallback
         self.update_config(config)
 
     def update_config(self, config: Config) -> None:
@@ -499,7 +499,7 @@ class ClipboardPasteInjector:
             return self._cancelled(text, target)
         restorable = save.kind != "unrestorable"
         if not restorable:
-            if self._type_fallback:
+            if self.type_fallback:
                 raise ClipboardUnrestorable(save.reason)
             log.warning("clipboard cannot be restored (%s): pasting without restoring", save.reason)
 

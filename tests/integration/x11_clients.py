@@ -195,11 +195,13 @@ def clipboard_owner(name: str) -> int:
         c.close()
 
 
-_NAMES = ("Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Super_L", "v", "y")
+_NAMES = ("Control_L", "Control_R", "Shift_L", "Shift_R", "Alt_L", "Super_L", "Return", "Linefeed")
 
 
 def keysym_name(keysym: int) -> str:
-    """Name for the keysyms the tests look at (XK.keysym_to_string covers printables only)."""
+    """Printable ASCII as the character, a few named keys, otherwise hex."""
+    if 0x20 <= keysym <= 0x7E:
+        return chr(keysym)
     for name in _NAMES:
         if XK.string_to_keysym(name) == keysym:
             return name
