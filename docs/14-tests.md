@@ -69,7 +69,7 @@ v0.1:
 - [ ] After logging out and back in, both services run; `status` = IDLE within 60 s.
 - [ ] PTT in gedit/GNOME Text Editor, Firefox (text field), Chrome/Electron (for example, VS Code), GNOME Terminal (Ctrl+Shift+V), and LibreOffice Writer—Polish characters are correct.
 - [ ] PTT with text in the clipboard → after pasting, the clipboard contains the old text.
-- [ ] PTT with a screenshot in the clipboard (image) → the `type` backend is used and the image remains in the clipboard.
+- [ ] PTT with a screenshot in the clipboard (image) → the image remains in the clipboard. A small image within the restore limits is restored through the clipboard; a full-screen screenshot exceeds them (or arrives via INCR) and the `type` backend is used (v0.1 acceptance 2026-10-04: a 37 KB area screenshot went through the clipboard).
 - [ ] PTT on the unfocused desktop → “text left in clipboard” notification.
 - [ ] Tap right Ctrl (< 300 ms press→release) → no transcription or stop sound; a start sound is acceptable if the first frame arrived.
 - [ ] PTT + Esc → current recording cancelled; earlier jobs remain. `local-stt cancel` during a new PTT also cancels earlier pending jobs.
