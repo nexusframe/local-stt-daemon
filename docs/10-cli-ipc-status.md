@@ -128,6 +128,18 @@ Checks and prints `OK` / `WARN` / `FAIL` with a suggested fix:
 | `notify-send` | missing | WARN: no notifications |
 | CPU governor / power | `powersave` on battery | INFO: latency impact |
 
+*Implementation (task 1.12, `doctor.py`; user decisions 2026-10-03).* `local-stt doctor [--config P]` prints one line per check as it finishes, in table order, with `OK`, `INFO`, `WARN`, `FAIL` or `SKIP`, and ends with `N FAIL, N WARN, N OK`. Exit code `1` if any check FAILs, otherwise `0` (WARN and INFO do not fail). With an invalid config, the config line is FAIL with every validator message, and the checks that need it (STT/VAD model, `/health`, port, hotkeys, microphone) are `SKIP config invalid`; the others still run. Details:
+
+- The expected whisper.cpp tag is `WHISPER_TAG` in `stt/whisper_server.py`; a unit test keeps it equal to `DEFAULT_WHISPER_TAG` in `install.sh` (the installed venv need not have the repo).
+- STT/VAD model: missing file or SHA256 mismatch against `models.sha256` is FAIL; a model file without a pinned checksum is OK with a note. The VAD model is SKIP with `vad.enabled = false`. `local_stt.models` is imported only inside this check (12 §12.2).
+- `secret` must also contain 32 lowercase hex characters.
+- `/health` is SKIP while `local-stt-whisper` is not active. A server still loading the model (HTTP 503) is polled until `stt.startup_timeout_s` has passed since the unit became active (`ActiveEnterTimestampMonotonic`); a refused connection or other HTTP status (e.g. a wrong request path) is FAIL.
+- Port: nothing listening is OK; any listener on `stt.port` whose address is not loopback (`0.0.0.0`, `[::]`, `*`) is FAIL.
+- Hotkeys: a running daemon's `degraded` is FAIL with its problem list; `disabled` is INFO; an IPC error other than “not running” is FAIL. **GNOME shortcuts do not cause `BadAccess`** (tested on the reference machine: a core grab of `Super+space` succeeds although `switch-input-source = ['<Super>space', …]`), so the GNOME lookup runs for every grabbed shortcut, not only on FAIL: `gsettings list-recursively` plus custom keybindings (their relocatable schema is not listed there), GTK accelerators (`<Primary>`/`<Control>` → `Ctrl`, `<Mod1>` → `Alt`, `<Mod4>` → `Super`) compared with the hotkey's modifiers and keysym (case-insensitive). A match makes an otherwise OK result WARN “GNOME may take the keys”. Which client then receives the key was not established (an ad-hoc XTest test received no events even for an unbound key, so it was inconclusive).
+- Microphone: 1 s through `AudioCapture`; FAIL when it cannot be opened or delivers no frames; WARN below -60 dBFS (with the echo-cancel note from [05](05-audio-and-vad.md) §5.7) or when a configured `audio.device` is not the source actually used.
+- Power: on battery = a `Battery` supply that is `Discharging`, or `Mains`/`USB` supplies (excluding `scope = Device`) that exist and are all offline; no supplies = AC.
+- `session_type()` (loginctl, `XDG_SESSION_TYPE` fallback) is also meant for the daemon's startup check (task 1.13).
+
 ## 10.6 User feedback
 
 ### Sounds (`feedback.sounds`)

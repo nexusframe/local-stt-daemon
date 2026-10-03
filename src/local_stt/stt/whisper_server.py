@@ -27,6 +27,9 @@ ENGINE_NAME = "whisper.cpp"
 DATA_DIR = Path.home() / ".local/share/local-stt"
 DEFAULT_BINARY = DATA_DIR / "bin/whisper-server"
 DEFAULT_SECRET_FILE = Path.home() / ".config/local-stt/secret"
+# Tag install.sh builds (DEFAULT_WHISPER_TAG there; a unit test keeps them equal). `doctor`
+# compares it with bin/.whisper-tag, since whisper-server has no --version flag (06 §6.2).
+WHISPER_TAG = "v1.9.4"
 
 _ERROR_BODY_LIMIT = 200
 

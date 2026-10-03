@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("cancel", help="cancel the recording and pending jobs")
     commands.add_parser("reload", help="reload the config file")
     commands.add_parser("devices", help="list PipeWire microphones for audio.device")
+    _add_config_option(commands.add_parser("doctor", help="environment diagnostics"))
 
     models = commands.add_parser("models", help="list, download and verify models")
     models_commands = models.add_subparsers(dest="models_command", metavar="ACTION", required=True)
@@ -358,6 +359,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_daemon_command(args)
     if args.command == "devices":
         return _run_devices()
+    if args.command == "doctor":
+        from local_stt.doctor import cmd_doctor
+
+        return cmd_doctor(args.config)
     if args.command == "models":
         return _run_models(args)
     if args.command == "transcribe":
