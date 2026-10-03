@@ -4,7 +4,7 @@
 
 - Mechanism: the standard library `logging` module. Output goes to stderr and, under systemd, to journald.
 - Levels: `INFO` (20), `DEBUG` (10), and a custom `TRACE` (5). Level sources in precedence order: `--log-level`, `LOCAL_STT_LOG_LEVEL`, `logging.level`.
-- Under systemd, detected through `JOURNAL_STREAM`, the format is `<PRI>logger: message`, where `PRI` is the sd-daemon priority (`<3>` error, `<4>` warning, `<6>` info, `<7>` debug/trace). journald adds the timestamp, and `journalctl -p warning` filters correctly. Outside systemd, the format is `2026-09-17 10:21:03.412 INFO  logger: message`.
+- Under systemd, detected through `JOURNAL_STREAM`, the format is `<PRI>logger: message`, where `PRI` is the sd-daemon priority (`<3>` error, `<4>` warning, `<6>` info, `<7>` debug/trace). journald adds the timestamp, and `journalctl -p warning` filters correctly. journald reads the prefix per line, so every line of a multi-line record (a traceback) carries it. systemd mode applies only when stderr is the stream named in `JOURNAL_STREAM` (`dev:inode`), not merely when the variable is set. Verified 2026-10-03 in a transient `systemd-run --user` unit: priorities 6/4/7/3, and all traceback lines at 3. Outside systemd, the format is `2026-09-17 10:21:03.412 INFO  logger: message`.
 - Logger names: `local_stt.controller`, `.audio`, `.vad`, `.stt`, `.text`, `.inject`, `.hotkeys`, `.ipc`.
 
 ### What is logged at each level
