@@ -12,11 +12,13 @@ import dataclasses
 import logging
 import queue
 import time
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal
 
+from local_stt import __version__
 from local_stt import events as ev
 from local_stt.config import Config, ConfigError
 from local_stt.interfaces import (
@@ -28,6 +30,7 @@ from local_stt.interfaces import (
     DaemonLifecycle,
     EngineHealth,
     Feedback,
+    HotkeyProblem,
     Job,
     PipelineControl,
     ReloadTarget,
@@ -37,6 +40,7 @@ log = logging.getLogger("local_stt.controller")
 
 START_SOUND_MARGIN_S = 0.080  # masking continues this long after the start sound (05 §5.2)
 FAILURE_AGGREGATION_S = 10.0  # JobFailed notifications within this window are combined (04 §4.4)
+STATS_WINDOW = 10  # rtf_avg_10 / latency_avg_10_s (10 §10.4)
 
 # Reload groups (04 §4.6). Keys not listed here are applied live.
 SERVER_KEYS = frozenset(
@@ -119,6 +123,7 @@ class Controller:
         load_config: Callable[[], tuple[Config, list[str]]],
         clock: Callable[[], float] = time.monotonic,
         on_status: Callable[[str], None] | None = None,
+        hotkey_problems: Sequence[HotkeyProblem] = (),
     ):
         self.events: queue.Queue[ev.Event] = queue.Queue()
         self.config = config  # what components currently run with
@@ -152,6 +157,15 @@ class Controller:
         self._restarting: Config | None = None  # server restart requested, not yet done
         self._watch_restart = False  # E16 if the restarted server goes DOWN before READY
 
+        # status (10 §10.4)
+        self.hotkey_problems = list(hotkey_problems)  # from the startup grab, then each regrab
+        self._started_at = clock()
+        self._jobs_ok = 0
+        self._jobs_failed = 0
+        self._jobs_filtered = 0
+        self._recent: deque[tuple[float, float]] = deque(maxlen=STATS_WINDOW)  # (rtf, total)
+        self._last_job: tuple[float, float, float] | None = None  # audio_s, stt_s, finished at
+
         self._running = True
         self.exit_code: int | None = None
         self._last_status: str | None = None
@@ -172,6 +186,7 @@ class Controller:
             ev.JobDiscarded: self._on_job_discarded,
             ev.JobFailed: self._on_job_failed,
             ev.ReloadRequested: self._on_reload,
+            ev.StatusRequested: self._on_status_requested,
             ev.ServerRestartDone: self._on_server_restart_done,
             ev.ShutdownRequested: self._on_shutdown,
             ev.X11ConnectionLost: self._on_x11_lost,
@@ -218,6 +233,65 @@ class Controller:
         if self._busy_job is not None or queued > 0:
             return f"TRANSCRIBING ({queued} queued)"
         return "IDLE"
+
+    def status(self) -> dict[str, Any]:
+        """The `status --json` document (10 §10.4); never contains transcript text."""
+        snap = self.snapshot()
+        now = self._clock()
+        cfg = self.config
+        if not cfg.hotkeys.enabled:
+            hotkeys_state = "disabled"
+        else:
+            hotkeys_state = "degraded" if self.hotkey_problems else "OK"
+        recent = list(self._recent)
+        last = None
+        if self._last_job is not None:
+            audio_s, stt_s, finished_at = self._last_job
+            last = {"audio_s": audio_s, "stt_s": stt_s, "ago_s": now - finished_at}
+        return {
+            "version": __version__,
+            "state": snap.display,
+            "mode": snap.mode.value,
+            "speech": False,  # continuous mode arrives in v0.2
+            "reconnecting": False,
+            "engine": {
+                "state": snap.engine.value,
+                "name": "whisper.cpp",
+                "model": cfg.stt.model,
+                "port": cfg.stt.port,
+                "threads": cfg.stt.threads,
+            },
+            "hotkeys": {
+                "state": hotkeys_state,
+                "push_to_talk": cfg.hotkeys.push_to_talk,
+                "continuous_toggle": cfg.hotkeys.continuous_toggle,
+                "problems": [dataclasses.asdict(p) for p in self.hotkey_problems],
+            },
+            "audio": {
+                "device": cfg.audio.device,
+                "open": snap.mode is Mode.PTT_RECORDING,
+                "overflows": 0,  # counted from v0.2 (task 2.7)
+            },
+            "pipeline": {
+                "queued": snap.queued_jobs,
+                "queued_audio_s": snap.queued_audio_s,
+                "busy": snap.busy,
+                "paused": snap.paused,
+                "generation": self._pipeline.generation,
+                "last": last,
+            },
+            "stats": {
+                "jobs_ok": self._jobs_ok,
+                "jobs_failed": self._jobs_failed,
+                "jobs_filtered": self._jobs_filtered,
+                "rtf_avg_10": sum(r for r, _ in recent) / len(recent) if recent else None,
+                "latency_avg_10_s": sum(t for _, t in recent) / len(recent) if recent else None,
+            },
+            "uptime_s": now - self._started_at,
+        }
+
+    def _on_status_requested(self, event: ev.StatusRequested) -> None:
+        self._respond(event.reply, _ok(status=self.status()))
 
     def _publish_status(self) -> None:
         status = self.display_status()
@@ -443,6 +517,14 @@ class Controller:
     def _on_job_finished(self, event: ev.JobFinished) -> None:
         self._job_done(event.job_id)
         result = event.result
+        if result.ok:
+            self._jobs_ok += 1
+        else:
+            self._jobs_failed += 1
+        t = event.timings
+        if result.ok and {"audio", "stt", "total"} <= t.keys() and t["audio"] > 0:
+            self._recent.append((t["stt"] / t["audio"], t["total"]))
+            self._last_job = (t["audio"], t["stt"], self._clock())
         # The injector never notifies by itself (08 §8.5); messages never contain the text.
         if result.left_in_clipboard:
             title = (
@@ -456,11 +538,14 @@ class Controller:
 
     def _on_job_discarded(self, event: ev.JobDiscarded) -> None:
         self._job_done(event.job_id)
+        if event.reason in ("no_speech", "filtered"):
+            self._jobs_filtered += 1
         if event.reason == "no_speech" and event.source == "ptt" and self.mode is Mode.IDLE:
             self._feedback.play("cancel")
 
     def _on_job_failed(self, event: ev.JobFailed) -> None:
         self._job_done(event.job_id)
+        self._jobs_failed += 1
         log.error("job %d failed (%.1f s of audio): %s", event.job_id, event.audio_s, event.error)
         now = self._clock()
         if self._failures_since is not None and now - self._failures_since <= FAILURE_AGGREGATION_S:
@@ -534,7 +619,7 @@ class Controller:
     def _apply_pending_reload(self) -> None:
         if self._pending_idle is not None and self.mode is Mode.IDLE:
             new, self._pending_idle = self._pending_idle, None
-            self._reload_target.apply_at_idle(new)
+            self.hotkey_problems = list(self._reload_target.apply_at_idle(new))
             self.config = dataclasses.replace(
                 self.config, audio=new.audio, vad=new.vad, hotkeys=new.hotkeys
             )

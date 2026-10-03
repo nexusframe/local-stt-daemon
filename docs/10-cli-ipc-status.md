@@ -31,6 +31,8 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 - Protocol: **JSON Lines** (one request = one UTF-8 line terminated by `\n`; one response = one line).
 - Server: the `ipc-server` thread (`socketserver.ThreadingUnixStreamServer`). State-changing commands become Controller events. The response waits for their processing through a `concurrent.futures.Future` with a 5 s timeout.
 - Stale socket: at startup, if the file exists and `connect()` fails, the file is removed. If `connect()` succeeds, the daemon is already running: ERROR `another instance is running`, exit code 1.
+- Several requests may be sent over one connection; a connection that sends nothing for 60 s is closed. A connection from another uid is closed without a response.
+- Errors produced by the IPC layer itself, before the Controller sees the request (task 1.10): `bad_request` (invalid JSON or UTF-8, not an object, `ptt` without `start`/`stop`), `unknown_command`, `unsupported` (`subscribe` until v0.2), `too_long` (line > 64 KiB; the connection is then closed), `timeout` (no Controller response within 5 s). The CLI maps them, like Controller rejections, to exit code 4; `reload` with an invalid config (`{"ok": false, "errors": [...]}`) exits with code 78.
 
 ### Requests and responses
 
@@ -98,6 +100,8 @@ local-stt 0.1.0 — IDLE
 ```
 
 `state` is calculated according to the priorities in [04](04-state-machine.md) §4.7.
+
+*Implementation (task 1.10).* Fields beyond the example above: `engine.threads` (for the `(t=4)` text), `hotkeys.push_to_talk` / `hotkeys.continuous_toggle` (the shortcuts in effect) and `hotkeys.state = "disabled"` with `hotkeys.enabled = false`; each problem is `{"hotkey", "value", "reason"}` ([07](07-hotkeys-x11.md) §7.6); `pipeline.paused`; `pipeline.last = {"audio_s", "stt_s", "ago_s"}` or `null` (the text form's `last:`). Statistics are counted by the Controller since startup: `jobs_ok` = successful `JobFinished`; `jobs_failed` = `JobFailed` plus `JobFinished` with `ok = false`; `jobs_filtered` = `JobDiscarded` with `no_speech` or `filtered` (cancelled jobs are not counted); `rtf_avg_10` (`stt / audio`) and `latency_avg_10_s` (`total`) average the last 10 successful jobs and are `null` before the first. `audio.overflows` stays 0 until v0.2 (task 2.7). The text form shows no `stats` line, as in the example.
 
 `status --watch` subscribes to events and rewrites one terminal line. It can be used in a status bar (for example, the GNOME “Executor” extension or a future tray; see [15](15-implementation-plan.md)).
 

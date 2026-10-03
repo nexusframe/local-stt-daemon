@@ -16,6 +16,7 @@ from local_stt.interfaces import (
     AudioOpenError,
     CancelResult,
     EngineHealth,
+    HotkeyProblem,
     InjectResult,
     Job,
     Sound,
@@ -38,6 +39,7 @@ class World:
         self.jobs: list[Job] = []
         self.next_config: Config | Exception = Config()
         self.statuses: list[str] = []
+        self.hotkey_problems: list[HotkeyProblem] = []
 
     # AudioCaptureControl
     def open(self, recording_id: int, capture_id: int) -> None:
@@ -127,8 +129,9 @@ class Reload:
     def apply_live(self, config: Config) -> None:
         self.w.calls.append(("reload.live", config))
 
-    def apply_at_idle(self, config: Config) -> None:
+    def apply_at_idle(self, config: Config) -> list[HotkeyProblem]:
         self.w.calls.append(("reload.idle", config))
+        return self.w.hotkey_problems
 
     def restart_server(self, config: Config) -> None:
         self.w.calls.append(("reload.restart", config))
@@ -780,3 +783,121 @@ def test_reload_during_restart_waits_for_it(c: Controller, w: World) -> None:
         ("pipeline.pause",),
         ("reload.restart", second),
     ]
+
+
+# --- status --json and statistics (10 §10.4) ----------------------------------------------
+
+
+def status_of(c: Controller) -> dict[str, Any]:
+    r = reply()
+    c.handle(ev.StatusRequested(r))
+    response = r.result()
+    assert response["ok"] is True
+    status: dict[str, Any] = response["status"]
+    return status
+
+
+def test_status_document(c: Controller, w: World) -> None:
+    w.now = 160.0
+    status = status_of(c)
+    assert status == {
+        "version": status["version"],
+        "state": "IDLE",
+        "mode": "IDLE",
+        "speech": False,
+        "reconnecting": False,
+        "engine": {
+            "state": "READY",
+            "name": "whisper.cpp",
+            "model": "small-q8_0",
+            "port": 8178,
+            "threads": 4,
+        },
+        "hotkeys": {
+            "state": "OK",
+            "push_to_talk": "Control_R",
+            "continuous_toggle": "Shift+Control_R",
+            "problems": [],
+        },
+        "audio": {"device": "default", "open": False, "overflows": 0},
+        "pipeline": {
+            "queued": 0,
+            "queued_audio_s": 0,
+            "busy": False,
+            "paused": False,
+            "generation": 7,
+            "last": None,
+        },
+        "stats": {
+            "jobs_ok": 0,
+            "jobs_failed": 0,
+            "jobs_filtered": 0,
+            "rtf_avg_10": None,
+            "latency_avg_10_s": None,
+        },
+        "uptime_s": 60.0,
+    }
+    assert w.calls == []
+
+
+def test_status_while_recording(c: Controller, w: World) -> None:
+    press(c, w)
+    status = status_of(c)
+    assert (status["state"], status["mode"], status["audio"]["open"]) == (
+        "RECORDING",
+        "PTT_RECORDING",
+        True,
+    )
+
+
+def test_status_counts_jobs_and_averages_last_ten(c: Controller, w: World) -> None:
+    ok = InjectResult(True, "clipboard", 3, "x", False, None)
+    for i in range(12):
+        timings = {"audio": 2.0, "stt": 0.2 * (i + 1), "total": 1.0 + i}
+        c.handle(ev.JobFinished(i + 1, "ptt", ok, timings))
+    c.handle(ev.JobFinished(20, "ptt", InjectResult(False, "type", 0, None, False, "boom")))
+    c.handle(ev.JobFailed(21, "ptt", 1.0, "timeout"))
+    c.handle(ev.JobDiscarded(22, "ptt", "filtered"))
+    c.handle(ev.JobDiscarded(23, "ptt", "no_speech"))
+    c.handle(ev.JobDiscarded(24, "ptt", "cancelled"))
+    w.now = 130.0
+    status = status_of(c)
+    assert status["stats"] == {
+        "jobs_ok": 12,
+        "jobs_failed": 2,
+        "jobs_filtered": 2,
+        "rtf_avg_10": pytest.approx(sum(0.1 * (i + 1) for i in range(2, 12)) / 10),
+        "latency_avg_10_s": pytest.approx(sum(1.0 + i for i in range(2, 12)) / 10),
+    }
+    assert status["pipeline"]["last"] == {
+        "audio_s": 2.0,
+        "stt_s": pytest.approx(2.4),
+        "ago_s": 30.0,
+    }
+
+
+def test_status_hotkey_problems_from_startup_and_regrab(w: World) -> None:
+    problem = HotkeyProblem("push_to_talk", "Control_R", "already grabbed by another client")
+    c = Controller(
+        Config(),
+        capture=w,
+        consumer=Consumer(w),
+        pipeline=Pipeline(w),
+        feedback=w,
+        lifecycle=w,
+        reload_target=Reload(w),
+        load_config=w.load_config,
+        hotkey_problems=[problem],
+    )
+    hotkeys = status_of(c)["hotkeys"]
+    assert (hotkeys["state"], hotkeys["problems"]) == (
+        "degraded",
+        [{"hotkey": "push_to_talk", "value": "Control_R", "reason": problem.reason}],
+    )
+    w.next_config = with_changes(Config(), hotkeys={"push_to_talk": "F9"})
+    c.handle(ev.ReloadRequested())  # applied at once in IDLE; the fake regrab succeeds
+    hotkeys = status_of(c)["hotkeys"]
+    assert (hotkeys["state"], hotkeys["push_to_talk"], hotkeys["problems"]) == ("OK", "F9", [])
+    w.next_config = with_changes(Config(), hotkeys={"enabled": False})
+    c.handle(ev.ReloadRequested())
+    assert status_of(c)["hotkeys"]["state"] == "disabled"

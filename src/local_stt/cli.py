@@ -1,10 +1,11 @@
 """`local-stt` command-line entry point (subcommands: docs/10-cli-ipc-status.md §10.1)."""
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from local_stt import __version__
 
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
     from local_stt.stt.whisper_server import WhisperServerEngine
 
 EXIT_CONFIG = 78  # EX_CONFIG (10 §10.1)
+EXIT_NOT_RUNNING = 3
+EXIT_REJECTED = 4
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +28,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"local-stt {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    status = commands.add_parser("status", help="daemon status")
+    status.add_argument("--json", action="store_true", help="machine-readable status")
+    ptt = commands.add_parser("ptt", help="start/stop push-to-talk, like the hotkey")
+    ptt.add_argument("action", choices=["start", "stop"])
+    commands.add_parser("cancel", help="cancel the recording and pending jobs")
+    commands.add_parser("reload", help="reload the config file")
+    commands.add_parser("devices", help="list PipeWire microphones for audio.device")
 
     models = commands.add_parser("models", help="list, download and verify models")
     models_commands = models.add_subparsers(dest="models_command", metavar="ACTION", required=True)
@@ -218,9 +229,135 @@ def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
     )
 
 
+# --- daemon commands over IPC (10 §10.1-10.2) -------------------------------------------
+
+
+def _call(request: dict[str, Any]) -> dict[str, Any] | int:
+    """The daemon's response, or an exit code after printing the problem."""
+    from local_stt import ipc
+
+    try:
+        return ipc.call(request)
+    except ipc.DaemonNotRunning:
+        print("daemon not running", file=sys.stderr)
+        return EXIT_NOT_RUNNING
+    except ipc.IpcError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+
+def _rejected(response: dict[str, Any]) -> int:
+    print(f"rejected: {response.get('message') or response.get('error')}", file=sys.stderr)
+    return EXIT_REJECTED
+
+
+def _run_daemon_command(args: argparse.Namespace) -> int:
+    request: dict[str, Any] = {"cmd": args.command}
+    if args.command == "ptt":
+        request["action"] = args.action
+    response = _call(request)
+    if isinstance(response, int):
+        return response
+
+    if args.command == "reload" and "errors" in response:
+        for error in response["errors"]:
+            print(f"config error: {error}", file=sys.stderr)
+        print("reload rejected; the daemon keeps the current config", file=sys.stderr)
+        return EXIT_CONFIG
+    if not response.get("ok"):
+        return _rejected(response)
+    if args.command == "status":
+        status = response["status"]
+        print(json.dumps(status, indent=2) if args.json else format_status(status))
+    elif args.command == "cancel" and response.get("injection_in_flight"):
+        print("Remaining jobs cancelled; injection already in progress may finish.")
+    elif args.command == "reload":
+        print(_format_reload(response))
+    return 0
+
+
+def _format_reload(response: dict[str, Any]) -> str:
+    applied, deferred = response.get("applied", []), response.get("deferred", [])
+    if not applied and not deferred:
+        return "no changes"
+    lines = [f"applied:  {', '.join(applied) or '-'}", f"deferred: {', '.join(deferred) or '-'}"]
+    if response.get("server_restart"):
+        lines.append("whisper-server restarts with the new settings")
+    return "\n".join(lines)
+
+
+def _duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600} h {seconds % 3600 // 60} min"
+
+
+def format_status(status: dict[str, Any]) -> str:
+    """The text form of `status` (10 §10.4)."""
+    from local_stt.stt.whisper_server import HOST
+
+    engine, hotkeys = status["engine"], status["hotkeys"]
+    audio, pipeline = status["audio"], status["pipeline"]
+    lines = [f"local-stt {status['version']} — {status['state']}"]
+    lines.append(
+        f"  engine     {engine['state']:<7} {engine['name']} {engine['model']} "
+        f"@{HOST}:{engine['port']} (t={engine['threads']})"
+    )
+    if hotkeys["state"] == "disabled":
+        lines.append("  hotkeys    disabled")
+    else:
+        lines.append(
+            f"  hotkeys    {hotkeys['state']:<7} PTT={hotkeys['push_to_talk']}  "
+            f"continuous={hotkeys['continuous_toggle']}"
+        )
+        for p in hotkeys["problems"]:
+            lines.append(f"             {p['hotkey']} ({p['value']}): {p['reason']}")
+    lines.append(f"  audio      {audio['device']} ({'open' if audio['open'] else 'closed'})")
+    work = f"{pipeline['queued']} queued"
+    if pipeline["busy"]:
+        work += ", transcribing"
+    if pipeline["paused"]:
+        work += ", paused"
+    last = pipeline["last"]
+    if last is not None:
+        rtf = last["stt_s"] / last["audio_s"]
+        work += (
+            f", last: {last['audio_s']:.1f} s audio → {last['stt_s']:.1f} s "
+            f"(RTF {rtf:.2f}) {_duration(last['ago_s'])} ago"
+        )
+    lines.append(f"  pipeline   {work}")
+    lines.append(f"  uptime     {_duration(status['uptime_s'])}")
+    return "\n".join(lines)
+
+
+def _run_devices() -> int:
+    import subprocess
+
+    from local_stt.audio.capture import AudioCapture
+
+    try:
+        devices = AudioCapture.list_devices()
+    except (OSError, subprocess.CalledProcessError, ValueError) as e:
+        print(f"error: cannot list PipeWire sources (pactl): {e}", file=sys.stderr)
+        return 1
+    width = max((len(d.name) for d in devices), default=0)
+    for d in devices:
+        mark = "*" if d.is_default else " "
+        print(f"{mark} {d.name:<{width}}  {d.description}")
+    print('* = default source (audio.device = "default")')
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command in ("status", "ptt", "cancel", "reload"):
+        return _run_daemon_command(args)
+    if args.command == "devices":
+        return _run_devices()
     if args.command == "models":
         return _run_models(args)
     if args.command == "transcribe":

@@ -43,6 +43,7 @@ All sources send events to a single `controller.events` queue (`queue.Queue`). T
 | `JobStarted` / `JobFinished` / `JobDiscarded` / `JobFailed` | PipelineWorker | `job_id`, timings, reason (`no_speech`, `filtered`, `cancelled`), or error |
 | `EngineStateChanged` | EngineMonitor / PipelineWorker | `READY` / `STARTING` / `DOWN` |
 | `ReloadRequested` | IPC `reload`, `SIGHUP` | `reply` |
+| `StatusRequested` | IPC `status` | `reply`; the Controller answers with the [10](10-cli-ipc-status.md) §10.4 document composed in its own thread, so no other thread reads its state (task 1.10, user decision 2026-10-03) |
 | `ShutdownRequested` | `SIGTERM`, `SIGINT` | — |
 | `X11ConnectionLost` | HotkeyListener / ClipboardOwner | — |
 
@@ -212,7 +213,7 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
 | **server restart** ⟳ | `stt.engine`, `stt.model`, `stt.models_dir`, `stt.language`, `stt.threads`, `stt.beam_size`, `stt.port`, `stt.extra_server_args`, `stt.audio_ctx`, `stt.audio_ctx_margin` (a server only ever sees one fixed `audio_ctx` plus the full window, 06 §6.7) | see below |
 
 3. **Server restart** (⟳):
-   - the daemon generates a new `whisper-server.env` ([09](09-configuration.md) §9.4),
+   - the daemon generates a new `whisper-server.env` ([09](09-configuration.md) §9.4); *implementation (task 1.10):* the file is written when the restart actually starts (`ReloadTarget.restart_server`), not when the reload arrives, so a second reload during the wait simply wins and, until then, the env file still matches the running server; a write failure (e.g. unreadable `secret`) is reported as `ServerRestartDone(1)` → E16,
    - waits until `mode == IDLE` and the queue is empty (or `engine == DOWN`, in which case a restart is needed anyway),
    - pauses the pipeline and runs `systemctl --user restart local-stt-whisper.service` in a helper thread (the Controller does not block), which reports `ServerRestartDone`,
    - switches the client to the new `port`, sets `engine = STARTING`, and resumes the pipeline after `READY`; exit code ≠ 0 or no `READY` within `startup_timeout_s` → error E16 ([12](12-logging-privacy-errors.md)).

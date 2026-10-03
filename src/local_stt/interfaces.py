@@ -208,7 +208,8 @@ class ReloadTarget(Protocol):
 
     def apply_live(self, config: "Config") -> None: ...
 
-    def apply_at_idle(self, config: "Config") -> None: ...
+    def apply_at_idle(self, config: "Config") -> list["HotkeyProblem"]:
+        """Applies audio/vad/hotkeys settings; returns the hotkeys that are not active."""
 
     def restart_server(self, config: "Config") -> None:
         """Writes whisper-server.env and restarts the unit in a helper thread, which posts

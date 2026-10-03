@@ -116,6 +116,13 @@ class ReloadRequested:
 
 
 @dataclass(frozen=True)
+class StatusRequested:
+    """IPC `status` (10 §10.4): the controller composes the status in its own thread."""
+
+    reply: Reply = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
 class ShutdownRequested:
     pass
 
@@ -142,6 +149,7 @@ Event = (
     | JobFailed
     | EngineStateChanged
     | ReloadRequested
+    | StatusRequested
     | ShutdownRequested
     | X11ConnectionLost
 )

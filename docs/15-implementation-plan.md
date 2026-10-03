@@ -34,7 +34,7 @@ The sequence follows the preliminary design principle: **first establish whether
 | 1.7 | `text/filters.py`, `text/processor.py` (without step 5—continuous-mode continuity) | 08 §8.2, 06 §6.8 |
 | 1.8 | `audio/consumer.py`; `inject/x11util.py`, `inject/clipboard.py`, `inject/xdotool.py`, `inject/auto.py` | 05, 08 |
 | 1.9 | `hotkeys/spec.py`, `hotkeys/x11.py` (PTT + Esc) | 07 |
-| 1.10 | `ipc.py` + CLI commands marked v0.1 in [10](10-cli-ipc-status.md) §10.1 (including grouped `reload` and server restart) | 10, 04 §4.6 |
+| 1.10 | `ipc.py` + CLI commands marked v0.1 in [10](10-cli-ipc-status.md) §10.1 (including grouped `reload` and server restart; also `devices`, which no task listed — user decision 2026-10-03; `daemon` comes with `app.py` in 1.13, `doctor` in 1.12) | 10, 04 §4.6 |
 | 1.11 | `feedback.py`—sounds according to the matrix + error notifications (`notify-send -p/-r`) | 10 §10.6 |
 | 1.12 | `doctor.py` | 10 §10.5 |
 | 1.13 | `app.py`—composition, start/stop, signals, `threading.excepthook` | 02, 12 |
