@@ -217,7 +217,9 @@ Content filtering is performed by `TextProcessor`, not the engine ([08](08-text-
    - `^\s*dzięk(i|uję) za (uwagę|obejrzenie|oglądanie)[.!]?\s*$` — **unconfirmed**, added by analogy with “Thanks for watching.” This entry matches only the entire segment so that these words are not removed from a normal utterance.
    - `^\s*(za)?subskrybuj[^.]*[.!]?\s*$` — unconfirmed, as above.
 3. reject repetitions: a segment identical to the preceding segment in the same result, or an n-gram (n ≥ 3 words) repeated ≥ 4 consecutive times (decoder loop),
-4. **continuous mode only:** reject the entire result if, after normalization, it equals the suffix of the session context passed in the prompt (the `last_text` part, not `stt.vocabulary_prompt`). In PTT, and when the context is empty, this filter does not run.
+   - **Decoder loops are collapsed, not rejected** (user decision 2026-10-03): because segments wrap at 60 characters, a loop almost always spans several segments, so detection runs on the text assembled from the segments kept by rules 1–2. The n-gram repeated ≥ 4 times in a row (case-insensitive, at word boundaries, the last copy may be followed by punctuation; n is capped at 30 words to bound regex backtracking) is replaced by its first copy, and the rest of the result is kept.
+   - Loops are checked **before** the identical-segment rule: dropping identical 60-character segments of a loop (a 20-character phrase repeated six times gives two identical segments) would leave too few copies to detect. The identical-segment rule therefore applies only when no loop was found.
+4. **continuous mode only:** reject the entire result if, after normalization, it equals the suffix of the session context passed in the prompt (the `last_text` part, not `stt.vocabulary_prompt`). In PTT, and when the context is empty, this filter does not run. Normalization here means collapsed whitespace and case-insensitive comparison; the suffix must start at a word boundary.
 
 Every rejection is logged at DEBUG as `filtered: <reason>`. Content is logged only when `logging.log_text = true` ([12](12-logging-privacy-errors.md)).
 
