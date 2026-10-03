@@ -447,7 +447,7 @@ class Controller:
         if result.left_in_clipboard:
             title = (
                 "No active field — text is in the clipboard"
-                if result.window_class is None
+                if result.no_target
                 else "Could not paste — text is in the clipboard (Ctrl+V)"
             )
             self._feedback.notify("clipboard", title)

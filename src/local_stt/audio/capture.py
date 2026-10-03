@@ -1,18 +1,20 @@
 """Microphone capture through PortAudio -> ALSA `pipewire` PCM -> PipeWire (docs/05 §5.2).
 
 Task 0.4 scope: 16 kHz mono float32 frames of 512 samples, source selection through
-PIPEWIRE_NODE, and routing verification. Not yet implemented: in-process resampling when
-16 kHz is rejected, silencing ALSA stderr messages, device-loss events (tasks 1.8, 2.7).
+PIPEWIRE_NODE, and routing verification; task 1.8: device-loss events. Not yet implemented:
+in-process resampling when 16 kHz is rejected, silencing ALSA stderr messages, reconnects
+(task 2.7).
 """
 
 import json
 import logging
 import os
-import queue
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import sounddevice as sd
@@ -46,6 +48,16 @@ class AudioOpenError(Exception):
     pass
 
 
+class FrameSink(Protocol):
+    """Where frames go: a SimpleQueue, possibly shared with consumer commands."""
+
+    def put_nowait(self, item: AudioFrame) -> None: ...
+
+
+# (recording_id, capture_id, description) of a stream that stopped without close().
+DeviceLostCallback = Callable[[int, int, str], None]
+
+
 class AudioCapture:
     """Opens the microphone on demand and pushes AudioFrame objects into a queue.
 
@@ -53,9 +65,17 @@ class AudioCapture:
     identifiers assigned at `open()`; they never change for the lifetime of a stream.
     """
 
-    def __init__(self, frames: "queue.SimpleQueue[AudioFrame]", device: str = DEFAULT_DEVICE):
+    def __init__(
+        self,
+        frames: FrameSink,
+        device: str = DEFAULT_DEVICE,
+        *,
+        on_device_lost: DeviceLostCallback | None = None,
+    ):
         self._frames = frames
         self.device = device
+        self._on_device_lost = on_device_lost
+        self._closing = threading.Event()
         self._stream: sd.InputStream | None = None
         self._recording_id = 0
         self._capture_id = 0
@@ -95,21 +115,33 @@ class AudioCapture:
                 blocksize=FRAME_SAMPLES,
                 latency="low",
                 callback=self._callback,
+                finished_callback=self._finished,
             )
             # PortAudio stream time -> time.monotonic() offset, fixed for this stream.
             self._clock_offset = time.monotonic() - stream.time
             stream.start()
         except sd.PortAudioError as e:
             raise AudioOpenError(f"cannot open microphone ({self.device}): {e}") from e
+        self._closing.clear()
         self._stream = stream
 
     def close(self) -> None:
         stream, self._stream = self._stream, None
         if stream is None:
             return
+        self._closing.set()  # a requested close is not a device loss
         # stop() waits for running callbacks, so no frame from this stream arrives afterwards.
-        stream.stop()
-        stream.close()
+        try:
+            stream.stop()
+            stream.close()
+        except sd.PortAudioError as e:  # the device is already gone
+            log.debug("closing the microphone stream: %s", e)
+
+    def _finished(self) -> None:
+        # PortAudio thread: the stream ended. Without close() the device was lost (05 §5.2).
+        if self._closing.is_set() or self._on_device_lost is None:
+            return
+        self._on_device_lost(self._recording_id, self._capture_id, "microphone stream stopped")
 
     def _callback(
         self, indata: NDArray[np.float32], frames: int, time_info: Any, status: Any

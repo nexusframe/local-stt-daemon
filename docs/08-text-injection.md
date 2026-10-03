@@ -48,6 +48,7 @@ class InjectResult:
     left_in_clipboard: bool          # text intentionally left in the clipboard
     error: str | None
     cancelled: bool = False          # cancellation; no emergency clipboard fallback
+    no_target: bool = False          # no active window (step 2 in 8.5); selects the notification
 ```
 
 Implementations (v0.1): `ClipboardPasteInjector`, `XdotoolTypeInjector`, and `AutoInjector` (selected per window). Tests use `RecordingInjector`.
@@ -84,7 +85,7 @@ Steps in `inject(text, cancel=token)`:
 
 1. **Wait for modifiers to be released.** Every 20 ms, call `query_keymap()` and check the keycode bits from `get_modifier_mapping()`, for at most `injection.modifier_wait_ms` (1000). On timeout, log WARNING `modifiers still held` and continue. Do not use `--clearmodifiers` or synthetic releases, because they leave modifiers “stuck” if the user releases a key during the operation. **Exception:** when the PTT key is held (a new recording is in progress and the active grab would intercept injected keys), wait until release or cancellation. Every wait before injection begins, including waits for clipboard responses, checks the token at least every 20 ms. After sending the shortcut, complete the confirmation and restoration protocol even if the token is cancelled. Cancellation before injection begins ends the method without sending keys.
 2. **Target window.** Read `_NET_ACTIVE_WINDOW` from the root window, then `WM_CLASS` (instance, class).
-   - Value `0` or a desktop window → **no target**: after atomically checking the token and starting the operation, place the text in the clipboard without restoring it, set `left_in_clipboard = true`, and show “No active field — text is in the clipboard”. End.
+   - Value `0` or a desktop window → **no target**: after atomically checking the token and starting the operation, place the text in the clipboard without restoring it, set `left_in_clipboard = true` and `no_target = true`, and show “No active field — text is in the clipboard”. End.
 3. **Save the clipboard.** To roll back a cancelled takeover, also remember the content immediately preceding this operation (`rollback_saved`); if we already own it, this is a copy of `served`, which may differ from historical `user_saved`.
    - **We are the owner** (serving restored user content or text from a failed paste) → `saved = user_saved` (what the user had *before* our first intervention; text from a failed paste does not overwrite `user_saved`).
    - **Another client is the owner** → `ConvertSelection(CLIPBOARD, TARGETS)` (300 ms timeout), then retrieve **every** non-meta target (`TARGETS`, `TIMESTAMP`, `MULTIPLE`, `SAVE_TARGETS`, `DELETE`). For each target, save its bytes, property type, and format (8/16/32). Limits: at most 32 targets, each ≤ 256 KiB, total ≤ 1 MiB, entire operation ≤ 500 ms.

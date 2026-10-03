@@ -98,10 +98,11 @@ class InjectResult:
     ok: bool
     backend: str  # "clipboard" | "type"
     chars: int
-    window_class: str | None  # None: no active window (text left in the clipboard)
+    window_class: str | None  # WM_CLASS of the target window, informational
     left_in_clipboard: bool  # text intentionally left in the clipboard
     error: str | None
     cancelled: bool = False  # cancellation; no emergency clipboard fallback
+    no_target: bool = False  # no active window: text placed in the clipboard (08 §8.5 step 2)
 
 
 @dataclass(frozen=True)

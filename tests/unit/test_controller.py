@@ -574,7 +574,7 @@ def test_cancel_clears_busy_job_requeued_after_connection_error(c: Controller, w
     ("result", "title"),
     [
         (
-            InjectResult(True, "clipboard", 5, None, True, None),
+            InjectResult(True, "clipboard", 5, None, True, None, no_target=True),
             "No active field — text is in the clipboard",
         ),
         (
