@@ -73,6 +73,8 @@ Combinations of (state, event) **not present** in the table:
 - events with `reply` → reject with `invalid_in_mode`,
 - events without `reply` → ignore and log DEBUG `ignored <event> in <mode>`.
 
+Until continuous mode exists (v0.2, task 2.3), `ContinuousToggle` is rejected in every mode with `invalid_in_mode` (“continuous dictation arrives in v0.2”); from the hotkey it also plays the `error` sound.
+
 Sounds are referred to by the names from [10](10-cli-ipc-status.md) §10.6 (the single source of truth for sounds).
 
 ### IDLE
@@ -214,7 +216,7 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
    - `stt.models_dir` also affects the VAD model path, which is applied like the “at IDLE” group.
 
    We do not use `POST /load`; the rationale is in [06](06-stt-engine.md) §6.5.
-4. Response: `{"ok": true, "applied": [...], "deferred": [...], "server_restart": true|false}`.
+4. Response: `{"ok": true, "applied": [...], "deferred": [...], "server_restart": true|false}`. Lists contain changed keys (`section.key`). Server keys are `applied` when the restart starts immediately and `deferred` while it waits for IDLE, an empty queue, or a restart already in progress. A restart failure is detected either from the `systemctl` exit code or from `EngineStateChanged(DOWN)` arriving before `READY`.
 
 ## 4.7 Externally visible status
 

@@ -5,10 +5,13 @@ Components depend on each other only through these types; `app.py` wires impleme
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from local_stt.config import Config
 
 
 class EngineHealth(Enum):
@@ -34,7 +37,7 @@ class Transcript:
     audio_duration_s: float
     processing_s: float  # measured on the client side
     engine: str  # "whisper.cpp"
-    model: str  # "small-q5_1"
+    model: str  # "small-q8_0"
 
 
 class SttEngine(Protocol):
@@ -53,3 +56,135 @@ class SttEngine(Protocol):
         prompt: str | None,
         timeout_s: float,
     ) -> Transcript: ...
+
+
+# --- audio, jobs and injection (02 §2.6, 08 §8.3) ----------------------------------------
+
+Sound = Literal["start", "stop", "cancel", "error"]  # 10 §10.6
+Cut = Literal["release", "max_duration", "silence", "max_length", "flush"]
+JobSource = Literal["ptt", "continuous"]
+
+
+@dataclass(frozen=True)
+class AudioClip:
+    """A finished PTT recording (05 §5.3)."""
+
+    samples: NDArray[np.float32]  # mono 16 kHz, start-sound window excluded
+    sample_rate: int  # always 16000
+    duration_s: float
+    started_at: float  # time.monotonic()
+    ended_at: float  # release/limit time, not frame-queue drain time
+
+
+@dataclass(frozen=True)
+class Job:
+    id: int
+    source: JobSource
+    audio: NDArray[np.float32]
+    ended_at: float  # end of utterance: start of the latency measurement
+    generation: int
+    session_id: int | None
+    seq: int | None
+    cut: Cut
+
+    @property
+    def duration_s(self) -> float:
+        return len(self.audio) / 16000
+
+
+@dataclass(frozen=True)
+class InjectResult:
+    ok: bool
+    backend: str  # "clipboard" | "type"
+    chars: int
+    window_class: str | None  # None: no active window (text left in the clipboard)
+    left_in_clipboard: bool  # text intentionally left in the clipboard
+    error: str | None
+    cancelled: bool = False  # cancellation; no emergency clipboard fallback
+
+
+@dataclass(frozen=True)
+class CancelResult:
+    """What `PipelineControl.cancel_all()` discarded (04 §4.4)."""
+
+    drained_job_ids: tuple[int, ...]  # removed from the queue; the worker never reports them
+    in_flight_cancelled: bool  # the current job will report JobDiscarded(cancelled)
+    injection_in_flight: bool  # an input operation had already started (08 §8.3)
+
+    @property
+    def discarded_any(self) -> bool:
+        return bool(self.drained_job_ids) or self.in_flight_cancelled
+
+
+class AudioOpenError(Exception):
+    """The microphone stream could not be opened (05 §5.6)."""
+
+
+# --- effects used by the Controller (04 §4.3) ---------------------------------------------
+
+
+class AudioCaptureControl(Protocol):
+    def open(self, recording_id: int, capture_id: int) -> None:
+        """Opens the stream synchronously (30-150 ms); raises AudioOpenError."""
+
+    def close(self) -> None:
+        """Stops the stream; returns after the last callback (no frames arrive later)."""
+
+
+class AudioConsumerControl(Protocol):
+    """Commands to the audio-consumer thread, executed in FIFO order (04 §4.3)."""
+
+    def begin_ptt(self, recording_id: int, capture_id: int) -> None: ...
+
+    def mask_start_sound(self, recording_id: int, capture_id: int, until: float) -> None:
+        """Discard samples up to monotonic time `until` (end of the start sound + 80 ms)."""
+
+    def finish_ptt(
+        self, recording_id: int, capture_id: int, operation_id: int, ended_at: float, cut: Cut
+    ) -> None: ...
+
+    def discard(self, recording_id: int, capture_id: int) -> None: ...
+
+
+class PipelineControl(Protocol):
+    @property
+    def generation(self) -> int: ...
+
+    def submit(self, job: Job) -> None: ...
+
+    def cancel_all(self) -> CancelResult: ...
+
+    def pause(self) -> None: ...
+
+    def resume(self) -> None: ...
+
+
+class Feedback(Protocol):
+    """Sounds and notifications (10 §10.6); notifications never contain transcript text."""
+
+    def play(self, sound: Sound) -> float | None:
+        """Starts playback without waiting; returns its duration, or None if nothing plays."""
+
+    def notify(self, key: str, title: str, body: str = "", *, informational: bool = False) -> None:
+        """A notification with the same `key` replaces the previous one; `informational`
+        notifications are shown only with `feedback.notifications = "all"`."""
+
+
+class DaemonLifecycle(Protocol):
+    def shutdown(self, *, x11_alive: bool) -> None:
+        """Ungrabs hotkeys (only if `x11_alive`) and closes the IPC socket."""
+
+
+class ReloadTarget(Protocol):
+    """Applies a reloaded config to components (04 §4.6)."""
+
+    def apply_live(self, config: "Config") -> None: ...
+
+    def apply_at_idle(self, config: "Config") -> None: ...
+
+    def restart_server(self, config: "Config") -> None:
+        """Writes whisper-server.env and restarts the unit in a helper thread, which posts
+        ServerRestartDone; must not block."""
+
+    def use_server(self, config: "Config") -> None:
+        """Points the STT client and EngineMonitor at the restarted server."""
