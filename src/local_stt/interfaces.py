@@ -11,6 +11,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
+    from local_stt.cancellation import CancellationToken
     from local_stt.config import Config
 
 
@@ -101,6 +102,30 @@ class InjectResult:
     left_in_clipboard: bool  # text intentionally left in the clipboard
     error: str | None
     cancelled: bool = False  # cancellation; no emergency clipboard fallback
+
+
+@dataclass(frozen=True)
+class TextContext:
+    """Processing context of one job (08 §8.1)."""
+
+    source: JobSource
+    session_id: int | None
+    seq: int | None
+    cut: Cut
+    prev_cut: Cut | None  # cut of the previous segment from this session (continuous)
+    prompt_tail: str | None  # session context sent in the prompt; None in PTT
+
+
+class TextProcessor(Protocol):
+    """Transcript → text to inject, or None when nothing remains (08 §8.2)."""
+
+    def process(self, transcript: Transcript, ctx: TextContext) -> str | None: ...
+
+
+class Injector(Protocol):
+    """Enters text into the active window (08 §8.3); never raises for X11 failures."""
+
+    def inject(self, text: str, *, cancel: "CancellationToken") -> InjectResult: ...
 
 
 @dataclass(frozen=True)

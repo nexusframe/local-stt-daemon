@@ -561,6 +561,15 @@ def test_cancel_removes_drained_jobs_from_status(c: Controller, w: World) -> Non
     assert c.display_status() == "IDLE"
 
 
+def test_cancel_clears_busy_job_requeued_after_connection_error(c: Controller, w: World) -> None:
+    job = finish_job(c, w)
+    c.handle(ev.JobStarted(job.id))  # started, then requeued by the worker (04 §4.4)
+    w.cancel_result = CancelResult((job.id,), in_flight_cancelled=False, injection_in_flight=False)
+    c.handle(ev.CancelRequested())
+    assert c.snapshot().busy is False
+    assert c.display_status() == "IDLE"
+
+
 @pytest.mark.parametrize(
     ("result", "title"),
     [

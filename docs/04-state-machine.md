@@ -172,6 +172,7 @@ Controller ──submit(Job)──► jobs ──► PipelineWorker (1 thread)
   - A **connection** error (server does not respond) → the worker emits `EngineStateChanged(DOWN)`, **pauses** (`paused = true`), and puts the job back at the front of the queue (4.5).
   - HTTP 5xx / timeout → one retry after 1 s; then `JobFailed`.
   - HTTP 4xx → immediate `JobFailed`.
+  - An invalid response body (HTTP 200 without valid `verbose_json`) → immediate `JobFailed`, like 4xx: the failure is most likely deterministic (user decision 2026-10-03).
   - `JobFailed` → “Could not transcribe segment (N s)” notification. Several failures within 10 s are combined into one “N segments could not be transcribed” notification. Audio is removed from memory.
 - An **empty result** (no speech, filtered hallucination) is not an error: `JobDiscarded`, DEBUG log.
 
@@ -193,7 +194,7 @@ PipelineWorker reports a connection failure through `EngineMonitor.report_connec
 **Paused queue.** After `EngineStateChanged(DOWN)` (including one reported by the worker), the pipeline has `paused = true`. Jobs wait while systemd restarts the server (`RestartSec=2` + model loading), which takes several seconds.
 
 - `READY` → `paused = false`; the worker resumes with the job that failed.
-- If the engine does not return within `stt.startup_timeout_s` of entering DOWN, all queued jobs receive `JobFailed` and we display **one** aggregate notification.
+- If the engine does not return within `stt.startup_timeout_s` of entering DOWN, all queued jobs receive `JobFailed` and we display **one** aggregate notification. The pipeline owns this timer: it starts at `pause()` (or at the worker's own connection failure), `resume()` cancels it, and the Controller's 10 s `JobFailed` aggregation turns the burst into one notification (user decision 2026-10-03).
 
 The daemon does not start the server itself after a failure (`Restart=on-failure` does that). The only exception is an explicitly requested restart during reload (4.6).
 

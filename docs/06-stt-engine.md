@@ -118,7 +118,7 @@ Response (the portion we read):
 - The response's `temperature` field echoes the requested value rather than the temperature actually used, so we ignore it.
 - `compression_ratio` does not exist. We detect hallucination loops ourselves (6.8).
 
-Request timeout: `max(10 s, 4 × audio_length × RTF_from_last_10_jobs)`, capped at `stt.request_timeout_max_s` (120 s).
+Request timeout: `max(10 s, 4 × audio_length × RTF_from_last_10_jobs)`, capped at `stt.request_timeout_max_s` (120 s). The RTF is the mean over the last 10 jobs; before the first job there is no history and the cap itself is used, because the first request after start may be slow (user decision 2026-10-03).
 
 ### `POST /load` — intentionally **unused**
 

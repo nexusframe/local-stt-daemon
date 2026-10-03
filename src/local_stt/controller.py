@@ -271,7 +271,8 @@ class Controller:
     def _cancel_pipeline(self) -> CancelResult:
         result = self._pipeline.cancel_all()
         for job_id in result.drained_job_ids:
-            self._outstanding.pop(job_id, None)
+            # A drained job may already have started: requeued after a connection error.
+            self._job_done(job_id)
         return result
 
     def _audio_failure(self, description: str) -> None:
