@@ -226,3 +226,11 @@ def test_daemon_imports_no_internet_code() -> None:
         "assert not bad, bad"
     )
     subprocess.run([sys.executable, "-c", code], check=True, env={**os.environ})
+
+
+def test_take_notifier_unsets_notify_socket() -> None:
+    environ = {"NOTIFY_SOCKET": "@/org/freedesktop/systemd1/notify", "HOME": "/home/u"}
+    notifier = app.take_notifier(environ)
+    assert notifier.enabled
+    assert environ == {"HOME": "/home/u"}  # children must not inherit it
+    assert not app.take_notifier({}).enabled

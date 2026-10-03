@@ -18,12 +18,12 @@ import os
 import queue
 import signal
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, MutableMapping
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -33,6 +33,9 @@ from local_stt import events as ev
 from local_stt.config import Config, ConfigError, check_model_files, config_dir, load_config
 from local_stt.interfaces import EngineHealth, SttEngine, Transcript
 from local_stt.logging_setup import resolve_level, set_level, setup_logging
+
+if TYPE_CHECKING:
+    from local_stt.sdnotify import SdNotifier
 
 log = logging.getLogger("local_stt.controller")
 
@@ -226,8 +229,9 @@ SIGNAL_EVENTS: dict[int, Callable[[], ev.Event]] = {
 class Daemon:
     """Builds the components from a passed preflight and runs them until shutdown."""
 
-    def __init__(self, pre: Preflight):
+    def __init__(self, pre: Preflight, notifier: "SdNotifier"):
         self._pre = pre
+        self.notifier = notifier
         self._stack = contextlib.ExitStack()
         self._controller_thread: threading.Thread | None = None
         self.exit_code = EXIT_FAILURE  # replaced by the controller's own exit code
@@ -248,11 +252,9 @@ class Daemon:
         from local_stt.ipc import IpcServer, socket_path
         from local_stt.pipeline import PipelineWorker
         from local_stt.reload import ComponentReloader
-        from local_stt.sdnotify import SdNotifier
         from local_stt.text.processor import DefaultTextProcessor
 
         pre, config, post = self._pre, self._pre.config, self._post
-        self.notifier = SdNotifier()
         self.frames: queue.SimpleQueue[Any] = queue.SimpleQueue()
         self.capture = AudioCapture(
             self.frames,
@@ -415,8 +417,23 @@ def log_versions(config: Config) -> None:
         log.warning("log_text is enabled — transcripts will be stored in the journal")
 
 
+def take_notifier(environ: MutableMapping[str, str]) -> "SdNotifier":
+    """Reads `$NOTIFY_SOCKET` once and removes it, like sd_notify's `unset_environment`.
+
+    Child processes would inherit it otherwise, and systemd 255 tools (`loginctl`,
+    `systemctl`) send `EXIT_STATUS=0` there on exit, which systemd logs as a warning for
+    every call (tested 2026-10-03).
+    """
+    from local_stt.sdnotify import SdNotifier
+
+    notifier = SdNotifier(environ)
+    environ.pop("NOTIFY_SOCKET", None)
+    return notifier
+
+
 def run_daemon(config_path: Path | None, cli_level: str | None) -> int:
     setup_logging(logging.INFO)  # the configured level is applied once the config is read
+    notifier = take_notifier(os.environ)
     try:
         pre = preflight(config_path, cli_level)
     except StartupError as e:
@@ -428,7 +445,7 @@ def run_daemon(config_path: Path | None, cli_level: str | None) -> int:
     for line in startup_checks(pre.config, os.environ, doctor.run_command, DATA_DIR):
         log.info("%s", line)
 
-    daemon = Daemon(pre)
+    daemon = Daemon(pre, notifier)
     try:
         daemon.build()
         daemon.install_signal_handlers()
