@@ -29,6 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"local-stt {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    daemon = commands.add_parser("daemon", help="run the daemon in the foreground (systemd)")
+    _add_config_option(daemon)
+    daemon.add_argument(
+        "--log-level", choices=["INFO", "DEBUG", "TRACE"], help="overrides logging.level"
+    )
+
     status = commands.add_parser("status", help="daemon status")
     status.add_argument("--json", action="store_true", help="machine-readable status")
     ptt = commands.add_parser("ptt", help="start/stop push-to-talk, like the hotkey")
@@ -359,6 +365,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_daemon_command(args)
     if args.command == "devices":
         return _run_devices()
+    if args.command == "daemon":
+        from local_stt.app import run_daemon
+
+        return run_daemon(args.config, args.log_level)
     if args.command == "doctor":
         from local_stt.doctor import cmd_doctor
 

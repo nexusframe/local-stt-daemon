@@ -61,6 +61,12 @@ class EngineMonitor:
         if self._thread is not None:
             self._thread.join()
 
+    def set_startup_timeout(self, startup_timeout_s: float) -> None:
+        """Live reload of `stt.startup_timeout_s` (04 §4.6); the current grace period keeps
+        its start time."""
+        with self._lock:
+            self._startup_timeout_s = startup_timeout_s
+
     def restarted(
         self, health: HealthCheck | None = None, startup_timeout_s: float | None = None
     ) -> None:

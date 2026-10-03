@@ -179,6 +179,14 @@ class IpcServer:
             self.path.unlink()
         self._server = _Server(self.path, self._post, self._reply_timeout_s)
         os.chmod(self.path, 0o600)
+        self.restart_thread()
+        log.info("listening on %s", self.path)
+
+    def restart_thread(self) -> None:
+        """Serves the bound socket in a new `ipc-server` thread; also used after the previous
+        one died (E14: non-critical threads are restarted)."""
+        if self._server is None:
+            return
         self._thread = threading.Thread(
             target=self._server.serve_forever,
             args=(self._poll_interval_s,),
@@ -186,7 +194,6 @@ class IpcServer:
             daemon=True,
         )
         self._thread.start()
-        log.info("listening on %s", self.path)
 
     def stop(self) -> None:
         """Stops accepting connections and removes the socket file."""
