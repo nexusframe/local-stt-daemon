@@ -4,7 +4,7 @@
 
 - Format: **TOML**, parsed with `tomllib` from the Python 3.12 standard library. No dependency is required, and the syntax is unambiguous (in YAML, `no`/`on` may be interpreted as booleans). The initial design allowed the format to be changed. Rationale: [03](03-decisions.md), ADR-008.
 - File: `$XDG_CONFIG_HOME/local-stt/config.toml` (default: `~/.config/local-stt/config.toml`). The path can be overridden with the `--config PATH` flag or the `LOCAL_STT_CONFIG` variable.
-- If the file is absent, default values are used. `install.sh` copies the fully commented `config.example.toml`.
+- If the file is absent, default values are used. `install.sh` copies the fully commented `config.example.toml` (repository root; every value in it is the default). A path given explicitly with `--config` or `LOCAL_STT_CONFIG` must exist.
 - Validation: dataclasses plus custom validators in `local_stt/config.py`. Every error has the form `<section>.<key>: <problem> (got <value>)`, for example `vad.end_threshold: must be < start_threshold (got 0.6)`. An unknown key is an **error**, not a warning, so typos never pass silently.
 - Changes take effect after `local-stt reload`, according to the groups in [04](04-state-machine.md) §4.6. Keys marked ⟳ cause the daemon to generate a new `whisper-server.env` and restart `local-stt-whisper.service` when the mode is IDLE and the queue is empty (or the engine is DOWN).
 
@@ -16,14 +16,14 @@
 [stt]
 engine = "whisper-server"            # only implementation in v0.1–v0.3
 port = 8178                          # ⟳
-model = "small-q5_1"                 # ⟳ ggml-<model>.bin filename in models_dir
+model = "small-q8_0"                 # ⟳ ggml-<model>.bin filename in models_dir (stage-0 benchmark)
 models_dir = "~/.local/share/local-stt/models"   # ⟳
 language = "pl"                      # ⟳
 threads = 4                          # ⟳ -t for whisper-server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk."
 continuous_context = true            # append the end of the previous segment to the prompt
-audio_ctx = 0                        # ⟳ 0 = full 30 s window, or fixed frames (e.g. 1000); 06 §6.7, set from the benchmark
+audio_ctx = 1000                     # ⟳ 0 = full 30 s window, or fixed frames; 06 §6.7, set from the benchmark
 audio_ctx_margin = 128               # ⟳ recordings needing more than audio_ctx - margin frames use the full window
 no_speech_threshold = 0.6
 logprob_threshold = -1.0
@@ -106,18 +106,25 @@ timings = true                       # timing line for each job (without content
 | `0 < thresholds < 1` | `…: must be in (0, 1)` |
 | `vad.split_search_s < vad.max_segment_s` | |
 | `vad.max_segment_s ≤ 28` | margin for Whisper's 30 s window |
-| `stt.audio_ctx == 0` or `500 ≤ stt.audio_ctx < 1500`; `0 ≤ stt.audio_ctx_margin < stt.audio_ctx` when it is set | `stt.audio_ctx: must be 0 or 500–1499` (the lower bound is conservative: only 750 and 1000 were measured, 06 §6.7) |
+| `stt.audio_ctx == 0` or `500 ≤ stt.audio_ctx < 1500`; `0 ≤ stt.audio_ctx_margin < stt.audio_ctx` when it is set | `stt.audio_ctx: must be 0 or 500-1499` (the lower bound is conservative: only 750 and 1000 were measured, 06 §6.7) |
 | `stt.audio_ctx > 0` and `vad.max_segment_s * 50 + stt.audio_ctx_margin > stt.audio_ctx` | warning `vad.max_segment_s: continuous segments longer than X s use the full window` |
-| the `models_dir/ggml-<model>.bin` file exists | `stt.model: file not found: … (run: local-stt models pull small-q5_1)` |
+| the `models_dir/ggml-<model>.bin` file exists | `stt.model: file not found: … (run: local-stt models pull small-q8_0)` |
 | when `vad.enabled`: the `models_dir/<vad.model>` file exists | `vad.model: file not found: … (run: local-stt models pull silero-vad)` |
 | `len(stt.vocabulary_prompt) ≤ 300` | vocabulary character limit, not token count; the engine may truncate the prompt ([06](06-stt-engine.md) §6.6) |
 | `hotkeys.push_to_talk != hotkeys.continuous_toggle` | |
 | the hotkey does not use `ISO_Level3_Shift`, `Alt_R`, `Super_L` (conflict), or `Control_L`, `Shift_L` (used by XTest during paste, [08](08-text-injection.md) §8.5) | [07](07-hotkeys-x11.md) §7.2 |
 | `hotkeys.ptt_cancel_key` is a single unmodified keysym, distinct from the PTT and continuous keysyms | |
-| `stt.extra_server_args` does not contain `--host`, `--port`, `--request-path`, `--inference-path`, `-m`, `-l`, `-t`, `-bs`, `--public`, `--convert` | `stt.extra_server_args: flag X is managed by local-stt` |
+| `stt.extra_server_args` does not contain `--host`, `--port`, `--request-path`, `--inference-path`, `-m`/`--model`, `-l`/`--language`, `-t`/`--threads`, `-bs`/`--beam-size`, `--public`, `--convert` (also as `--flag=value`) | `stt.extra_server_args: flag X is managed by local-stt` |
+| `stt.extra_server_args` items and the model path (`stt.models_dir`) contain no whitespace, quotes, backslashes, or `$`: systemd splits the unbraced `$LOCAL_STT_WHISPER_ARGS` on whitespace (9.4) | `stt.models_dir: must not contain whitespace, quotes, backslashes or $` |
 | `stt.extra_server_args` does not contain `-pr`/`--print-realtime` or `-debug`/`--debug-mode`: `--print-realtime` prints transcribed text to the server's stdout, which ends up in journald (12 §12.1; verified in `examples/server/server.cpp`, v1.9.4); `--debug-mode` enables whisper.cpp debug output derived from the audio | `stt.extra_server_args: flag X would log transcribed content` |
 | `continuous` requires `vad.enabled` | warning `vad.enabled=false: continuous dictation unavailable`; `toggle` returns `vad_disabled` |
 | regexes in `text.*` compile | `text.hallucination_patterns[2]: invalid regex: …` |
+
+Notes on the implementation (`local_stt/config.py`):
+
+- Hotkeys are checked for syntax ([07](07-hotkeys-x11.md) §7.2) and for a known keysym name (python-xlib keysym tables, no X connection). Whether the keysym has a keycode in the current keyboard map is checked when grabbing (`hotkeys/x11.py`).
+- The two model-file rules are checked separately (`check_model_files`) by the daemon and `doctor`, not by every CLI command: `local-stt models pull` and `transcribe --model` must work before the configured model is downloaded.
+- Besides the rules above, single values are range-checked (port, threads, timeouts, enums such as `injection.backend` and `logging.level`); TOML types are strict (`port = "8178"` is an error, an integer is accepted where a float is expected).
 
 ## 9.4 Files generated for `whisper-server`
 
@@ -127,7 +134,7 @@ From the `[stt]` section and the secret, the daemon (as well as `install.sh` and
 
 ```sh
 # generated by local-stt — do not edit manually
-LOCAL_STT_WHISPER_ARGS="--host 127.0.0.1 --port 8178 --request-path /3f9c…e1 -m /home/leto/.local/share/local-stt/models/ggml-small-q5_1.bin -l pl -t 4 -bs -1 -sns"
+LOCAL_STT_WHISPER_ARGS="--host 127.0.0.1 --port 8178 --request-path /3f9c…e1 -m /home/leto/.local/share/local-stt/models/ggml-small-q8_0.bin -l pl -t 4 -bs -1 -sns"
 ```
 
 The `local-stt-whisper.service` unit loads it through `EnvironmentFile=` ([11](11-daemon-systemd-installation.md) §11.4). The config remains the single source of truth, and the host is always `127.0.0.1` and is not configurable.

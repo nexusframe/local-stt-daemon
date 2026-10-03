@@ -40,8 +40,8 @@ Download: `local-stt models pull <name>` downloads `ggml-<name>.bin` from `https
 | Model (`ggml-<name>.bin` file) | Size | Polish WER FLEURS / CV9 (Whisper paper) | Role |
 |---|---:|---|---|
 | `base-q5_1` | 57 MiB | 30.8 / 32.8 (base) | test/fallback only — **too weak for Polish** |
-| `small-q5_1` | 181 MiB | 14.7 / 16.9 (small) | **initial default** |
-| `small-q8_0` | 252 MiB | same | benchmark candidate |
+| `small-q5_1` | 181 MiB | 14.7 / 16.9 (small) | initial default; benchmark runner-up |
+| `small-q8_0` | 252 MiB | same | **default** (stage-0 benchmark, with `audio_ctx = 1000`) |
 | `small` (f16) | 465 MiB | same | small quality baseline |
 | `medium-q5_0` | 514 MiB | 8.0 / 10.1 (medium) | PTT candidate if latency permits |
 | `large-v3-turbo-q5_0` | 547 MiB | no figures in the paper; better than medium in OpenAI charts | PTT candidate with a fixed `audio_ctx` |
@@ -50,7 +50,7 @@ Notes:
 
 - q5/q8 quantization reduces RAM use and loading time. We measure its WER impact ourselves ([13](13-benchmark.md)).
 - The preliminary design treated `base` as the primary “responsive” candidate. The paper's Polish figures (≈31% WER, or every third word wrong) disqualify it. `base` remains for testing only.
-- **Model selection is measurement-driven.** The initial default is `small-q5_1`; [13-benchmark.md](13-benchmark.md) determines the final default. One model serves both modes. A second model is introduced only if required by the §13.5 rule (see 6.7).
+- **Model selection is measurement-driven.** The initial default was `small-q5_1`; the stage-0 benchmark ([13-benchmark.md](13-benchmark.md), [results](benchmark-results.md)) selected `small-q8_0` with `audio_ctx = 1000`, and v0.1 confirms it against N2. One model serves both modes. A second model is introduced only if required by the §13.5 rule (see 6.7).
 
 ## 6.4 Starting the server
 
@@ -60,7 +60,7 @@ Notes:
 ~/.local/share/local-stt/bin/whisper-server \
   --host 127.0.0.1 --port 8178 \
   --request-path /<secret: 32 hex characters> \
-  -m ~/.local/share/local-stt/models/ggml-small-q5_1.bin \
+  -m ~/.local/share/local-stt/models/ggml-small-q8_0.bin \
   -l pl -t 4 -bs -1 -sns
 ```
 
@@ -148,7 +148,7 @@ The Whisper encoder always processes a **30 s window** (1500 frames, 50 frames/s
 
 ### Policy: one fixed value per server, full window as the only fallback
 
-`stt.audio_ctx` is either `0` (full window, the default until the benchmark selects a value) or a fixed number of frames. For every request the adapter sends exactly one of two values:
+`stt.audio_ctx` is either `0` (full window) or a fixed number of frames; the default `1000` was selected by the stage-0 benchmark. For every request the adapter sends exactly one of two values:
 
 ```text
 needed = ceil(duration_s * 50) + stt.audio_ctx_margin        # margin defaults to 128 (~2.5 s)
@@ -203,7 +203,7 @@ class Transcript:
     audio_duration_s: float
     processing_s: float          # measured on the client side
     engine: str                  # "whisper.cpp"
-    model: str                   # "small-q5_1"
+    model: str                   # "small-q8_0"
 ```
 
 The adapter preserves segment text without `strip()` and without adding separators. For `verbose_json`, v1.9.4 generates token timestamps by default and wraps segments at 60 characters; a split may fall inside a word ([server code](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/server/server.cpp)). These segment boundaries do not represent word or utterance boundaries. Text assembly rules are defined in 08 §8.2.

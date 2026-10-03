@@ -72,7 +72,7 @@ In v0.3, `status --watch --preview` requires `continuous.preview=true` and expli
 
 ```text
 local-stt 0.1.0 — IDLE
-  engine     READY   whisper.cpp small-q5_1 @127.0.0.1:8178 (t=4)
+  engine     READY   whisper.cpp small-q8_0 @127.0.0.1:8178 (t=4)
   hotkeys    OK      PTT=Control_R  continuous=Shift+Control_R
   audio      default (closed)
   pipeline   0 queued, last: 3.8 s audio → 1.6 s (RTF 0.42) 2 min ago
@@ -88,7 +88,7 @@ local-stt 0.1.0 — IDLE
   "mode": "CONTINUOUS",
   "speech": true,
   "reconnecting": false,
-  "engine": {"state": "READY", "name": "whisper.cpp", "model": "small-q5_1", "port": 8178},
+  "engine": {"state": "READY", "name": "whisper.cpp", "model": "small-q8_0", "port": 8178},
   "hotkeys": {"state": "OK", "problems": []},
   "audio": {"device": "default", "open": true, "overflows": 0},
   "pipeline": {"queued": 1, "queued_audio_s": 3.4, "busy": true, "generation": 5},

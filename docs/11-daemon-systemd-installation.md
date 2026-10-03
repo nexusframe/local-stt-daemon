@@ -11,7 +11,7 @@
 ├── bin/whisper-bench
 ├── bin/.whisper-tag              # tag from which the binaries were built
 └── models/
-    ├── ggml-small-q5_1.bin
+    ├── ggml-small-q8_0.bin
     └── silero_vad.onnx
 ~/.local/bin/local-stt  →  ~/.local/share/local-stt/venv/bin/local-stt   (symlink)
 ~/.config/local-stt/
@@ -69,7 +69,7 @@ Default tag: v1.9.4.
     Skipped when bin/.whisper-tag contains the same tag and --rebuild-whisper was not specified (the server has no --version flag).
  4. venv: python3 -m venv; pip install --require-hashes -r requirements.lock; pip install --no-deps . (--dev: -e .[dev])
  5. symlink ~/.local/bin/local-stt
- 6. models: local-stt models pull $MODEL (default: small-q5_1) and silero-vad; verify SHA256.
+ 6. models: local-stt models pull $MODEL (default: small-q8_0) and silero-vad; verify SHA256.
  7. config: if ~/.config/local-stt/config.toml is absent → copy config.example.toml (with the model substituted).
     If ~/.config/local-stt/secret is absent → generate it (umask 077, 32 hex characters).
     Generate whisper-server.env.

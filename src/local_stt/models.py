@@ -16,7 +16,6 @@ from typing import TextIO
 
 WHISPER_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
 SILERO_URL = "https://github.com/snakers4/silero-vad/raw/v6.2.1/src/silero_vad/data/silero_vad.onnx"
-DEFAULT_MODELS_DIR = Path.home() / ".local/share/local-stt/models"
 
 WHISPER_MODELS = (
     "base-q5_1",

@@ -1,0 +1,93 @@
+# local-stt configuration (docs/09-configuration.md).
+# Location: ~/.config/local-stt/config.toml (or --config PATH / $LOCAL_STT_CONFIG).
+# Every value below is the default; delete a key to keep the default. Unknown keys are errors.
+# Apply changes with `local-stt reload`. Keys marked ⟳ regenerate whisper-server.env and
+# restart local-stt-whisper.service once the daemon is idle (docs/04-state-machine.md §4.6).
+
+[stt]
+engine = "whisper-server"            # only implementation in v0.1–v0.3
+port = 8178                          # ⟳ loopback port; the host is always 127.0.0.1
+model = "small-q8_0"                 # ⟳ ggml-<model>.bin in models_dir (benchmark: docs/benchmark-results.md)
+models_dir = "~/.local/share/local-stt/models"   # ⟳ no whitespace, quotes, backslashes or $
+language = "pl"                      # ⟳
+threads = 4                          # ⟳ -t for whisper-server
+beam_size = -1                       # ⟳ -1 = greedy
+vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk." (max 300 characters)
+continuous_context = true            # append the end of the previous segment to the prompt
+audio_ctx = 1000                     # ⟳ 0 = full 30 s window, or 500–1499 fixed encoder frames (06 §6.7)
+audio_ctx_margin = 128               # ⟳ recordings needing more than audio_ctx - margin frames use the full window
+no_speech_threshold = 0.6
+logprob_threshold = -1.0
+startup_timeout_s = 60
+request_timeout_max_s = 120
+extra_server_args = []               # ⟳ e.g. ["-nf"]; flags managed by local-stt are rejected
+
+[audio]
+device = "default"                   # "default" or a PipeWire node name from `local-stt devices`
+
+[ptt]
+min_duration_ms = 300                # shorter presses are ignored
+max_duration_s = 120                 # recording limit
+silence_rms_dbfs = -50.0             # RMS gate: quieter recordings are not transcribed
+
+[continuous]
+max_backlog_s = 60                   # total queued audio after which the mode is disabled
+
+[vad]
+enabled = true                       # false → PTT uses the RMS gate; continuous dictation is unavailable
+model = "silero_vad.onnx"            # in models_dir
+start_threshold = 0.50               # (0, 1)
+end_threshold = 0.35                 # (0, 1), below start_threshold
+min_speech_ms = 250
+min_silence_ms = 700
+speech_pad_ms = 300
+max_segment_s = 15                   # at most 28
+split_search_s = 3                   # below max_segment_s
+
+[hotkeys]
+# Syntax: (Ctrl|Shift|Alt|Super "+")* keysym, e.g. "Pause", "Ctrl+F9" (07 §7.2).
+# Rejected keysyms: ISO_Level3_Shift, Alt_R, Super_L, Control_L, Shift_L.
+enabled = true
+push_to_talk = "Control_R"
+continuous_toggle = "Shift+Control_R"
+ptt_cancel_key = "Escape"            # single keysym; active only while PTT is held
+
+[text]
+append_space = true
+# Python regexes; a matching transcript is dropped as a Whisper hallucination.
+hallucination_patterns = [
+  'napisy (stworzone|wykonane) przez społeczność amara\.org',
+  '(zdjęcia|tłumaczenie) i napisy stworzone przez społeczność amara\.org',
+  '^\s*dzięk(i|uję) za (uwagę|obejrzenie|oglądanie)[.!]?\s*$',
+  '^\s*(za)?subskrybuj[^.]*[.!]?\s*$',
+]
+# Replacements applied in order; regex defaults to false (plain text).
+# [[text.replacements]]
+# pattern = '(?i)\bnowa linia\b'
+# replace = "\n"
+# regex = true
+
+[injection]
+backend = "auto"                     # auto | clipboard | type
+restore_clipboard = true
+modifier_wait_ms = 1000
+paste_timeout_ms = 1000
+type_delay_ms = 12                   # values below 8 make Chrome lose characters
+type_window_classes = ["xterm", "URxvt"]
+terminal_window_classes = [
+  "gnome-terminal-server", "kitty", "alacritty", "konsole", "tilix",
+  "org.wezfurlong.wezterm", "terminator", "xfce4-terminal", "guake", "tabby", "ghostty",
+]
+
+[injection.paste_shortcut_overrides]
+# "emacs" = "Ctrl+Y"
+
+[feedback]
+sounds = true                        # start/stop/cancel/error sounds
+sound_volume = 0.4                   # 0.0–1.0
+notifications = "errors"             # none | errors | all
+
+[logging]
+level = "INFO"                       # INFO | DEBUG | TRACE
+log_text = false                     # true = full transcript text in logs (debugging only)
+timings = true                       # timing line for each job (without content)

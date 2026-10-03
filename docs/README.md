@@ -37,7 +37,7 @@ Suggested reading order:
 | Area | Decision |
 |---|---|
 | Processes | `local-stt-whisper.service` (whisper.cpp `whisper-server`, loopback) + `local-stt.service` (Python 3.12) |
-| Model | start with `small-q5_1`; the benchmark makes the final selection (candidates through `medium-q5_0` and `large-v3-turbo-q5_0`); `base` rejected for Polish (~31% WER) |
+| Model | `small-q8_0` with fixed `audio_ctx = 1000`, selected by the stage-0 benchmark (WER 7.4 % on the user's voice, p90 3.7 s); `medium-q5_0` and `large-v3-turbo-q5_0` too slow on the reference CPU; `base` rejected for Polish (~31% WER) |
 | Hotkeys | XGrabKey: PTT = hold right Ctrl, continuous = Shift + right Ctrl, Esc while holding PTT = cancel |
 | Audio | sounddevice, 16 kHz mono, 512-sample frames; microphone open only while recording |
 | VAD | Silero v6.2.1 (ONNX, onnxruntime), 0.50/0.35 hysteresis, 700 ms silence, 15 s maximum |

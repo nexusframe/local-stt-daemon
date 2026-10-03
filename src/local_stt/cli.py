@@ -12,13 +12,11 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
+    from local_stt.config import Config, SttConfig
     from local_stt.interfaces import Transcript
     from local_stt.stt.whisper_server import WhisperServerEngine
 
-# Defaults from docs/09-configuration.md until the config loader exists (task 1.1).
-_DEFAULT_PORT = 8178
-_DEFAULT_MODEL = "small-q5_1"
-_REQUEST_TIMEOUT_S = 120.0
+EXIT_CONFIG = 78  # EX_CONFIG (10 §10.1)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,14 +28,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     models = commands.add_parser("models", help="list, download and verify models")
     models_commands = models.add_subparsers(dest="models_command", metavar="ACTION", required=True)
-    models_commands.add_parser("list", help="models in models_dir")
+    _add_config_option(models_commands.add_parser("list", help="models in models_dir"))
     pull = models_commands.add_parser("pull", help="download a model and verify its SHA256")
+    _add_config_option(pull)
     pull.add_argument("name")
-    models_commands.add_parser("verify", help="verify checksums of downloaded models")
+    verify = models_commands.add_parser("verify", help="verify checksums of downloaded models")
+    _add_config_option(verify)
 
     transcribe = commands.add_parser(
         "transcribe", help="transcribe a 16 kHz mono 16-bit WAV file (no microphone or hotkeys)"
     )
+    _add_config_option(transcribe)
     transcribe.add_argument("file", type=Path, metavar="FILE.wav")
     transcribe.add_argument(
         "--model",
@@ -70,12 +71,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_config_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config",
+        type=Path,
+        metavar="PATH",
+        help="config file (default: $LOCAL_STT_CONFIG or ~/.config/local-stt/config.toml)",
+    )
+
+
+def _load_config(args: argparse.Namespace) -> "Config | None":
+    """The validated config, or None after printing every error (exit code 78)."""
+    from local_stt.config import ConfigError, load_config
+
+    try:
+        config, warnings = load_config(args.config)
+    except ConfigError as e:
+        for error in e.errors:
+            print(f"config error: {error}", file=sys.stderr)
+        return None
+    for warning in warnings:
+        print(f"config warning: {warning}", file=sys.stderr)
+    return config
+
+
 def _run_models(args: argparse.Namespace) -> int:
     # Imported lazily: local_stt.models is the only module with Internet networking code (12 §12.2).
     from local_stt import models
 
-    # TODO(1.1): take stt.models_dir from the config.
-    models_dir = models.DEFAULT_MODELS_DIR
+    config = _load_config(args)
+    if config is None:
+        return EXIT_CONFIG
+    models_dir = config.stt.models_dir
     if args.models_command == "list":
         return models.cmd_list(models_dir)
     if args.models_command == "pull":
@@ -85,8 +112,13 @@ def _run_models(args: argparse.Namespace) -> int:
 
 def _run_transcribe(args: argparse.Namespace) -> int:
     from local_stt.audio.wav import SAMPLE_RATE, wav_bytes_to_float32
+    from local_stt.config import config_dir
     from local_stt.stt import whisper_server as ws
 
+    config = _load_config(args)
+    if config is None:
+        return EXIT_CONFIG
+    stt = config.stt
     try:
         audio, rate = wav_bytes_to_float32(args.file.read_bytes())
     except (OSError, ValueError, EOFError) as e:
@@ -96,19 +128,29 @@ def _run_transcribe(args: argparse.Namespace) -> int:
         print(f"error: {args.file}: expected {SAMPLE_RATE} Hz, got {rate} Hz", file=sys.stderr)
         return 1
 
-    # TODO(1.1): port, model, models_dir, threads and timeouts from the config.
     try:
         if args.model:
             server = ws.TemporaryWhisperServer(
-                ws.DATA_DIR / "models" / f"ggml-{args.model}.bin", model=args.model
+                stt.models_dir / f"ggml-{args.model}.bin",
+                model=args.model,
+                threads=stt.threads,
+                beam_size=stt.beam_size,
+                audio_ctx=stt.audio_ctx,
+                audio_ctx_margin=stt.audio_ctx_margin,
+                language=stt.language,
+                startup_timeout_s=stt.startup_timeout_s,
             )
             with server as engine:
-                transcript = _transcribe(engine, audio)
+                transcript = _transcribe(engine, audio, stt)
         else:
             engine = ws.WhisperServerEngine(
-                port=_DEFAULT_PORT, request_path=ws.read_request_path(), model=_DEFAULT_MODEL
+                port=stt.port,
+                request_path=ws.read_request_path(config_dir() / "secret"),
+                model=stt.model,
+                audio_ctx=stt.audio_ctx,
+                audio_ctx_margin=stt.audio_ctx_margin,
             )
-            transcript = _transcribe(engine, audio)
+            transcript = _transcribe(engine, audio, stt)
     except ws.EngineConnectionError as e:
         print(f"error: whisper-server is not running ({e}); use --model M", file=sys.stderr)
         return 1
@@ -128,9 +170,15 @@ def _run_transcribe(args: argparse.Namespace) -> int:
     return 0
 
 
-def _transcribe(engine: "WhisperServerEngine", audio: "NDArray[np.float32]") -> "Transcript":
+def _transcribe(
+    engine: "WhisperServerEngine", audio: "NDArray[np.float32]", stt: "SttConfig"
+) -> "Transcript":
     return engine.transcribe(
-        audio, sample_rate=16000, language="pl", prompt=None, timeout_s=_REQUEST_TIMEOUT_S
+        audio,
+        sample_rate=16000,
+        language=stt.language,
+        prompt=stt.vocabulary_prompt or None,
+        timeout_s=stt.request_timeout_max_s,
     )
 
 

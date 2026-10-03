@@ -39,11 +39,11 @@ Legend:
   - changing the model means restarting the service rather than calling `POST /load`, which in v1.9.4 can leave the server in the `loading` state or terminate it ([06](06-stt-engine.md) §6.5).
 - **Revisit:** if whisper.cpp removes the server or HTTP overhead proves measurable (> 5% of latency).
 
-## ADR-003 🧪 Default model `small-q5_1`; `base` for testing only
+## ADR-003 🧪 Default model `small-q8_0` with `audio_ctx = 1000`; `base` for testing only
 
 - **Context:** the preliminary design treated `base` as the “responsive” option.
 - **Facts:** Polish WER (FLEURS) from the Whisper paper: base 30.8%, small 14.7%, medium 8.0%.
-- **Decision:** start with `small-q5_1` (181 MiB). The final choice follows the rule in [13](13-benchmark.md) §13.5; candidates also include `medium-q5_0` and `large-v3-turbo-q5_0` with a fixed `audio_ctx` (06 §6.7).
+- **Decision:** `small-q8_0` (252 MiB), 4 threads, fixed `audio_ctx = 1000` — the only production configuration with p90 `text_ready_s` ≤ 5 s in the stage-0 benchmark on corpus B (2026-09-17) and corpus A (2026-10-03, WER 7.4 %), selected under the rule in [13](13-benchmark.md) §13.5 ([benchmark-results](benchmark-results.md)). The project started with `small-q5_1`; `medium-q5_0` is about twice as accurate but ~15 s per utterance on the reference CPU, and `large-v3-turbo-q5_0` is slower still. Remains 🧪 until v0.1 confirms N2 with the full `total` (13 §13.5).
 - **Objection:** `small` may be too slow for continuous mode on the i5-8365U.
 - **Response:**
   - continuous mode does not block recording (ADR-004),
