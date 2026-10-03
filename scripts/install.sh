@@ -3,8 +3,6 @@
 # Idempotent: every step checks whether it has already been completed.
 # Runs as a regular user; sudo is used only for apt.
 #
-# Implemented: steps 1-4 and secret generation (task 0.2).
-# Steps 5-9 (symlink, models, config, systemd, doctor) come with tasks 0.3 and 1.14.
 set -euo pipefail
 
 readonly DEFAULT_WHISPER_TAG="v1.9.4"
@@ -20,8 +18,12 @@ readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/local-stt"
 readonly WHISPER_SRC="$DATA_DIR/src/whisper.cpp"
 readonly BIN_DIR="$DATA_DIR/bin"
 readonly VENV_DIR="$DATA_DIR/venv"
+readonly LOCAL_STT="$VENV_DIR/bin/local-stt"
+readonly BIN_LINK="$HOME/.local/bin/local-stt"
+readonly UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+readonly UNITS=(local-stt-whisper.service local-stt.service)  # start order
 
-MODEL="small-q5_1"
+MODEL="small-q8_0"
 WHISPER_TAG="$DEFAULT_WHISPER_TAG"
 REBUILD_WHISPER=0
 DEV=0
@@ -63,7 +65,7 @@ parse_args() {
 
 # 1. Environment checks
 check_environment() {
-    log "1/4 Checking environment"
+    log "1/9 Checking environment"
     local os_id="" os_version=""
     if [[ -r /etc/os-release ]]; then
         # shellcheck disable=SC1091
@@ -88,7 +90,7 @@ install_apt_packages() {
     ((DEV)) && packages+=("${APT_DEV_PACKAGES[@]}")
 
     if ((NO_APT)); then
-        log "2/4 Skipping apt (--no-apt)"
+        log "2/9 Skipping apt (--no-apt)"
         return
     fi
 
@@ -98,10 +100,10 @@ install_apt_packages() {
             || missing+=("$pkg")
     done
     if ((${#missing[@]} == 0)); then
-        log "2/4 System packages already installed"
+        log "2/9 System packages already installed"
         return
     fi
-    log "2/4 Installing system packages: ${missing[*]}"
+    log "2/9 Installing system packages: ${missing[*]}"
     sudo apt-get install -y "${missing[@]}"
 }
 
@@ -110,11 +112,11 @@ build_whisper() {
     local tag_file="$BIN_DIR/.whisper-tag"
     if ((!REBUILD_WHISPER)) && [[ -x "$BIN_DIR/whisper-server" && -f "$tag_file" ]] \
         && [[ "$(<"$tag_file")" == "$WHISPER_TAG" ]]; then
-        log "3/4 whisper.cpp $WHISPER_TAG already built"
+        log "3/9 whisper.cpp $WHISPER_TAG already built"
         return
     fi
 
-    log "3/4 Building whisper.cpp $WHISPER_TAG"
+    log "3/9 Building whisper.cpp $WHISPER_TAG"
     mkdir -p "$(dirname "$WHISPER_SRC")" "$BIN_DIR"
     if [[ -d "$WHISPER_SRC/.git" ]]; then
         git -C "$WHISPER_SRC" fetch --depth 1 origin tag "$WHISPER_TAG"
@@ -146,7 +148,7 @@ build_whisper() {
 
 # 4. Python virtualenv
 install_venv() {
-    log "4/4 Installing Python package into $VENV_DIR"
+    log "4/9 Installing Python package into $VENV_DIR"
     [[ -x "$VENV_DIR/bin/python" ]] || python3 -m venv "$VENV_DIR"
     "$VENV_DIR/bin/pip" install --quiet --require-hashes -r "$REPO_DIR/requirements.lock"
     if ((DEV)); then
@@ -156,28 +158,110 @@ install_venv() {
     fi
 }
 
-# Part of step 7: server --request-path secret (docs/09-configuration.md §9.4)
-generate_secret() {
-    local secret_file="$CONFIG_DIR/secret"
+# 5. Command on PATH
+link_command() {
+    log "5/9 Linking $BIN_LINK"
+    mkdir -p "$(dirname "$BIN_LINK")"
+    ln -sfn "$LOCAL_STT" "$BIN_LINK"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) warn "~/.local/bin is not on PATH (it is added at the next login if the directory exists)" ;;
+    esac
+}
+
+# 6. Models (verified against the pinned SHA256 by `models pull`)
+pull_models() {
+    log "6/9 Downloading models: $MODEL, silero-vad"
+    "$LOCAL_STT" models pull "$MODEL"
+    "$LOCAL_STT" models pull silero-vad
+}
+
+# 7. Config, secret (server --request-path, docs/09-configuration.md §9.4), whisper-server.env
+install_config() {
+    local config="$CONFIG_DIR/config.toml"
     mkdir -p "$CONFIG_DIR"
-    if [[ -s "$secret_file" ]]; then
-        log "Secret already exists"
+    if [[ -f "$config" ]]; then
+        log "7/9 Keeping existing $config"
     else
+        log "7/9 Creating $config (stt.model = $MODEL)"
+        # the first `model = ...` line is stt.model; the VAD model comes later
+        sed -E "0,/^model = \"[^\"]*\"/s//model = \"$MODEL\"/" \
+            "$REPO_DIR/config.example.toml" >"$config"
+    fi
+
+    local secret_file="$CONFIG_DIR/secret"
+    if [[ ! -s "$secret_file" ]]; then
         log "Generating $secret_file"
         (umask 077 && python3 -c 'import secrets; print(secrets.token_hex(16))' >"$secret_file")
     fi
     chmod 600 "$secret_file"
+
+    log "Generating $CONFIG_DIR/whisper-server.env"
+    "$VENV_DIR/bin/python" - <<'PY' || die "cannot generate whisper-server.env (see the errors above)"
+import sys
+
+from local_stt.config import (
+    ConfigError, config_dir, load_config, render_whisper_env, write_whisper_env,
+)
+from local_stt.stt.whisper_server import read_request_path
+
+try:
+    config, _ = load_config()
+except ConfigError as e:
+    for error in e.errors:
+        print(f"config error: {error}", file=sys.stderr)
+    sys.exit(78)
+directory = config_dir()
+write_whisper_env(
+    directory / "whisper-server.env",
+    render_whisper_env(config.stt, read_request_path(directory / "secret")),
+)
+PY
+}
+
+# 8. systemd user units (docs/11 §11.4-11.5)
+install_units() {
+    log "8/9 Installing systemd units into $UNIT_DIR"
+    mkdir -p "$UNIT_DIR"
+    local unit
+    for unit in "${UNITS[@]}"; do
+        # Documentation= points at this checkout, wherever it is
+        sed "s|%h/projects/local-stt-daemon|$REPO_DIR|" "$REPO_DIR/systemd/$unit" >"$UNIT_DIR/$unit"
+        chmod 644 "$UNIT_DIR/$unit"
+    done
+    systemctl --user daemon-reload
+    if ((NO_ENABLE)); then
+        # only units already running pick up the new code and env (user decision 2026-10-03)
+        systemctl --user try-restart "${UNITS[@]}"
+        return
+    fi
+    systemctl --user enable "${UNITS[@]}"
+    # restart (start on first installation) so that the new code and env take effect;
+    # local-stt.service is Type=notify, so this returns once the daemon sent READY=1
+    for unit in "${UNITS[@]}"; do
+        systemctl --user restart "$unit" || warn "$unit failed to start: journalctl --user -u $unit"
+    done
+}
+
+# 9. Diagnostics
+run_doctor() {
+    log "9/9 local-stt doctor"
+    "$LOCAL_STT" doctor || warn "doctor reported FAIL (see above)"
 }
 
 main() {
     parse_args "$@"
+    [[ "$MODEL" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid --model: '$MODEL'"
     check_environment
     install_apt_packages
     build_whisper
-    install_venv
-    generate_secret
-    log "Steps 5-9 are not implemented yet (tasks 0.3, 1.14); --model $MODEL and --no-enable=$NO_ENABLE are ignored"
     "$BIN_DIR/whisper-server" --help >/dev/null 2>&1 || die "$BIN_DIR/whisper-server --help failed"
+    install_venv
+    link_command
+    pull_models
+    install_config
+    install_units
+    run_doctor
     log "Done"
 }
 

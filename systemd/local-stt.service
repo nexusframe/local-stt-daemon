@@ -1,0 +1,22 @@
+[Unit]
+Description=local-stt: offline Polish voice-to-text daemon
+Documentation=file://%h/projects/local-stt-daemon/docs/README.md
+PartOf=graphical-session.target
+After=graphical-session.target local-stt-whisper.service
+Wants=local-stt-whisper.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=notify
+ExecStart=%h/.local/share/local-stt/venv/bin/local-stt daemon
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+RestartPreventExitStatus=78
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=yes
+LimitCORE=0
+
+[Install]
+WantedBy=graphical-session.target
