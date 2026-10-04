@@ -1,6 +1,6 @@
 # v0.1 acceptance
 
-Results of the v0.1 acceptance from [15](15-implementation-plan.md): the [14.4](14-tests.md) checklist and the nonfunctional requirements N1, N2, N5, N8 and N9 from [01](01-scope-and-requirements.md). Each item records the date, how it was checked and the result. Status: **in progress**.
+Results of the v0.1 acceptance from [15](15-implementation-plan.md): the [14.4](14-tests.md) checklist and the nonfunctional requirements N1, N2, N5, N8 and N9 from [01](01-scope-and-requirements.md). Each item records the date, how it was checked and the result. Status: **complete** (2026-10-04). Every 14.4 v0.1 item passes except item 10 (N/A, no clipboard-history manager) and the layout-switching half of item 12 (single layout); N1, N2, N5, N8 and N9 pass. Three defects found on the way were fixed (VAD gate, clipboard restore announcement, paste confirmation by process).
 
 ## Environment
 
@@ -25,7 +25,7 @@ Results of the v0.1 acceptance from [15](15-implementation-plan.md): the [14.4](
 | # | Item | Result | Notes |
 |---|---|---|---|
 | 1 | Fresh `install.sh` → `doctor` reports no FAIL | pass | 2026-10-03: 0 FAIL, 0 WARN, 17 OK |
-| 2 | After logging out and back in, both services run; `status` = IDLE within 60 s | pending | |
+| 2 | After logging out and back in, both services run; `status` = IDLE within 60 s | pass | 2026-10-04: logout 13:39:56 → daemon `stopped (exit code 0)`, both units stopped; login 13:40:03 (X11 session) → `local-stt-whisper` active 13:40:07, daemon active 13:40:08, `engine ready` and `hotkeys grabbed: 2 of 2` at 13:40:09 (≈ 6 s), `NRestarts=0`, `status` IDLE. |
 | 3 | PTT in GNOME Text Editor, Firefox, VS Code, GNOME Terminal, LibreOffice Writer — Polish characters correct | pass | 2026-10-04 (N2 session): GNOME Text Editor, Firefox, VS Code, GNOME Terminal (`Ctrl+Shift+V`) and ONLYOFFICE instead of Writer; all pasted with Polish characters (ą ć ę ł ń ó ś ź ż). Recognition errors occurred (WER), but no character was mangled by injection. |
 | 4 | PTT with text in the clipboard → the old text remains afterwards | pass | 2026-10-04: blocks in Text Editor, VS Code and ONLYOFFICE started with “SCHOWEK-A/C/E” copied; after 4–5 dictations each, Ctrl+V pasted the expected word. |
 | 5 | PTT with an image in the clipboard → `type` backend, image remains | pass | 2026-10-04: a 37 KB area screenshot (`image/png`, within limits, no INCR) was saved and restored through the clipboard (`backend=clipboard`, same SHA-256 before and after) — the image remained, but the item's assumption “image → `type`” holds only for images over the limits. A full-screen screenshot: `clipboard cannot be restored (content too large): typing instead`, text typed character by character, the image pasted afterwards in ONLYOFFICE. Item wording corrected in 14.4. |

@@ -41,7 +41,7 @@ The sequence follows the preliminary design principle: **first establish whether
 | 1.14 | `systemd/*.service`, `install.sh` steps 5–9, `uninstall.sh` | 11 |
 | 1.15 | `audio/file_source.py` (`FileAudioSource`, required for E2E) + tests: 14.2 unit tests for the items above, `needs_whisper`, `needs_x11`, PTT E2E | 14 |
 
-**v0.1 acceptance:**
+**v0.1 acceptance:** completed 2026-10-04, results in [acceptance-v0.1.md](acceptance-v0.1.md).
 
 - the complete 14.4 (v0.1) checklist,
 - N1 (RAM), N2 (PTT latency—measure `total` from `timings` logs for at least 20 dictations per tested configuration, including the full injector time; selection approved under 13 §13.5), N5, N8, and N9.
