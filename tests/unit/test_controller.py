@@ -41,6 +41,7 @@ class World:
         self.statuses: list[str] = []
         self.hotkey_problems: list[HotkeyProblem] = []
         self.vad_available = True
+        self.overflows = 0
 
     # AudioCaptureControl
     def open(self, recording_id: int, capture_id: int) -> None:
@@ -97,6 +98,10 @@ class Consumer:
 
     def discard(self, recording_id: int, capture_id: int) -> None:
         self.w.calls.append(("consumer.discard", recording_id, capture_id))
+
+    @property
+    def overflows(self) -> int:
+        return self.w.overflows
 
     @property
     def continuous_available(self) -> bool:

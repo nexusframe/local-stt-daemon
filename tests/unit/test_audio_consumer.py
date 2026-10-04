@@ -12,6 +12,7 @@ from local_stt.config import Config, VadConfig
 from local_stt.events import (
     Event,
     FlushDone,
+    MicrophoneSilent,
     RecordingFinished,
     RecordingLimitReached,
     RecordingStarted,
@@ -330,3 +331,76 @@ def test_new_vad_settings_apply_to_the_next_session() -> None:
     w.speech([S])
     w.drain()
     assert w.kinds() == ["SpeechStarted"]
+
+
+# --- audio errors (task 2.7; 05 §5.6) --------------------------------------------------------
+
+
+def overflow_frame(at: float, rid: int = 9, cid: int = 9) -> AudioFrame:
+    return AudioFrame(rid, cid, at, np.zeros(FRAME_SAMPLES, dtype=np.float32), overflow=True)
+
+
+def test_overflows_are_counted_and_warned_every_5_s(caplog: pytest.LogCaptureFixture) -> None:
+    w = World()
+    for at in (0.0, 1.0, 2.0, 5.0, 5.5):  # frames of any stream count
+        w.items.put(overflow_frame(at))
+    w.drain()
+    assert w.consumer.overflows == 5
+    warnings = [r.getMessage() for r in caplog.records if "overflow" in r.getMessage()]
+    assert warnings == [
+        "microphone input overflow: 1 frame(s) lost",
+        "microphone input overflow: 3 frame(s) lost",  # 1.0, 2.0, 5.0
+    ]
+    assert w.events == []
+
+
+def test_more_than_20_overflows_a_minute_is_an_overload(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    w = World()
+    for i in range(21):
+        w.items.put(overflow_frame(i * 2.0))  # 21 within 40 s
+    w.items.put(overflow_frame(45.0))  # still overloaded: warned at most once a minute
+    w.drain()
+    overloads = [r for r in caplog.records if "CPU cannot keep up" in r.getMessage()]
+    assert [r.getMessage() for r in overloads] == [
+        "21 input overflows in the last minute: the CPU cannot keep up"
+    ]
+
+
+def test_slow_overflows_are_not_an_overload(caplog: pytest.LogCaptureFixture) -> None:
+    w = World()
+    for i in range(30):
+        w.items.put(overflow_frame(i * 4.0))  # 15 a minute
+    w.drain()
+    assert "CPU cannot keep up" not in caplog.text
+
+
+def test_digital_silence_is_reported_once_per_session(caplog: pytest.LogCaptureFixture) -> None:
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    frames_5s = int(5.0 / FRAME_S) + 1
+    w.speech([0.0] * (frames_5s - 2))
+    w.drain()
+    assert not any(isinstance(e, MicrophoneSilent) for e in w.events)
+    w.speech([0.0] * 2)
+    w.drain()
+    assert [e for e in w.events if isinstance(e, MicrophoneSilent)] == [MicrophoneSilent(1, 1)]
+    w.consumer.reset_continuous(1, 2)  # reconnect: the same session is not reported again
+    w.speech([0.0] * frames_5s * 2, cid=2)
+    w.consumer.reset_continuous(2, 3)  # a new session is
+    w.speech([0.0] * frames_5s, rid=2, cid=3)
+    w.drain()
+    assert [e for e in w.events if isinstance(e, MicrophoneSilent)] == [
+        MicrophoneSilent(1, 1),
+        MicrophoneSilent(2, 3),
+    ]
+
+
+def test_room_noise_is_not_digital_silence() -> None:
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    frames_5s = int(5.0 / FRAME_S) + 1
+    w.speech([0.0] * (frames_5s - 5) + [0.0005] + [0.0] * 20)  # -66 dBFS breaks the run
+    w.drain()
+    assert not any(isinstance(e, MicrophoneSilent) for e in w.events)

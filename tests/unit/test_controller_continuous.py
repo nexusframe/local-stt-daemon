@@ -469,3 +469,27 @@ def test_finished_and_failed_jobs_are_published(
         (4, outcome, 1.5, 0.7, result.chars),
         (5, "failed", 3.0, None, 0),
     ]
+
+
+# --- audio errors (task 2.7; 05 §5.6) --------------------------------------------------------
+
+
+def test_muted_microphone_is_notified_once(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    c.handle(ev.MicrophoneSilent(rid, cid))
+    c.handle(ev.MicrophoneSilent(rid, cid))
+    c.handle(ev.MicrophoneSilent(rid + 1, cid))  # another session: stale
+    assert w.notifications() == ["Microphone appears to be muted"]
+    assert c.mode is Mode.CONTINUOUS  # dictation continues
+    c.handle(ev.ContinuousToggle())
+    w.calls.clear()
+    c2 = make(w)
+    rid2, cid2 = start(c2, w)
+    c2.handle(ev.ContinuousToggle())  # stopping: no notification any more
+    c2.handle(ev.MicrophoneSilent(rid2, cid2))
+    assert w.notifications() == []
+
+
+def test_status_reports_the_consumer_overflows(c: Controller, w: World) -> None:
+    w.overflows = 3
+    assert status_of(c)["audio"]["overflows"] == 3

@@ -1,9 +1,10 @@
 """Microphone capture through PortAudio -> ALSA `pipewire` PCM -> PipeWire (docs/05 §5.2).
 
 Task 0.4 scope: 16 kHz mono float32 frames of 512 samples, source selection through
-PIPEWIRE_NODE, and routing verification; task 1.8: device-loss events. Not yet implemented:
-in-process resampling when 16 kHz is rejected, silencing ALSA stderr messages, reconnects
-(task 2.7).
+PIPEWIRE_NODE, and routing verification; task 1.8: device-loss events (the Controller
+reconnects, task 2.3b); task 2.7: overflows are flagged on the frame, counted by the consumer.
+Not yet implemented: in-process resampling when 16 kHz is rejected, silencing ALSA stderr
+messages.
 """
 
 import json
@@ -37,6 +38,7 @@ class AudioFrame:
     capture_id: int
     started_at: float  # time.monotonic() of the first sample
     samples: NDArray[np.float32]  # mono, FRAME_SAMPLES long
+    overflow: bool = False  # input was lost before this frame (05 §5.6)
 
 
 @dataclass(frozen=True)
@@ -78,7 +80,6 @@ class AudioCapture:
         self._recording_id = 0
         self._capture_id = 0
         self._clock_offset = 0.0
-        self.overflows = 0
 
     @property
     def is_open(self) -> bool:
@@ -144,9 +145,7 @@ class AudioCapture:
     def _callback(
         self, indata: NDArray[np.float32], frames: int, time_info: Any, status: Any
     ) -> None:
-        # PortAudio thread: must not block.
-        if status.input_overflow:
-            self.overflows += 1
+        # PortAudio thread: must not block or log; the consumer counts overflows.
         adc_time = time_info.inputBufferAdcTime or (time_info.currentTime - frames / SAMPLE_RATE)
         self._frames.put_nowait(
             AudioFrame(
@@ -154,6 +153,7 @@ class AudioCapture:
                 capture_id=self._capture_id,
                 started_at=adc_time + self._clock_offset,
                 samples=indata[:, 0].copy(),
+                overflow=bool(status.input_overflow),
             )
         )
 

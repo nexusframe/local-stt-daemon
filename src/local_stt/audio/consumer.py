@@ -11,11 +11,15 @@ own Silero session (05 §5.4). The session is loaded on the Controller thread by
 """
 
 import logging
+import math
 import queue
 import threading
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+import numpy as np
 
 from local_stt.audio.capture import SAMPLE_RATE, AudioFrame
 from local_stt.audio.recorder import Recorder
@@ -26,6 +30,7 @@ from local_stt.events import (
     Event,
     FlushDone,
     FlushPurpose,
+    MicrophoneSilent,
     RecordingFinished,
     RecordingStarted,
     SegmentReady,
@@ -35,6 +40,13 @@ from local_stt.events import (
 from local_stt.interfaces import Cut
 
 log = logging.getLogger("local_stt.audio")
+
+# 05 §5.6
+OVERFLOW_WARNING_INTERVAL_S = 5.0
+OVERLOAD_WINDOW_S = 60.0
+OVERLOAD_OVERFLOWS = 20  # more than this per minute: the CPU cannot keep up
+SILENCE_DBFS = -80.0
+SILENCE_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -135,6 +147,14 @@ class AudioConsumer:
         # Consumer thread: the Segmenter and the stream it is fed from.
         self._segmenter: Segmenter | None = None
         self._stream: tuple[int, int] | None = None  # (recording_id, capture_id)
+        self._silent_since: float | None = None  # digital silence in the continuous stream
+        self._silence_reported: int | None = None  # session already reported as muted
+        # Overflows (05 §5.6): the total is read by the Controller for status.
+        self._overflows = 0
+        self._unreported = 0
+        self._last_overflow_warning: float | None = None
+        self._recent_overflows: deque[float] = deque()
+        self._last_overload_warning: float | None = None
 
     # --- AudioConsumerControl (called by the Controller) ---------------------------------
 
@@ -160,6 +180,10 @@ class AudioConsumer:
     @property
     def continuous_available(self) -> bool:
         return self._continuous_available
+
+    @property
+    def overflows(self) -> int:
+        return self._overflows
 
     def update_vad(self, config: Config) -> None:
         """Applies `vad.*` and `stt.models_dir` (at startup and at IDLE); the model is loaded
@@ -234,6 +258,7 @@ class AudioConsumer:
                 else:
                     self._segmenter.reset(session_id=rid)
                     self._stream = (rid, cid)
+                    self._silent_since = None
             case _Flush(rid, cid, operation_id, purpose, at):
                 self._on_flush(rid, cid, operation_id, purpose, at)
             case _SetVad(vad, config):
@@ -248,8 +273,11 @@ class AudioConsumer:
         return rec if rec is not None and rec.matches(recording_id, capture_id) else None
 
     def _on_frame(self, frame: AudioFrame) -> None:
+        if frame.overflow:
+            self._count_overflow(frame.started_at)
         ids = (frame.recording_id, frame.capture_id)
         if self._stream == ids and self._segmenter is not None:
+            self._check_silence(frame)
             self._post_outputs(self._segmenter.add(frame), *ids)
             return
         rec = self._current(frame.recording_id, frame.capture_id)
@@ -294,3 +322,43 @@ class AudioConsumer:
                     len(out.samples) / SAMPLE_RATE,
                 )
                 self._post(SegmentReady(rid, cid, out, operation_id))
+
+    def _count_overflow(self, at: float) -> None:
+        """05 §5.6: a WARNING with the count at most every 5 s; another one when more than
+        20 overflows fall within a minute (CPU overload)."""
+        self._overflows += 1
+        self._unreported += 1
+        last = self._last_overflow_warning
+        if last is None or at - last >= OVERFLOW_WARNING_INTERVAL_S:
+            log.warning("microphone input overflow: %d frame(s) lost", self._unreported)
+            self._unreported = 0
+            self._last_overflow_warning = at
+        recent = self._recent_overflows
+        recent.append(at)
+        while recent and at - recent[0] > OVERLOAD_WINDOW_S:
+            recent.popleft()
+        last_overload = self._last_overload_warning
+        if len(recent) > OVERLOAD_OVERFLOWS and (
+            last_overload is None or at - last_overload >= OVERLOAD_WINDOW_S
+        ):
+            log.warning(
+                "%d input overflows in the last minute: the CPU cannot keep up", len(recent)
+            )
+            self._last_overload_warning = at
+
+    def _check_silence(self, frame: AudioFrame) -> None:
+        """05 §5.6: RMS below -80 dBFS for 5 s → MicrophoneSilent, once per session."""
+        rid, cid = frame.recording_id, frame.capture_id
+        if self._silence_reported == rid:
+            return
+        rms = math.sqrt(float(np.mean(np.square(frame.samples, dtype=np.float64))))
+        if rms > 10 ** (SILENCE_DBFS / 20):
+            self._silent_since = None
+            return
+        if self._silent_since is None:
+            self._silent_since = frame.started_at
+        frame_end = frame.started_at + len(frame.samples) / SAMPLE_RATE
+        if frame_end - self._silent_since >= SILENCE_S:
+            log.warning("microphone appears to be muted (digital silence for %.0f s)", SILENCE_S)
+            self._silence_reported = rid
+            self._post(MicrophoneSilent(rid, cid))

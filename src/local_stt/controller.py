@@ -106,6 +106,7 @@ class _Continuous:
     reconnecting: bool = False
     reconnect_op: int | None = None  # the reconnect being run (flush, then ReconnectTicks)
     reconnect_flushing: bool = False  # its FlushDone has not arrived yet
+    muted_notified: bool = False  # "Microphone appears to be muted" shown (05 §5.6)
     stop_op: int | None = None  # the stop flush, once requested
 
 
@@ -209,6 +210,7 @@ class Controller:
             ev.SpeechStarted: self._on_speech,
             ev.SpeechEnded: self._on_speech,
             ev.SegmentReady: self._on_segment_ready,
+            ev.MicrophoneSilent: self._on_microphone_silent,
             ev.FlushDone: self._on_flush_done,
             ev.ReconnectTick: self._on_reconnect_tick,
             ev.AudioError: self._on_audio_error,
@@ -312,7 +314,7 @@ class Controller:
                 "device": cfg.audio.device,
                 "open": snap.mode is Mode.PTT_RECORDING
                 or (self._cont is not None and self._cont.opened),
-                "overflows": 0,  # counted from v0.2 (task 2.7)
+                "overflows": self._consumer.overflows,
             },
             "pipeline": {
                 "queued": snap.queued_jobs,
@@ -656,6 +658,17 @@ class Controller:
             self._feedback.play("stop")
             self._feedback.play("error")
             self._feedback.notify("continuous", "Transcription cannot keep up — dictation stopped")
+
+    def _on_microphone_silent(self, event: ev.MicrophoneSilent) -> None:
+        cont = self._cont
+        if not self._cont_matches(event.recording_id, event.capture_id) or cont is None:
+            return self._stale(event)
+        if cont.muted_notified or cont.stopping:
+            return None
+        cont.muted_notified = True
+        self._feedback.notify(
+            "audio", "Microphone appears to be muted", "Check the system sound settings."
+        )
 
     def _stop_continuous(self) -> None:
         """*Stop(flush)* (04 §4.3): the session ends at the matching `FlushDone(stop)`."""

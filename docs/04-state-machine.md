@@ -35,6 +35,7 @@ All sources send events to a single `controller.events` queue (`queue.Queue`). T
 | `RecordingFinished` | audio consumer (after the `finish_ptt` command) | `recording_id`, `capture_id`, `operation_id`, `AudioClip`, `cut` |
 | `SpeechStarted` / `SpeechEnded` | audio-consumer (Segmenter) | `recording_id`, `capture_id` |
 | `SegmentReady` | audio consumer (Segmenter) | `recording_id`, `capture_id`, `AudioSegment`; also `operation_id` during flush |
+| `MicrophoneSilent` | audio consumer (continuous; 05 §5.6) | `recording_id`, `capture_id` |
 | `FlushDone` | audio consumer (after the `flush` command) | `recording_id`, `capture_id`, `operation_id`, `purpose ∈ {stop, reconnect}` |
 | `AudioError` | AudioCapture / audio consumer | `recording_id`, `capture_id`, `kind ∈ {open_failed, device_lost}`, description |
 | `ReconnectTick` | controller timer | `recording_id`, `operation_id`, attempt number |
@@ -123,6 +124,7 @@ The silence gate and VAD trimming do **not** run in the Controller. PipelineWork
 | `ReconnectTick(n)` | matching recording and operation, `reconnecting`, not `stopping` | assign a new `capture_id`; request an audio-consumer buffer/VAD reset (preserve `session_id` and the next `seq`); attempt `capture.open(ids)`: success → `reconnecting = false`, INFO; failure with `n < 3` → retry in 1 s; third failure → *Stop(flush)*, notification, and `stop` + `error` sounds | CONTINUOUS / → IDLE after `FlushDone(stop)` |
 | `FlushDone(stop)` | matching identifiers and `stopping` | end the session | IDLE |
 | `AudioError(open_failed)` | during mode startup (`CaptureOpenDue`) | `error` sound, notification, reject with `audio_error` | IDLE |
+| `MicrophoneSilent` | matching identifiers, not `stopping`, first in the session | “Microphone appears to be muted” notification (05 §5.6); **mode continues** | CONTINUOUS |
 | `JobFailed` | — | notification (4.4); **mode continues** | CONTINUOUS |
 
 *Stop(flush)* works as follows:

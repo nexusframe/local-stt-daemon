@@ -183,6 +183,8 @@ PTT: v0.1 (error → recording discarded). Continuous: v0.2.
 | Overflow | `status.input_overflow` | counter, WARNING every 5 s with the count; at > 20 overflows/min, a WARNING about CPU overload |
 | Digital silence (microphone muted in the system) | RMS < -80 dBFS for 5 s in continuous mode | one “Microphone appears to be muted” notification per session (`errors` level) |
 
+*Implementation (task 2.7).* The PortAudio callback must not block or log, so it only flags the frame (`AudioFrame.overflow`); the audio consumer counts overflows of every stream, logs at most one WARNING per 5 s with the number of frames lost since the previous one, and a separate WARNING (at most once a minute) when more than 20 fall within the last 60 s. The total since startup is `status` → `audio.overflows`. Digital silence is measured per 32 ms frame of the continuous stream; the consumer posts `MicrophoneSilent` once per session (a reconnect keeps the session) and the Controller shows the notification unless the session is stopping. Dictation continues.
+
 ## 5.7 What we do not do
 
 - We do not write audio to disk (except `record-corpus` for benchmarking, when explicitly requested).

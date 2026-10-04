@@ -104,6 +104,14 @@ class FlushDone:
 
 
 @dataclass(frozen=True)
+class MicrophoneSilent:
+    """Digital silence for 5 s in continuous mode: the microphone is probably muted (05 §5.6)."""
+
+    recording_id: int
+    capture_id: int
+
+
+@dataclass(frozen=True)
 class CaptureOpenDue:
     """Controller timer: open the microphone 150 ms after continuous mode starts (10 §10.6)."""
 
@@ -200,6 +208,7 @@ Event = (
     | SpeechEnded
     | SegmentReady
     | FlushDone
+    | MicrophoneSilent
     | CaptureOpenDue
     | ReconnectTick
     | AudioError

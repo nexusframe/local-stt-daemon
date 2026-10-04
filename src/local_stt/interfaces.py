@@ -189,6 +189,10 @@ class AudioConsumerControl(Protocol):
     def discard(self, recording_id: int, capture_id: int) -> None: ...
 
     @property
+    def overflows(self) -> int:
+        """Input overflows since startup (05 §5.6), for `status`."""
+
+    @property
     def continuous_available(self) -> bool:
         """The Segmenter has a VAD model: `vad.enabled` and Silero loaded (05 §5.5)."""
 

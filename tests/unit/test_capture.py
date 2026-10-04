@@ -1,5 +1,7 @@
 import queue
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from local_stt import interfaces
@@ -79,3 +81,17 @@ def test_open_matches_the_controller_interface(monkeypatch: pytest.MonkeyPatch) 
     capture = AudioCapture(queue.SimpleQueue())
     with pytest.raises(interfaces.AudioOpenError, match="Device unavailable"):
         capture.open(3, 4)
+
+
+def test_callback_flags_overflows_on_the_frame() -> None:
+    frames: queue.SimpleQueue[capture_mod.AudioFrame] = queue.SimpleQueue()
+    capture = AudioCapture(frames)
+    data = np.zeros((capture_mod.FRAME_SAMPLES, 1), dtype=np.float32)
+    time_info = SimpleNamespace(inputBufferAdcTime=1.0, currentTime=1.1)
+    capture._callback(
+        data, capture_mod.FRAME_SAMPLES, time_info, SimpleNamespace(input_overflow=False)
+    )
+    capture._callback(
+        data, capture_mod.FRAME_SAMPLES, time_info, SimpleNamespace(input_overflow=True)
+    )
+    assert [frames.get().overflow, frames.get().overflow] == [False, True]
