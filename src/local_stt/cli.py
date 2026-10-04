@@ -71,9 +71,28 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--quick", action="store_true", help="stage 1 only (medium group)")
     bench.add_argument("--dataset", type=Path, default=Path.home() / "stt-corpus")
     bench.add_argument("--models", help="comma-separated (default: all six benchmark models)")
-    bench.add_argument("--threads", default="4,8", help="comma-separated (default: 4,8)")
+    bench.add_argument("--threads", help="comma-separated (default: 4,8; --soak: stt.threads)")
     bench.add_argument(
-        "--audio-ctx", default="0,1000", help="fixed audio_ctx values, 0 = full window (06 §6.7)"
+        "--audio-ctx",
+        help="fixed audio_ctx values, 0 = full window (06 §6.7; default: 0,1000; "
+        "--soak: stt.audio_ctx)",
+    )
+    bench.add_argument(
+        "--soak",
+        action="store_true",
+        help="continuous mode in a loop over long/ (13 §13.4 stage 3)",
+    )
+    bench.add_argument("--model", help="--soak: the model (default: stt.model)")
+    bench.add_argument(
+        "--duration", type=float, default=600.0, help="--soak: seconds (default 600)"
+    )
+    bench.add_argument(
+        "--long", type=Path, help="--soak: the recording (default: DATASET/long/001.wav)"
+    )
+    bench.add_argument(
+        "--words",
+        type=Path,
+        help="--soak: word reference (verified words.json or whisper-cli -ojf output)",
     )
     bench.add_argument("--repeats", type=int, default=3)
     bench.add_argument("--resume", type=Path, metavar="RUN_DIR", help="continue an interrupted run")
@@ -204,6 +223,37 @@ def _transcribe(
     )
 
 
+def _run_soak(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from local_stt.bench import runner, soak
+    from local_stt.config import Config
+
+    stt = Config().stt
+    try:
+        threads = int(args.threads) if args.threads else stt.threads
+        audio_ctx = int(args.audio_ctx) if args.audio_ctx is not None else stt.audio_ctx
+    except ValueError:
+        parser.error("--soak takes one --threads and one --audio-ctx value")
+    dataset = args.dataset.expanduser()
+    try:
+        result = soak.run_soak(
+            args.long or dataset / "long" / "001.wav",
+            args.resume or runner.default_out_dir(),
+            model=args.model or stt.model,
+            threads=threads,
+            audio_ctx=audio_ctx,
+            models_dir=stt.models_dir,
+            duration_s=args.duration,
+            words_path=args.words,
+            allow_concurrent=args.allow_concurrent,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(soak.format_summary(result))
+    print(f"results: {result['path']}")
+    return 0
+
+
 def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from local_stt.bench import report, runner
 
@@ -220,9 +270,11 @@ def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
             print(markdown, end="")
         return 0
 
+    if args.soak:
+        return _run_soak(args, parser)
     try:
-        threads = [int(t) for t in args.threads.split(",")]
-        audio_ctx = [int(v) for v in args.audio_ctx.split(",")]
+        threads = [int(t) for t in (args.threads or "4,8").split(",")]
+        audio_ctx = [int(v) for v in (args.audio_ctx or "0,1000").split(",")]
     except ValueError:
         parser.error("--threads and --audio-ctx take comma-separated integers")
     models = args.models.split(",") if args.models else list(runner.DEFAULT_MODELS)

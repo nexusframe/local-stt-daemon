@@ -154,6 +154,11 @@ class SystemSampler:
                 self._freqs.append(sum(freqs) / len(freqs))
             self._stop.wait(self._interval_s)
 
+    @property
+    def freqs_mhz(self) -> list[float]:
+        """Mean CPU frequency of every sample so far (soak test: sustained drops)."""
+        return list(self._freqs)
+
     def summary(self) -> dict[str, float | None]:
         return {
             "temp_max_c": max(self._temps) if self._temps else None,
