@@ -74,6 +74,31 @@ def speech_frames(
     return first, last + 1
 
 
+class VadModel:
+    """A `SileroVad` for `vad.*` and `stt.models_dir` (05 §5.3, §5.5): None with
+    `vad.enabled = false` or when the model cannot be loaded; reloaded only when its path
+    changes. Not thread-safe: one owner calls `update()`, and each owner has its own session
+    (an ONNX session is stateful)."""
+
+    def __init__(self, load: Callable[[Path], Vad] = SileroVad):
+        self._load = load
+        self._vad: Vad | None = None
+        self._path: Path | None = None
+
+    def update(self, config: Config) -> Vad | None:
+        path = config.vad_model_path
+        if not config.vad.enabled:
+            self._vad, self._path = None, None
+            return None
+        if self._vad is None or path != self._path:
+            try:
+                self._vad, self._path = self._load(path), path
+            except Exception as e:  # onnxruntime raises its own types; keep the daemon up
+                log.error("cannot load the VAD model %s: %s", path, e)
+                self._vad, self._path = None, None
+        return self._vad
+
+
 class VadTrimmer:
     """The PTT speech gate with VAD (05 §5.3): a recording → its speech with `speech_pad_ms`
     on both sides, or None for no speech.
@@ -84,10 +109,9 @@ class VadTrimmer:
     """
 
     def __init__(self, config: Config, load: Callable[[Path], Vad] = SileroVad):
-        self._load = load
+        self._model = VadModel(load)
         self._lock = threading.Lock()
         self._vad: Vad | None = None
-        self._path: Path | None = None
         self._config: VadConfig = config.vad
         self.update(config)
 
@@ -99,21 +123,11 @@ class VadTrimmer:
 
     def update(self, config: Config) -> None:
         """Applies `vad.*` and `stt.models_dir`; reloads the model only if its path changed."""
-        path = config.vad_model_path
+        vad = self._model.update(config)  # outside the lock: loading may take a while
+        if config.vad.enabled and vad is None:
+            log.error("VAD unavailable for PTT; using the RMS gate")
         with self._lock:
-            vad, current = self._vad, self._path
-        if not config.vad.enabled:
-            vad, path_loaded = None, current
-        elif vad is None or path != current:
-            try:
-                vad, path_loaded = self._load(path), path
-            except Exception as e:  # onnxruntime raises its own types; keep the daemon up
-                log.error("cannot load the VAD model %s: %s; using the RMS gate", path, e)
-                vad, path_loaded = None, None
-        else:
-            path_loaded = current
-        with self._lock:
-            self._vad, self._path, self._config = vad, path_loaded, config.vad
+            self._vad, self._config = vad, config.vad
 
     def trim(self, audio: NDArray[np.float32]) -> NDArray[np.float32] | None:
         with self._lock:

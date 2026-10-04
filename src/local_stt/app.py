@@ -282,6 +282,7 @@ class Daemon:
             lambda rid, cid, why: post(ev.AudioError(rid, cid, "device_lost", why)),
         )
         self.consumer = AudioConsumer(self.frames, post, max_duration_s=config.ptt.max_duration_s)
+        self.consumer.update_vad(config)  # the Segmenter's own Silero session (05 §5.4)
         self.engine = SwitchableEngine(make_engine(config, pre.request_path))
         self.monitor = EngineMonitor(
             self.engine.health, post, startup_timeout_s=config.stt.startup_timeout_s
@@ -327,7 +328,12 @@ class Daemon:
                 lambda c: self.monitor.set_startup_timeout(c.stt.startup_timeout_s),
             ],
             # the injectors wait for the PTT key's release, so they follow hotkeys.* too
-            at_idle=[set_audio_device, self.trimmer.update, self.injector.update_config],
+            at_idle=[
+                set_audio_device,
+                self.trimmer.update,
+                self.consumer.update_vad,
+                self.injector.update_config,
+            ],
             hotkeys=self.hotkeys,
             switch_server=switch_server,
         )

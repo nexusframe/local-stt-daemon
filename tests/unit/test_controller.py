@@ -97,6 +97,18 @@ class Consumer:
     def discard(self, recording_id: int, capture_id: int) -> None:
         self.w.calls.append(("consumer.discard", recording_id, capture_id))
 
+    @property
+    def continuous_available(self) -> bool:
+        return True
+
+    def reset_continuous(self, recording_id: int, capture_id: int) -> None:
+        self.w.calls.append(("consumer.reset_continuous", recording_id, capture_id))
+
+    def flush(
+        self, recording_id: int, capture_id: int, operation_id: int, purpose: str, at: float
+    ) -> None:
+        self.w.calls.append(("consumer.flush", recording_id, capture_id, operation_id, purpose, at))
+
 
 class Pipeline:
     def __init__(self, world: World) -> None:

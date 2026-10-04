@@ -1,7 +1,8 @@
 """Events delivered to the Controller's queue (docs/04-state-machine.md §4.2).
 
-Continuous-mode events (`SpeechStarted`, `SegmentReady`, `FlushDone`, `ReconnectTick`,
-`CaptureOpenDue`) are added with continuous mode in v0.2 (task 2.3).
+Continuous-mode events arrive in v0.2: the audio-consumer ones (`SpeechStarted`,
+`SpeechEnded`, `SegmentReady`, `FlushDone`) in task 2.3a, the Controller's timers
+(`CaptureOpenDue`, `ReconnectTick`) in task 2.3b.
 """
 
 from collections.abc import Mapping
@@ -9,7 +10,14 @@ from concurrent.futures import Future
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from local_stt.interfaces import AudioClip, Cut, EngineHealth, InjectResult, JobSource
+from local_stt.interfaces import (
+    AudioClip,
+    AudioSegment,
+    Cut,
+    EngineHealth,
+    InjectResult,
+    JobSource,
+)
 
 # IPC response future; an event without one comes from a hotkey or a signal.
 Reply = Future[dict[str, Any]] | None
@@ -62,6 +70,37 @@ class RecordingFinished:
     operation_id: int
     clip: AudioClip = field(compare=False)
     cut: Cut
+
+
+@dataclass(frozen=True)
+class SpeechStarted:
+    recording_id: int
+    capture_id: int
+
+
+@dataclass(frozen=True)
+class SpeechEnded:
+    recording_id: int
+    capture_id: int
+
+
+@dataclass(frozen=True)
+class SegmentReady:
+    recording_id: int
+    capture_id: int
+    segment: AudioSegment = field(compare=False)
+    operation_id: int | None = None  # set when the segment comes from a flush
+
+
+FlushPurpose = Literal["stop", "reconnect"]
+
+
+@dataclass(frozen=True)
+class FlushDone:
+    recording_id: int
+    capture_id: int
+    operation_id: int
+    purpose: FlushPurpose
 
 
 @dataclass(frozen=True)
@@ -141,6 +180,10 @@ Event = (
     | RecordingStarted
     | RecordingLimitReached
     | RecordingFinished
+    | SpeechStarted
+    | SpeechEnded
+    | SegmentReady
+    | FlushDone
     | AudioError
     | ServerRestartDone
     | JobStarted

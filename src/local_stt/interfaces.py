@@ -188,6 +188,25 @@ class AudioConsumerControl(Protocol):
 
     def discard(self, recording_id: int, capture_id: int) -> None: ...
 
+    @property
+    def continuous_available(self) -> bool:
+        """The Segmenter has a VAD model: `vad.enabled` and Silero loaded (05 §5.5)."""
+
+    def reset_continuous(self, recording_id: int, capture_id: int) -> None:
+        """Starts feeding this stream to the Segmenter with clean buffers and VAD state; the
+        same `recording_id` (a reconnect) keeps the session's `seq` numbering."""
+
+    def flush(
+        self,
+        recording_id: int,
+        capture_id: int,
+        operation_id: int,
+        purpose: Literal["stop", "reconnect"],
+        at: float,
+    ) -> None:
+        """Ends the utterance in progress (`SegmentReady(cut="flush")`), then `FlushDone`.
+        `at` is the flush request time, the segment's `ended_at`."""
+
 
 class PipelineControl(Protocol):
     @property

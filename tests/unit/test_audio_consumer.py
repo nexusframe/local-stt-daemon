@@ -1,11 +1,22 @@
 import queue
 import threading
+from pathlib import Path
 
 import numpy as np
+import pytest
+from numpy.typing import NDArray
 
 from local_stt.audio.capture import FRAME_SAMPLES, SAMPLE_RATE, AudioFrame
 from local_stt.audio.consumer import AudioConsumer, Item
-from local_stt.events import Event, RecordingFinished, RecordingLimitReached, RecordingStarted
+from local_stt.config import Config, VadConfig
+from local_stt.events import (
+    Event,
+    FlushDone,
+    RecordingFinished,
+    RecordingLimitReached,
+    RecordingStarted,
+    SegmentReady,
+)
 
 FRAME_S = FRAME_SAMPLES / SAMPLE_RATE
 T0 = 50.0
@@ -183,3 +194,139 @@ def test_thread_processes_queue_and_stops() -> None:
     assert isinstance(events.get(timeout=5), RecordingFinished)
     consumer.stop()
     assert not any(t.name == "audio-consumer" for t in threading.enumerate())
+
+
+# --- continuous mode (task 2.3a; 05 §5.5, 04 §4.3) -------------------------------------------
+
+S, Q = 0.9, 0.1  # speech / silence probability
+
+
+class FirstSampleVad:
+    """Returns the frame's first sample as its speech probability."""
+
+    def reset(self) -> None:
+        pass
+
+    def __call__(self, frame: NDArray[np.float32]) -> float:
+        return float(frame[0])
+
+
+class ContinuousWorld(World):
+    def __init__(self) -> None:
+        self.items = queue.SimpleQueue()
+        self.events = []
+        self.loaded: list[Path] = []
+        self.consumer = AudioConsumer(
+            self.items, self.events.append, max_duration_s=120, load_vad=self.load
+        )
+        self.consumer.update_vad(Config())
+        self.next = 0
+
+    def load(self, path: Path) -> FirstSampleVad:
+        self.loaded.append(path)
+        return FirstSampleVad()
+
+    def speech(self, probabilities: list[float], rid: int = 1, cid: int = 1) -> None:
+        for p in probabilities:
+            samples = np.full(FRAME_SAMPLES, p, dtype=np.float32)
+            self.items.put(AudioFrame(rid, cid, T0 + self.next * FRAME_S, samples))
+            self.next += 1
+
+    def kinds(self) -> list[str]:
+        return [type(e).__name__ for e in self.events]
+
+    def segments(self) -> list[SegmentReady]:
+        return [e for e in self.events if isinstance(e, SegmentReady)]
+
+
+def test_vad_availability_follows_the_config_and_the_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    w = ContinuousWorld()
+    assert w.consumer.continuous_available and len(w.loaded) == 1
+    w.consumer.update_vad(Config(vad=VadConfig(enabled=False)))
+    assert not w.consumer.continuous_available
+
+    def broken(path: Path) -> FirstSampleVad:
+        raise RuntimeError("bad model")
+
+    consumer = AudioConsumer(queue.SimpleQueue(), print, max_duration_s=120, load_vad=broken)
+    consumer.update_vad(Config())
+    assert not consumer.continuous_available
+    assert "continuous dictation cannot start" in caplog.text
+
+
+def test_continuous_session_emits_speech_and_segments() -> None:
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    w.speech([Q] * 5 + [S] * 10 + [Q] * 22)
+    w.drain()
+    assert w.kinds() == ["SpeechStarted", "SegmentReady", "SpeechEnded"]
+    (ready,) = w.segments()
+    assert (ready.recording_id, ready.capture_id, ready.operation_id) == (1, 1, None)
+    assert (ready.segment.session_id, ready.segment.seq, ready.segment.cut) == (1, 1, "silence")
+    assert all(not isinstance(e, RecordingStarted) for e in w.events)
+
+
+def test_stop_flush_emits_the_utterance_then_flush_done() -> None:
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    w.speech([S] * 10)
+    w.consumer.flush(1, 1, operation_id=5, purpose="stop", at=77.0)
+    w.speech([S] * 30)  # a stopped stream feeds nothing
+    w.drain()
+    assert w.kinds() == ["SpeechStarted", "SegmentReady", "SpeechEnded", "FlushDone"]
+    (ready,) = w.segments()
+    assert (ready.operation_id, ready.segment.cut, ready.segment.ended_at) == (5, "flush", 77.0)
+    assert w.events[-1] == FlushDone(1, 1, 5, "stop")
+
+
+def test_flush_is_confirmed_even_without_a_stream() -> None:
+    w = ContinuousWorld()
+    w.consumer.flush(3, 4, operation_id=9, purpose="stop", at=1.0)  # stop before open
+    w.drain()
+    assert w.events == [FlushDone(3, 4, 9, "stop")]
+
+
+def test_reconnect_keeps_the_session_numbering_and_drops_the_old_stream() -> None:
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    w.speech([S] * 10 + [Q] * 22)
+    w.consumer.flush(1, 1, operation_id=2, purpose="reconnect", at=1.0)
+    w.consumer.reset_continuous(1, 2)
+    w.speech([S] * 10 + [Q] * 22, cid=1)  # late frames of the lost stream
+    w.speech([S] * 10 + [Q] * 22, cid=2)
+    w.drain()
+    assert [(e.capture_id, e.segment.seq) for e in w.segments()] == [(1, 1), (2, 2)]
+    assert FlushDone(1, 1, 2, "reconnect") in w.events
+
+
+def test_discard_stops_the_session_without_segments() -> None:
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    w.speech([S] * 10)
+    w.consumer.discard(1, 1)
+    w.speech([Q] * 30)
+    w.consumer.discard(1, 1)  # repeated: nothing to do
+    w.drain()
+    assert w.kinds() == ["SpeechStarted"]
+
+
+def test_without_vad_reset_feeds_nothing(caplog: pytest.LogCaptureFixture) -> None:
+    w = ContinuousWorld()
+    w.consumer.update_vad(Config(vad=VadConfig(enabled=False)))
+    w.consumer.reset_continuous(1, 1)
+    w.speech([S] * 40)
+    w.drain()
+    assert w.events == []
+    assert "without a VAD model" in caplog.text
+
+
+def test_new_vad_settings_apply_to_the_next_session() -> None:
+    w = ContinuousWorld()
+    w.consumer.update_vad(Config(vad=VadConfig(min_speech_ms=32)))
+    assert len(w.loaded) == 1  # same model path: no reload
+    w.consumer.reset_continuous(1, 1)
+    w.speech([S])
+    w.drain()
+    assert w.kinds() == ["SpeechStarted"]
