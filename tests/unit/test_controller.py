@@ -719,6 +719,20 @@ def test_reload_server_keys_restart_when_idle_and_empty(c: Controller, w: World)
     assert "Failed to start engine with new config" not in w.notifications()
 
 
+def test_restarted_server_gets_the_effective_config(c: Controller, w: World) -> None:
+    # R3: use_server re-applies the live components (the pipeline sends stt.language), so it
+    # gets the server keys of the restart and the live keys reloaded while it was running.
+    w.next_config = with_changes(Config(), stt={"language": "en"})
+    c.handle(ev.ReloadRequested())
+    w.next_config = with_changes(Config(), stt={"language": "en", "vocabulary_prompt": "x"})
+    c.handle(ev.ReloadRequested())
+    w.calls.clear()
+    c.handle(ev.ServerRestartDone(0))
+    expected = with_changes(Config(), stt={"language": "en", "vocabulary_prompt": "x"})
+    assert w.calls == [("reload.use_server", expected)]
+    assert c.config == expected
+
+
 def test_reload_server_restart_waits_for_queue_and_recording(c: Controller, w: World) -> None:
     job = finish_job(c, w)
     press(c, w, at=110.0)

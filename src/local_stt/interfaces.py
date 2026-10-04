@@ -255,7 +255,9 @@ class ReloadTarget(Protocol):
         ServerRestartDone; must not block."""
 
     def use_server(self, config: "Config") -> None:
-        """Points the STT client and EngineMonitor at the restarted server."""
+        """Points the STT client and EngineMonitor at the restarted server and re-applies
+        the live components, which also read server keys (the pipeline sends `stt.language`).
+        `config` is the controller's effective config, not the one the restart began with."""
 
 
 # --- hotkeys (07 §7.6) ---------------------------------------------------------------------

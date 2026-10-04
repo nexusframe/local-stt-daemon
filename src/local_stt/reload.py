@@ -98,3 +98,5 @@ class ComponentReloader:
 
     def use_server(self, config: Config) -> None:
         self._switch_server(config)
+        # Live components read server keys too (the pipeline sends stt.language).
+        self.apply_live(config)

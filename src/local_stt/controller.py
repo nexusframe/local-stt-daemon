@@ -948,8 +948,16 @@ class Controller:
         new, self._restarting = self._restarting, None
         if new is None:
             return self._stale(event)
-        self._reload_target.use_server(new)
-        self.config = dataclasses.replace(self.config, stt=new.stt)
+        # Only the server keys come from `new`: live stt keys may have been reloaded since.
+        server_stt = {
+            f.name: getattr(new.stt, f.name)
+            for f in dataclasses.fields(new.stt)
+            if f"stt.{f.name}" in SERVER_KEYS
+        }
+        self.config = dataclasses.replace(
+            self.config, stt=dataclasses.replace(self.config.stt, **server_stt)
+        )
+        self._reload_target.use_server(self.config)
         self.engine = EngineHealth.STARTING  # the pipeline resumes on READY
         if event.exit_code != 0:
             self._restart_failed(f"systemctl exited with code {event.exit_code}")

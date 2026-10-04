@@ -60,7 +60,14 @@ def test_live_and_idle_callbacks(tmp_path: Path) -> None:
     env.reloader.apply_live(config)
     problems = env.reloader.apply_at_idle(config)
     env.reloader.use_server(config)
-    assert env.calls == [("live1", config), ("live2", config), ("idle", config), ("switch", config)]
+    assert env.calls == [
+        ("live1", config),
+        ("live2", config),
+        ("idle", config),
+        ("switch", config),
+        ("live1", config),  # R3: the pipeline must see the new stt.language
+        ("live2", config),
+    ]
     assert env.hotkeys.applied == [config.hotkeys]
     assert problems == [HotkeyProblem("push_to_talk", "Control_R", "taken")]
 
