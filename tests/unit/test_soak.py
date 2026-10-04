@@ -139,7 +139,7 @@ def test_summary_verdicts() -> None:
     assert not result["verdict"]["completed"]
     assert not result["verdict"]["pass"]
     text = soak.format_summary({**result, "config": CONFIG, "system": {"power_source": "AC"}})
-    assert text.startswith("soak small-q8_0 t=4 audio_ctx=1000 on AC: FAIL")
+    assert text.startswith("soak small-q8_0 t=4 audio_ctx=1000 on AC (None): FAIL")
     assert "stopped early" in text
 
 

@@ -181,6 +181,7 @@ def system_info(dataset: Path) -> dict[str, Any]:
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "cpu": cpu.group(1) if cpu else None,
         "governor": read("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"),
+        "platform_profile": read("/sys/firmware/acpi/platform_profile"),
         "power_source": ("AC" if "1" in ac else "battery") if ac else None,
         "kernel": platform.release(),
         "whisper_cpp": read(str(ws.DATA_DIR / "bin/.whisper-tag")),

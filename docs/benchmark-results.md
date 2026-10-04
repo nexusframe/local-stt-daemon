@@ -72,6 +72,23 @@ Excluded configurations:
 | `small-q5_1` | 6965 |
 | `medium-q5_0` | 21549 |
 
+## Stage 3 — soak test, continuous mode (2026-10-04, task 2.9)
+
+`local-stt bench --soak --words ~/stt-corpus/long/001.whisper-large-v3-turbo.json` with the production default `small-q8_0`, 4 threads, `audio_ctx = 1000`: corpus A `long/001.wav` (497 s, the user reading `long_pl.txt`) looped for 10 min through the daemon's own chain (13 §13.4). Raw results: `~/.local/share/local-stt/bench/soak-2026-10-04/`.
+
+**No battery on the reference machine** (user decision 2026-10-04): the battery run of 13 §13.5 is replaced by the `power-saver` platform profile on AC (firmware profile `quiet`).
+
+| Run | Conditions | RTF (≤ 0.5) | queue max | queue slope, final 5 min (≤ 0.05 s/min) | freq drop (≤ 30 %) | temp max | VAD, N4 (≤ 5 %) | Verdict |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 1 | `performance`, after another load; browsers and two VS Code windows open | 0.56 | 17.2 s | +0.108 | 15 % | 100 °C | 2.1 % | FAIL (RTF, slope) |
+| 2 | `power-saver` (`quiet`), 5 min after run 1 | 1.99 | 64.2 s | — | — | 59 °C | 5.6 % | FAIL: backlog stop after 3.5 min |
+| 3 | `performance`, cooled to 44 °C, browsers closed (load average 0.58, VS Code 6 % CPU) | **0.33** | 14.6 s | −0.115 | 27 % | 99 °C | 1.6 % | **PASS** |
+
+- **Continuous mode with `small-q8_0` passes on an unloaded machine** (run 3): no separate `stt.continuous_model` is needed. The margin is thin on CPU frequency (27 % sustained drop against the 30 % limit at 99 °C), and run 1 shows that background load (browsers, editors) is enough to fail it.
+- **`power-saver` does not sustain continuous mode** with this model: RTF ≈ 2, the queue reached `continuous.max_backlog_s` (60 s) and the daemon stopped dictation as designed (04 §4.3, *Backlog*). Its VAD share (5.6 %) also exceeds N4; the RMS pre-filter of 05 §5.4 is not implemented, since N4 holds on `performance`.
+- Segmentation was identical in runs 1 and 3 (74 segments: 63 `silence`, 10 `max_length` = 13.5 %, 1 `flush` at the stop), as expected from the deterministic Segmenter.
+- **Incorrect cuts: not measured meaningfully.** The automatic reference (whisper-cli `large-v3-turbo-q5_0`, token timestamps combined into words) puts no gap between 459 of 765 adjacent words and stretches words over pauses (e.g. “badanie” 1.66 s), so cuts in pauses count as inside a word; the reported 33/73 is an artefact. A manually verified `long/001.words.json` (13 §13.3) is still needed for this metric.
+
 ## History — interim public corpus B (2026-09-17)
 
 Run `2026-09-17T16-28-19Z` on `/home/leto/stt-corpus-public` (13.2B: FLEURS + Wolne Lektury audiobook, other speakers, studio-like audio, no `short` group). It produced the provisional default that corpus A later confirmed. Notes from that run:

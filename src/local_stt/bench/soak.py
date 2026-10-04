@@ -367,9 +367,11 @@ def run_soak(
         "words": str(words_path) if words_path else None,
         "words_verified": verified,
     }
-    result["system"] = {k: info[k] for k in ("timestamp", "cpu", "governor", "power_source")}
+    keys = ("timestamp", "cpu", "governor", "platform_profile", "power_source")
+    result["system"] = {k: info[k] for k in keys}
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = f"soak-{model}-t{threads}-ctx{audio_ctx}-{info['power_source'] or 'unknown'}.json"
+    power = f"{info['power_source'] or 'unknown'}-{info['platform_profile'] or 'unknown'}"
+    name = f"soak-{model}-t{threads}-ctx{audio_ctx}-{power}.json"
     path = out_dir / re.sub(r"[^A-Za-z0-9._-]", "_", name)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     result["path"] = str(path)
@@ -466,7 +468,8 @@ def format_summary(result: dict[str, Any]) -> str:
     )
     lines = [
         f"soak {c['model']} t={c['threads']} audio_ctx={c['audio_ctx']} "
-        f"on {result['system']['power_source']}: {'PASS' if v['pass'] else 'FAIL'}",
+        f"on {result['system']['power_source']} ({result['system'].get('platform_profile')}): "
+        f"{'PASS' if v['pass'] else 'FAIL'}",
         f"  RTF {fmt(result['rtf'], '.2f')} (≤ {MAX_RTF})  "
         f"queue max {result['queue']['max_s']:.1f} s, "
         f"tail slope {result['queue']['tail_slope_s_per_min']:+.3f} s/min (≤ {MAX_QUEUE_SLOPE})",
