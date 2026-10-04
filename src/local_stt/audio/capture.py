@@ -124,10 +124,14 @@ class AudioCapture:
                 callback=self._callback,
                 finished_callback=self._finished,
             )
+        except sd.PortAudioError as e:
+            raise AudioOpenError(f"cannot open microphone ({self.device}): {e}") from e
+        try:
             # PortAudio stream time -> time.monotonic() offset, fixed for this stream.
             self._clock_offset = time.monotonic() - stream.time
             stream.start()
         except sd.PortAudioError as e:
+            _close_quietly(stream)
             raise AudioOpenError(f"cannot open microphone ({self.device}): {e}") from e
         self._closing.clear()
         self._last_frame_at = time.monotonic()
@@ -154,9 +158,10 @@ class AudioCapture:
                 stream.abort()
             else:
                 stream.stop()
-            stream.close()
         except sd.PortAudioError as e:  # the device is already gone
-            log.debug("closing the microphone stream: %s", e)
+            log.debug("stopping the microphone stream: %s", e)
+        finally:
+            _close_quietly(stream)
 
     def _finished(self) -> None:
         # PortAudio thread: the stream ended. Without close() the device was lost (05 §5.2).
@@ -239,6 +244,14 @@ def resolve_routed_source(
             source: str | None = names.get(output.get("source"))
             return source
     return None
+
+
+def _close_quietly(stream: sd.InputStream) -> None:
+    """Releases the PortAudio stream even after a failed start or stop."""
+    try:
+        stream.close()
+    except sd.PortAudioError as e:  # the device is already gone
+        log.debug("closing the microphone stream: %s", e)
 
 
 def _pcm_name() -> str:

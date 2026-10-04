@@ -1,6 +1,7 @@
 import queue
 import time
 from types import SimpleNamespace
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -82,6 +83,48 @@ def test_open_matches_the_controller_interface(monkeypatch: pytest.MonkeyPatch) 
     capture = AudioCapture(queue.SimpleQueue())
     with pytest.raises(interfaces.AudioOpenError, match="Device unavailable"):
         capture.open(3, 4)
+
+
+class FailingStream(FakeStream):
+    """Records close(); start() or stop() fails like a device that vanished (R4)."""
+
+    instances: ClassVar[list["FailingStream"]] = []
+    fail_on = "start"
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.closed = False
+        FailingStream.instances.append(self)
+
+    def start(self) -> None:
+        if self.fail_on == "start":
+            raise capture_mod.sd.PortAudioError("Device unavailable")
+
+    def stop(self) -> None:
+        if self.fail_on == "stop":
+            raise capture_mod.sd.PortAudioError("Device unavailable")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.parametrize("fail_on", ["start", "stop"])
+def test_stream_is_closed_after_a_failed_start_or_stop(
+    monkeypatch: pytest.MonkeyPatch, fail_on: str
+) -> None:
+    monkeypatch.setattr(capture_mod, "_pcm_name", lambda: "pipewire")
+    monkeypatch.setattr(capture_mod.sd, "InputStream", FailingStream)
+    monkeypatch.setattr(FailingStream, "instances", [])
+    monkeypatch.setattr(FailingStream, "fail_on", fail_on)
+    capture = AudioCapture(queue.SimpleQueue())
+    if fail_on == "start":
+        with pytest.raises(interfaces.AudioOpenError, match="Device unavailable"):
+            capture.open(1, 1)
+    else:
+        capture.open(1, 1)
+        capture.close()
+    assert [s.closed for s in FailingStream.instances] == [True]
+    assert capture._stream is None
 
 
 def test_callback_flags_overflows_on_the_frame() -> None:
