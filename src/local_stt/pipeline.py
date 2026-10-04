@@ -344,7 +344,8 @@ def _timing_line(
         outcome = "injected"
     seq = f" seq={job.seq}" if job.seq is not None else ""
     return (
-        f"job={job.id} src={job.source}{seq} audio={t['audio']:.2f}s queued={t['queued']:.2f}s "
+        f"job={job.id} src={job.source}{seq} cut={job.cut} audio={t['audio']:.2f}s "
+        f"queued={t['queued']:.2f}s "
         f"stt={t['stt']:.2f}s rtf={rtf:.2f} text={t['text'] * 1000:.0f}ms "
         f"inject={t['inject'] * 1000:.0f}ms total={t['total']:.2f}s chars={result.chars} "
         f"backend={result.backend} result={outcome}"

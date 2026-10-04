@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from local_stt.audio.capture import AudioFrame
+from local_stt.audio.capture import SAMPLE_RATE, AudioFrame
 from local_stt.audio.recorder import Recorder
 from local_stt.audio.segmenter import Segmenter, SegmenterOutput
 from local_stt.audio.vad import SileroVad, Vad, VadModel
@@ -280,8 +280,17 @@ class AudioConsumer:
     ) -> None:
         for out in outputs:
             if out == "speech_started":
+                log.debug("VAD speech started")
                 self._post(SpeechStarted(rid, cid))
             elif out == "speech_ended":
+                log.debug("VAD speech ended")
                 self._post(SpeechEnded(rid, cid))
             else:
+                log.debug(
+                    "VAD segment seq=%d speech_ms=%d cut=%s audio=%.2fs",
+                    out.seq,
+                    out.speech_ms,
+                    out.cut,
+                    len(out.samples) / SAMPLE_RATE,
+                )
                 self._post(SegmentReady(rid, cid, out, operation_id))

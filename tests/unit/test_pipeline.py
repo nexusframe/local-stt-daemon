@@ -249,7 +249,7 @@ def test_job_is_transcribed_processed_and_injected(
     assert h.engine.calls == [{"samples": SR, "language": "pl", "prompt": None, "timeout_s": 120.0}]
     assert h.processor.contexts == [TextContext("ptt", None, None, "release", None, None)]
     (line,) = [r.getMessage() for r in caplog.records if r.name == "local_stt.timings"]
-    assert line.startswith(f"job={job.id} src=ptt audio=1.00s queued=")
+    assert line.startswith(f"job={job.id} src=ptt cut=release audio=1.00s queued=")
     assert "stt=0.50s rtf=0.50" in line
     assert line.endswith("chars=13 backend=clipboard result=injected")
     assert "Ala" not in line
@@ -591,7 +591,8 @@ def test_timing_line_outcome(result: InjectResult, outcome: str) -> None:
     t = {"audio": 2.0, "queued": 0.1, "stt": 1.0, "text": 0.002, "inject": 0.2, "total": 1.5}
     line = pipeline_mod._timing_line(job, transcript(audio_s=2.0, proc_s=1.0), t, result)
     assert line == (
-        "job=7 src=continuous seq=4 audio=2.00s queued=0.10s stt=1.00s rtf=0.50 text=2ms "
+        "job=7 src=continuous seq=4 cut=silence audio=2.00s queued=0.10s stt=1.00s rtf=0.50 "
+        "text=2ms "
         f"inject=200ms total=1.50s chars={result.chars} backend={result.backend} "
         f"result={outcome}"
     )
