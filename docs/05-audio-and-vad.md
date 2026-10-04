@@ -143,7 +143,7 @@ Detailed rules:
 1. **Pre-roll.** In SILENCE, we keep a ring buffer containing the last `speech_pad_ms` of frames. On transition to SPEECH, the segment begins with this buffer's contents so the beginning of the first syllable is not lost.
 2. **CANDIDATE → SPEECH** requires every frame over `min_speech_ms` to have `p ≥ end_threshold`. A single frame below it returns the state machine to SILENCE.
 3. **SPEECH/TRAILING.** A frame with `p < end_threshold` starts or increments the silence counter. A frame with `p ≥ start_threshold` resets it. A frame between the thresholds leaves the counter unchanged (our silence-accumulation rule; it is not identical to Silero's `VADIterator`, which measures from the start of potential silence).
-4. **End of utterance.** The segment contains audio through the end of speech plus `speech_pad_ms` of silence from the TRAILING buffer. The remaining silence is discarded.
+4. **End of utterance.** The segment contains audio through the end of speech (the last frame with `p ≥ end_threshold`) plus `speech_pad_ms` of silence from the TRAILING buffer, clipped to the collected audio. The remaining silence is discarded; its final `speech_pad_ms` becomes the next pre-roll, so consecutive segments never share samples.
 5. **Duration limit.** When a segment reaches `max_segment_s`:
    - in the final `split_search_s` seconds, find the longest run of frames with `p < end_threshold` (at least 96 ms) and split in its middle,
    - if no such run exists, split at the frame with the lowest `p` in that window,
@@ -151,7 +151,8 @@ Detailed rules:
 
    This minimizes splits in the middle of a word.
 6. **`flush()`** (disabling continuous mode): if the state is SPEECH/TRAILING and at least `min_speech_ms` of speech has been collected, emit the segment immediately.
-7. **`reset()`**: clears buffers and calls `SileroVad.reset()`. Called in audio-consumer at the start of a continuous session. On reconnect, buffers/VAD are reset after flush completes, but the session identifier and next `seq` number are preserved.
+7. **Too little speech.** On every cut (silence, flush, and the first part of a `max_length` split), a segment with less than `min_speech_ms` of speech is dropped without consuming a `seq` number. After a `max_length` split the remainder can hold only silence or a fragment of a word, on which Whisper hallucinates (user decision 2026-10-04).
+8. **`reset()`**: clears buffers and calls `SileroVad.reset()`. Called in audio-consumer at the start of a continuous session. On reconnect, buffers/VAD are reset after flush completes, but the session identifier and next `seq` number are preserved.
 
 Emitted object:
 

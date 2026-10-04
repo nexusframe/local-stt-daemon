@@ -79,6 +79,21 @@ class AudioClip:
     ended_at: float  # release/limit time, not frame-queue drain time
 
 
+SegmentCut = Literal["silence", "max_length", "flush"]
+
+
+@dataclass(frozen=True)
+class AudioSegment:
+    """One utterance from continuous mode (05 §5.5)."""
+
+    samples: NDArray[np.float32]  # mono 16 kHz
+    session_id: int
+    seq: int  # number within the session, from 1; also increases after reconnect
+    ended_at: float  # monotonic: silence detection / limit / flush request
+    speech_ms: int  # speech duration without padding
+    cut: SegmentCut
+
+
 @dataclass(frozen=True)
 class Job:
     id: int
