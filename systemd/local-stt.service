@@ -17,6 +17,8 @@ RestartPreventExitStatus=78
 Environment=PYTHONUNBUFFERED=1
 NoNewPrivileges=yes
 LimitCORE=0
+# Guard against native leaks (05 §5.6: PortAudio xrun loop); N1 allows 150 MB
+MemoryMax=1G
 
 [Install]
 WantedBy=graphical-session.target

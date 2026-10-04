@@ -2,7 +2,8 @@
 
 Task 0.4 scope: 16 kHz mono float32 frames of 512 samples, source selection through
 PIPEWIRE_NODE, and routing verification; task 1.8: device-loss events (the Controller
-reconnects, task 2.3b); task 2.7: overflows are flagged on the frame, counted by the consumer.
+reconnects, task 2.3b); task 2.7: overflows are flagged on the frame, counted by the consumer;
+v0.2 acceptance: a frame watchdog reports a stream that went silent as lost (05 §5.6).
 Not yet implemented: in-process resampling when 16 kHz is rejected, silencing ALSA stderr
 messages.
 """
@@ -28,6 +29,11 @@ FRAME_SAMPLES = 512
 DEFAULT_DEVICE = "default"
 _PCM = "pipewire"
 _FALLBACK_PCM = "default"
+# A PipeWire restart leaves the stream open but silent: no callback, no finished_callback,
+# no error, and about 70 s later PortAudio's xrun recovery loops and leaks memory (05 §5.6).
+STALL_S = 2.0  # no frame for this long -> the stream is reported as lost
+WATCHDOG_INTERVAL_S = 0.5
+CLOSE_STALL_S = 0.5  # close() aborts a stream this quiet: stop() blocks forever on a dead one
 
 log = logging.getLogger("local_stt.audio")
 
@@ -80,6 +86,8 @@ class AudioCapture:
         self._recording_id = 0
         self._capture_id = 0
         self._clock_offset = 0.0
+        self._last_frame_at = 0.0  # time.monotonic() of the last callback
+        self._watchdog_stop = threading.Event()
 
     @property
     def is_open(self) -> bool:
@@ -122,6 +130,14 @@ class AudioCapture:
         except sd.PortAudioError as e:
             raise AudioOpenError(f"cannot open microphone ({self.device}): {e}") from e
         self._closing.clear()
+        self._last_frame_at = time.monotonic()
+        self._watchdog_stop = threading.Event()
+        threading.Thread(
+            target=self._watchdog,
+            args=(self._watchdog_stop, recording_id, capture_id),
+            name="audio-watchdog",
+            daemon=True,
+        ).start()
         self._stream = stream
 
     def close(self) -> None:
@@ -129,9 +145,15 @@ class AudioCapture:
         if stream is None:
             return
         self._closing.set()  # a requested close is not a device loss
-        # stop() waits for running callbacks, so no frame from this stream arrives afterwards.
+        self._watchdog_stop.set()
+        # Both wait for running callbacks, so no frame from this stream arrives afterwards.
+        # stop() keeps the last buffered frame (~30 ms more audio) but blocks on a dead stream.
+        stalled = time.monotonic() - self._last_frame_at > CLOSE_STALL_S
         try:
-            stream.stop()
+            if stalled:
+                stream.abort()
+            else:
+                stream.stop()
             stream.close()
         except sd.PortAudioError as e:  # the device is already gone
             log.debug("closing the microphone stream: %s", e)
@@ -142,10 +164,21 @@ class AudioCapture:
             return
         self._on_device_lost(self._recording_id, self._capture_id, "microphone stream stopped")
 
+    def _watchdog(self, stop: threading.Event, recording_id: int, capture_id: int) -> None:
+        # One thread per stream; reports a silent stream once and exits.
+        while not stop.wait(WATCHDOG_INTERVAL_S):
+            silent_s = time.monotonic() - self._last_frame_at
+            if silent_s > STALL_S:
+                if not self._closing.is_set() and self._on_device_lost is not None:
+                    log.warning("no audio frames for %.1f s: microphone stream stalled", silent_s)
+                    self._on_device_lost(recording_id, capture_id, "microphone stream stalled")
+                return
+
     def _callback(
         self, indata: NDArray[np.float32], frames: int, time_info: Any, status: Any
     ) -> None:
         # PortAudio thread: must not block or log; the consumer counts overflows.
+        self._last_frame_at = time.monotonic()
         adc_time = time_info.inputBufferAdcTime or (time_info.currentTime - frames / SAMPLE_RATE)
         self._frames.put_nowait(
             AudioFrame(

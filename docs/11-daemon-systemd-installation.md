@@ -144,11 +144,14 @@ RestartPreventExitStatus=78
 Environment=PYTHONUNBUFFERED=1
 NoNewPrivileges=yes
 LimitCORE=0
+# Guard against native leaks (05 §5.6: PortAudio xrun loop); N1 allows 150 MB
+MemoryMax=1G
 
 [Install]
 WantedBy=graphical-session.target
 ```
 
+- **`MemoryMax=1G`.** Added during the v0.2 acceptance (2026-10-04): a dead audio stream drove PortAudio into a leaking xrun loop that grew the daemon to 11.4 GB and triggered the kernel's global OOM killer, which may pick any process (05 §5.6). With the limit, the cgroup OOM killer ends only this unit and `Restart=on-failure` brings it back. Far above N1 (150 MB), so it never affects normal operation; the user manager delegates the `memory` controller on Ubuntu 24.04 (checked: `cpu memory pids`).
 - **`Wants=`, not `Requires=`.** A server restart or failure must not kill the daemon. The daemon handles `engine=DOWN` itself ([04](04-state-machine.md) §4.5).
 - **`Type=notify`.** The daemon sends `READY=1` through `$NOTIFY_SOCKET` (a few lines using a raw `AF_UNIX` socket, with no `systemd-python` dependency) when the config is loaded, the IPC socket is listening, and hotkeys have either been grabbed or reported as `degraded`. It does **not** wait for the engine because model loading may take time, and the status reflects this. It also sends `STOPPING=1` at shutdown and `STATUS=<state>` on state changes, so `systemctl --user status local-stt` shows, for example, `Status: "LISTENING (1 queued)"`. The daemon removes `NOTIFY_SOCKET` from its environment after reading it (like `sd_notify`'s `unset_environment`). Tested 2026-10-03: otherwise every `loginctl`/`systemctl` child sends `EXIT_STATUS=0` to the socket (systemd 255), and systemd logs a WARNING `Got notification message from PID …, but reception only permitted for main PID` for each one.
 - **`RestartPreventExitStatus=78`.** A configuration error or non-X11 session is not restarted in a loop.
