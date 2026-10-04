@@ -74,6 +74,8 @@ Preliminary-design requirements covered by v0.1:
 - N4 (CPU during silence) measured with `pidstat -p <pid> 1 60`,
 - final model defaults recorded in `docs/benchmark-results.md` and `config.example.toml`.
 
+Status: checklist completed 2026-10-04, results in [acceptance-v0.2.md](acceptance-v0.2.md); open: the incorrect-segmentation report, and N3 holds only on AC with the `performance` profile.
+
 Preliminary-design requirements covered by v0.2: continuous dictation, VAD, automatic segmentation, automatic insertion of successive segments, daemon status, and audio error handling.
 
 ## v0.3 — Quality and control
