@@ -27,7 +27,7 @@ class TextContext:
 4. **User replacements** from `text.replacements`: a list of `{pattern, replace, regex}` applied in order, e.g. `{pattern = "(?i)\\bnowa linia\\b", replace = "\n", regex = true}`. This is the only “command” mechanism in v0.1–v0.3.
 5. **Continuous-mode continuity**:
    - if `cut in ("max_length", "max_duration")` (the segment ends in the middle of an utterance) and the text ends with a single period, remove that period (`?`, `!`, and `…` remain),
-   - if `prev_cut == "max_length"`, the first letter is uppercase, and the second word is not capitalized (the “not a proper name” heuristic), lowercase the first letter.
+   - if `prev_cut == "max_length"`, the first letter is uppercase, and the second word is not capitalized (the “not a proper name” heuristic), lowercase the first letter. A one-word result is left as is: it may be a name (implementation decision, task 2.4).
 6. **Separator**: when `text.append_space = true` (the default), append a **trailing space** to every non-empty result. Subsequent segments and dictations then join naturally without tracking window state.
 7. Empty result → `None`; the pipeline skips injection.
 

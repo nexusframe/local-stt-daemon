@@ -1,14 +1,13 @@
 """TextProcessor: Transcript -> text to inject (docs/08-text-injection.md §8.2).
 
-v0.1 scope: steps 1-4, 6 and 7. Step 5 (continuous-mode continuity) arrives with
-continuous mode (task 2.4).
+Steps 1-7; step 5 (continuous-mode continuity) since task 2.4.
 """
 
 import logging
 import re
 
 from local_stt.config import Config, Replacement
-from local_stt.interfaces import TextContext, Transcript, TranscriptSegment
+from local_stt.interfaces import Cut, TextContext, Transcript, TranscriptSegment
 from local_stt.text import filters
 
 log = logging.getLogger("local_stt.text")
@@ -44,6 +43,18 @@ def apply_replacements(text: str, replacements: tuple[Replacement, ...]) -> str:
             text = re.sub(rule.pattern, rule.replace, text)
         else:
             text = text.replace(rule.pattern, rule.replace)
+    return text
+
+
+def continuity(text: str, cut: Cut, prev_cut: Cut | None) -> str:
+    """Step 5: a cut in the middle of an utterance loses its final period; after one, the
+    next segment starts lowercase when its second word is not capitalized (so not a name)."""
+    if cut in ("max_length", "max_duration") and text.endswith(".") and not text.endswith(".."):
+        text = text[:-1]
+    if prev_cut == "max_length" and text[:1].isupper():
+        words = text.split()
+        if len(words) >= 2 and not words[1][:1].isupper():  # one word: may be a name
+            text = text[0].lower() + text[1:]
     return text
 
 
@@ -84,6 +95,7 @@ class DefaultTextProcessor:
             return None
 
         text = apply_replacements(text, text_cfg.replacements)
+        text = continuity(text, ctx.cut, ctx.prev_cut)
         if not text:
             return None
         return text + " " if text_cfg.append_space else text

@@ -13,7 +13,14 @@ from local_stt import pipeline as pipeline_mod
 from local_stt.cancellation import CancellationToken, Cancelled
 from local_stt.config import Config
 from local_stt.events import Event, JobDiscarded, JobFailed, JobFinished, JobStarted
-from local_stt.interfaces import InjectResult, Job, TextContext, Transcript, TranscriptSegment
+from local_stt.interfaces import (
+    Cut,
+    InjectResult,
+    Job,
+    TextContext,
+    Transcript,
+    TranscriptSegment,
+)
 from local_stt.pipeline import PipelineWorker, has_speech_rms
 from local_stt.stt.whisper_server import (
     EngineConnectionError,
@@ -613,3 +620,90 @@ def test_token_operation_refused_after_cancel() -> None:
     assert token.wait(0)
     with pytest.raises(Cancelled), token.operation():
         pass
+
+
+# --- continuous session context (task 2.4; 06 §6.6, 08 §8.1) -------------------------------
+
+
+def continuous_job(h: Harness, seq: int, *, session_id: int = 1, cut: Cut = "silence") -> Job:
+    return dataclasses.replace(
+        h.job(), source="continuous", session_id=session_id, seq=seq, cut=cut
+    )
+
+
+def run_continuous(h: Harness, *jobs: Job) -> None:
+    for job in jobs:
+        h.worker.submit(job)
+        assert isinstance(h.outcome(), JobFinished | JobDiscarded | JobFailed)
+
+
+def test_session_text_goes_into_the_prompt(h: Harness) -> None:
+    h.worker.update_config(config(stt={"vocabulary_prompt": "PipeWire."}))
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" Kot ma Alę.")]
+    run_continuous(h, continuous_job(h, 1), continuous_job(h, 2), continuous_job(h, 3))
+    assert [c["prompt"] for c in h.engine.calls] == [
+        "PipeWire.",
+        "PipeWire. Ala ma kota.",
+        "PipeWire. Ala ma kota. Kot ma Alę.",
+    ]
+    assert [c.prompt_tail for c in h.processor.contexts] == [
+        None,
+        "Ala ma kota.",
+        "Ala ma kota. Kot ma Alę.",
+    ]
+
+
+def test_context_keeps_the_last_200_characters(h: Harness) -> None:
+    h.engine.outcomes = [transcript(" " + "a" * 150 + "."), transcript(" " + "b" * 150 + ".")]
+    run_continuous(h, continuous_job(h, 1), continuous_job(h, 2), continuous_job(h, 3))
+    tail = h.processor.contexts[2].prompt_tail
+    assert tail is not None and len(tail) == 200 and tail.endswith("b.")
+
+
+def test_prev_cut_follows_the_session(h: Harness) -> None:
+    run_continuous(
+        h,
+        continuous_job(h, 1, cut="max_length"),
+        continuous_job(h, 2),
+        continuous_job(h, 1, session_id=2),  # a new session forgets the old one
+    )
+    assert [(c.cut, c.prev_cut) for c in h.processor.contexts] == [
+        ("max_length", None),
+        ("silence", "max_length"),
+        ("silence", None),
+    ]
+    assert h.processor.contexts[2].prompt_tail is None
+
+
+def test_ptt_and_disabled_context_send_only_the_vocabulary(h: Harness) -> None:
+    h.worker.update_config(
+        config(stt={"vocabulary_prompt": "Gdańsk.", "continuous_context": False})
+    )
+    run_continuous(h, continuous_job(h, 1), continuous_job(h, 2))
+    h.submit()
+    assert isinstance(h.outcome(), JobFinished)
+    assert [c["prompt"] for c in h.engine.calls] == ["Gdańsk."] * 3
+    assert h.processor.contexts[1].prompt_tail is None
+    assert h.processor.contexts[1].prev_cut == "silence"  # continuity does not need context
+
+
+def test_filtered_text_is_not_context_but_its_cut_counts(h: Harness) -> None:
+    h.processor.result = lambda t: None
+    run_continuous(h, continuous_job(h, 1, cut="max_length"))
+    h.processor.result = lambda t: t.text.strip() + " "
+    run_continuous(h, continuous_job(h, 2))
+    assert h.processor.contexts[1].prompt_tail is None
+    assert h.processor.contexts[1].prev_cut == "max_length"
+
+
+def test_requeued_job_keeps_its_own_context(h: Harness) -> None:
+    h.engine.outcomes = [transcript(" Ala ma kota."), EngineConnectionError("refused")]
+    run_continuous(h, continuous_job(h, 1, cut="max_length"))
+    h.worker.submit(continuous_job(h, 2))
+    assert isinstance(h.next_event(), JobStarted)
+    assert h.no_more_events()  # requeued and paused
+    h.worker.resume()
+    assert isinstance(h.outcome(), JobFinished)
+    assert [c["prompt"] for c in h.engine.calls] == [None, "Ala ma kota.", "Ala ma kota."]
+    (ctx,) = h.processor.contexts[1:]
+    assert ctx.prev_cut == "max_length"

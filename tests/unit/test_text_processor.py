@@ -4,11 +4,12 @@ import logging
 import pytest
 
 from local_stt.config import Config, Replacement, TextConfig
-from local_stt.interfaces import TextContext, Transcript, TranscriptSegment
+from local_stt.interfaces import Cut, TextContext, Transcript, TranscriptSegment
 from local_stt.text.processor import (
     DefaultTextProcessor,
     apply_replacements,
     assemble,
+    continuity,
     normalize_whitespace,
 )
 
@@ -142,3 +143,32 @@ def test_update_config_recompiles_patterns() -> None:
         dataclasses.replace(config, text=TextConfig(hallucination_patterns=("prywatna",)))
     )
     assert p.process(t, PTT) is None
+
+
+# --- step 5: continuous-mode continuity (task 2.4) -------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "cut", "prev_cut", "expected"),
+    [
+        ("Ala ma kota.", "max_length", None, "Ala ma kota"),
+        ("Ala ma kota.", "max_duration", None, "Ala ma kota"),
+        ("Ala ma kota.", "silence", None, "Ala ma kota."),
+        ("Czy Ala ma kota?", "max_length", None, "Czy Ala ma kota?"),
+        ("I tak dalej...", "max_length", None, "I tak dalej..."),
+        ("Ala ma kota…", "max_length", None, "Ala ma kota…"),
+        ("Kot ma Alę.", "silence", "max_length", "kot ma Alę."),
+        ("Jan Kowalski przyszedł.", "silence", "max_length", "Jan Kowalski przyszedł."),
+        ("Gdańsk.", "silence", "max_length", "Gdańsk."),  # one word: may be a name
+        ("Kot ma Alę.", "silence", "silence", "Kot ma Alę."),
+        ("Kot ma Alę.", "max_length", "max_length", "kot ma Alę"),
+    ],
+)
+def test_continuity(text: str, cut: Cut, prev_cut: Cut | None, expected: str) -> None:
+    assert continuity(text, cut, prev_cut) == expected
+
+
+def test_continuity_runs_after_replacements_and_before_the_space() -> None:
+    p = processor(replacements=(Replacement(" kropka", ".", False),))
+    ctx = TextContext("continuous", 1, 3, "max_length", "max_length", None)
+    assert p.process(transcript(seg(" Kot ma Alę kropka")), ctx) == "kot ma Alę "

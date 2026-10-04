@@ -2,7 +2,9 @@
 
 v0.1 scope: PTT speech gate (VAD trimming when `vad.enabled`, brought forward from task 2.6;
 otherwise the RMS gate), generations, one retry for 5xx/timeouts, pause on DOWN with a
-startup_timeout_s limit, timing line. Per-session prompt context arrives in v0.2 (task 2.4).
+startup_timeout_s limit, timing line. Continuous jobs (task 2.4) carry their session's context:
+the end of the session's text goes into the prompt (06 §6.6) and the previous segment's cut
+into TextContext for continuity (08 §8.2 step 5).
 """
 
 import collections
@@ -24,6 +26,7 @@ from local_stt.config import Config
 from local_stt.events import Event, JobDiscarded, JobFailed, JobFinished, JobStarted
 from local_stt.interfaces import (
     CancelResult,
+    Cut,
     Injector,
     InjectResult,
     Job,
@@ -44,6 +47,7 @@ RMS_WINDOW_S = 0.1  # 05 §5.3: 1 s of speech in 20 s of silence must still pass
 RETRY_DELAY_S = 1.0  # 04 §4.4: one retry for HTTP 5xx and timeouts
 MIN_REQUEST_TIMEOUT_S = 10.0  # 06: max(10 s, 4 * audio * RTF), capped
 RTF_HISTORY = 10
+CONTEXT_CHARS = 200  # session text passed in the prompt (06 §6.6)
 RTF_TIMEOUT_FACTOR = 4.0
 
 DiscardReason = Literal["no_speech", "filtered", "cancelled"]
@@ -82,6 +86,15 @@ class _CancelledBeforeRetry(Exception):
     pass
 
 
+@dataclass
+class _Session:
+    """What the pipeline remembers of the continuous session in progress (04 §4.4)."""
+
+    session_id: int
+    tail: str = ""  # last CONTEXT_CHARS characters of the session's text
+    prev_cut: Cut | None = None  # cut of the session's previous segment
+
+
 class PipelineWorker:
     """Implements `PipelineControl`; all methods except `run` are called from other threads."""
 
@@ -115,6 +128,7 @@ class PipelineWorker:
         self._paused_since: float | None = None
         self._stopping = False
         self._rtf: collections.deque[float] = collections.deque(maxlen=RTF_HISTORY)
+        self._session: _Session | None = None  # pipeline thread only
         self._thread: threading.Thread | None = None
 
     # --- PipelineControl (called by the Controller) -------------------------------------
@@ -214,6 +228,9 @@ class PipelineWorker:
 
     def _process(self, queued: _Queued, token: CancellationToken) -> None:
         job = queued.job
+        session = self._session_of(job)
+        requeued = False
+        text: str | None = None
         started = self._clock()
         try:
             self._post(JobStarted(job.id))
@@ -226,9 +243,13 @@ class PipelineWorker:
             if self._stale(job):
                 return self._discard(job, "cancelled")
 
+            prompt_tail = (
+                (session.tail or None) if session and config.stt.continuous_context else None
+            )
             try:
-                transcript = self._transcribe(job, token, config)
+                transcript = self._transcribe(job, token, config, prompt_tail)
             except EngineConnectionError as e:
+                requeued = True
                 return self._requeue(queued, e)
             except _CancelledBeforeRetry:
                 return self._discard(job, "cancelled")
@@ -239,7 +260,8 @@ class PipelineWorker:
                 return self._discard(job, "cancelled")
 
             text_started = self._clock()
-            ctx = TextContext(job.source, job.session_id, job.seq, job.cut, None, None)
+            prev_cut = session.prev_cut if session else None
+            ctx = TextContext(job.source, job.session_id, job.seq, job.cut, prev_cut, prompt_tail)
             text = self._processor.process(transcript, ctx)
             text_s = self._clock() - text_started
             if text is None:
@@ -253,6 +275,7 @@ class PipelineWorker:
             result = self._injector.inject(text, cancel=token)
             done = self._clock()
             if result.cancelled:
+                text = None  # not entered: it must not become context
                 return self._discard(job, "cancelled")
             timings = {
                 "audio": job.duration_s,
@@ -268,6 +291,18 @@ class PipelineWorker:
         finally:
             with self._lock:
                 self._current = None
+            if session is not None and not requeued:
+                session.prev_cut = job.cut
+                if text:
+                    session.tail = (session.tail + " " + text.strip()).strip()[-CONTEXT_CHARS:]
+
+    def _session_of(self, job: Job) -> _Session | None:
+        """The continuous session of `job`; a new session replaces the previous one."""
+        if job.source != "continuous" or job.session_id is None:
+            return None
+        if self._session is None or self._session.session_id != job.session_id:
+            self._session = _Session(job.session_id)
+        return self._session
 
     def _ptt_speech(self, audio: NDArray[np.float32], config: Config) -> NDArray[np.float32] | None:
         """05 §5.3: the speech to transcribe, or None for no speech."""
@@ -275,10 +310,13 @@ class PipelineWorker:
             return self._trimmer.trim(audio)
         return audio if has_speech_rms(audio, config.ptt.silence_rms_dbfs) else None
 
-    def _transcribe(self, job: Job, token: CancellationToken, config: Config) -> Transcript:
+    def _transcribe(
+        self, job: Job, token: CancellationToken, config: Config, prompt_tail: str | None
+    ) -> Transcript:
         """One retry after 1 s for HTTP 5xx and timeouts; raises `_CancelledBeforeRetry` if
         cancelled before the retry. Connection errors and other failures propagate at once."""
-        prompt = config.stt.vocabulary_prompt or None  # PTT: vocabulary only (06 §6.6)
+        # 06 §6.6: the vocabulary, then the session's context (continuous only).
+        prompt = " ".join(p for p in (config.stt.vocabulary_prompt, prompt_tail) if p) or None
         timeout_s = self._request_timeout(job.duration_s, config)
         request = functools.partial(
             self._engine.transcribe,
