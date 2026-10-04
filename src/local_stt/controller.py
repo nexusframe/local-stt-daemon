@@ -4,13 +4,15 @@ All components post events to one queue; the controller thread handles them one 
 acts on components only through the interfaces in `interfaces.py`, so `handle()` is plain logic
 that tests drive with fakes.
 
-v0.1 scope (task 1.3): modes IDLE and PTT_RECORDING (§4.3), the "Any state" rows and reload
-(§4.6). Continuous mode comes in v0.2 (task 2.3); until then `ContinuousToggle` is rejected.
+Modes IDLE and PTT_RECORDING (§4.3, task 1.3), the "Any state" rows and reload (§4.6), and
+CONTINUOUS (task 2.3b): delayed microphone open, *Stop(flush)*, cancel, backlog, engine DOWN and
+the microphone reconnect. Timers post events back into the queue through `schedule`.
 """
 
 import dataclasses
 import logging
 import queue
+import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
@@ -39,6 +41,10 @@ from local_stt.interfaces import (
 log = logging.getLogger("local_stt.controller")
 
 START_SOUND_MARGIN_S = 0.080  # masking continues this long after the start sound (05 §5.2)
+CAPTURE_OPEN_DELAY_S = 0.150  # continuous: open the microphone after the start sound (10 §10.6)
+RECONNECT_INTERVAL_S = 1.0  # between microphone reopen attempts (05 §5.6)
+RECONNECT_ATTEMPTS = 3
+SAMPLE_RATE = 16000
 FAILURE_AGGREGATION_S = 10.0  # JobFailed notifications within this window are combined (04 §4.4)
 STATS_WINDOW = 10  # rtf_avg_10 / latency_avg_10_s (10 §10.4)
 
@@ -57,6 +63,7 @@ ReloadGroup = Literal["live", "idle", "server"]
 class Mode(Enum):
     IDLE = "IDLE"
     PTT_RECORDING = "PTT_RECORDING"
+    CONTINUOUS = "CONTINUOUS"
 
 
 def config_diff(old: Config, new: Config) -> list[str]:
@@ -86,6 +93,20 @@ class _PttRecording:
     stopping: bool = False
     operation_id: int | None = None
     ended_at: float | None = None
+
+
+@dataclass
+class _Continuous:
+    recording_id: int  # also the session_id
+    capture_id: int
+    start_reply: ev.Reply  # answered after the delayed open attempt
+    opened: bool = False  # the stream is open (not before CaptureOpenDue, not while reconnecting)
+    speech: bool = False
+    stopping: bool = False
+    reconnecting: bool = False
+    reconnect_op: int | None = None  # the reconnect being run (flush, then ReconnectTicks)
+    reconnect_flushing: bool = False  # its FlushDone has not arrived yet
+    stop_op: int | None = None  # the stop flush, once requested
 
 
 @dataclass(frozen=True)
@@ -122,6 +143,7 @@ class Controller:
         reload_target: ReloadTarget,
         load_config: Callable[[], tuple[Config, list[str]]],
         clock: Callable[[], float] = time.monotonic,
+        schedule: Callable[[float, ev.Event], None] | None = None,
         on_status: Callable[[str], None] | None = None,
         hotkey_problems: Sequence[HotkeyProblem] = (),
     ):
@@ -136,11 +158,13 @@ class Controller:
         self._reload_target = reload_target
         self._load_config = load_config
         self._clock = clock
+        self._schedule = schedule or self._timer
         self._on_status = on_status
 
         self.mode = Mode.IDLE
         self.engine = EngineHealth.STARTING
         self._rec: _PttRecording | None = None
+        self._cont: _Continuous | None = None
         self._next_recording_id = 0
         self._next_capture_id = 0
         self._next_operation_id = 0
@@ -179,6 +203,12 @@ class Controller:
             ev.RecordingStarted: self._on_recording_started,
             ev.RecordingLimitReached: self._on_recording_limit,
             ev.RecordingFinished: self._on_recording_finished,
+            ev.CaptureOpenDue: self._on_capture_open_due,
+            ev.SpeechStarted: self._on_speech,
+            ev.SpeechEnded: self._on_speech,
+            ev.SegmentReady: self._on_segment_ready,
+            ev.FlushDone: self._on_flush_done,
+            ev.ReconnectTick: self._on_reconnect_tick,
             ev.AudioError: self._on_audio_error,
             ev.EngineStateChanged: self._on_engine_state,
             ev.JobStarted: self._on_job_started,
@@ -230,6 +260,15 @@ class Controller:
             return "STARTING"
         if self.mode is Mode.PTT_RECORDING:
             return "RECORDING"
+        if self._cont is not None:
+            state = "LISTENING"
+            if self._cont.reconnecting:
+                state += " (reconnecting)"
+            elif self._cont.speech:
+                state += " (speech)"
+            if self._outstanding:
+                state += f", transcribing {len(self._outstanding)}"
+            return state
         if self._busy_job is not None or queued > 0:
             return f"TRANSCRIBING ({queued} queued)"
         return "IDLE"
@@ -252,8 +291,8 @@ class Controller:
             "version": __version__,
             "state": snap.display,
             "mode": snap.mode.value,
-            "speech": False,  # continuous mode arrives in v0.2
-            "reconnecting": False,
+            "speech": self._cont is not None and self._cont.speech,
+            "reconnecting": self._cont is not None and self._cont.reconnecting,
             "engine": {
                 "state": snap.engine.value,
                 "name": "whisper.cpp",
@@ -269,7 +308,8 @@ class Controller:
             },
             "audio": {
                 "device": cfg.audio.device,
-                "open": snap.mode is Mode.PTT_RECORDING,
+                "open": snap.mode is Mode.PTT_RECORDING
+                or (self._cont is not None and self._cont.opened),
                 "overflows": 0,  # counted from v0.2 (task 2.7)
             },
             "pipeline": {
@@ -326,6 +366,11 @@ class Controller:
             and self.mode is Mode.PTT_RECORDING
             and (rec.recording_id, rec.capture_id) == (recording_id, capture_id)
         )
+
+    def _timer(self, delay_s: float, event: ev.Event) -> None:
+        timer = threading.Timer(delay_s, self.events.put, args=(event,))
+        timer.daemon = True
+        timer.start()
 
     def _new_id(self, kind: Literal["recording", "capture", "operation", "job"]) -> int:
         attr = f"_next_{kind}_id"
@@ -465,6 +510,10 @@ class Controller:
             self._drop_recording()
             result = self._cancel_pipeline()
             self._feedback.play("cancel")
+        elif self.mode is Mode.CONTINUOUS:
+            self._drop_continuous()
+            result = self._cancel_pipeline()
+            self._feedback.play("cancel")
         else:
             result = self._cancel_pipeline()
             if result.discarded_any:
@@ -472,17 +521,214 @@ class Controller:
         self._respond(event.reply, _ok(injection_in_flight=result.injection_in_flight))
 
     def _on_audio_error(self, event: ev.AudioError) -> None:
+        if self._cont_matches(event.recording_id, event.capture_id):
+            if event.kind == "device_lost":
+                return self._on_device_lost(event)
+            return self._unhandled(event)  # open failures are handled where open() is called
         if not self._matches(event.recording_id, event.capture_id):
             return self._stale(event)
         self._audio_failure(event.description)
 
     def _on_continuous_toggle(self, event: ev.ContinuousToggle) -> None:
-        if event.reply is None:
-            self._feedback.play("error")  # hotkey: audible rejection
-        log.info("continuous dictation is not available before v0.2")
-        self._respond(
-            event.reply, _error("invalid_in_mode", "continuous dictation arrives in v0.2")
+        if self.mode is Mode.CONTINUOUS:
+            cont = self._cont
+            assert cont is not None
+            if cont.stopping:
+                return self._unhandled(event)
+            self._stop_continuous()
+            self._feedback.play("stop")
+            return self._respond(event.reply, _ok())
+        if self.mode is not Mode.IDLE:
+            return self._unhandled(event)
+        if (rejection := self._continuous_rejection()) is not None:
+            self._feedback.play("error")
+            code, title, body = rejection
+            self._feedback.notify("continuous", title, body)
+            return self._respond(event.reply, _error(code, title))
+
+        # The start sound plays before the microphone opens (10 §10.6); the IPC reply waits
+        # for the open attempt.
+        self._feedback.play("start")
+        cont = _Continuous(self._new_id("recording"), self._new_id("capture"), event.reply)
+        self._cont = cont
+        self.mode = Mode.CONTINUOUS
+        self._consumer.reset_continuous(cont.recording_id, cont.capture_id)
+        self._schedule(CAPTURE_OPEN_DELAY_S, ev.CaptureOpenDue(cont.recording_id))
+
+    def _continuous_rejection(self) -> tuple[str, str, str] | None:
+        if self.engine is EngineHealth.STARTING:
+            return "engine_starting", "STT engine unavailable", "The engine is still starting."
+        if self.engine is not EngineHealth.READY:
+            return "engine_down", "STT engine unavailable", "Run: local-stt doctor"
+        if not self.config.vad.enabled:
+            return "vad_disabled", "Continuous dictation needs VAD", "Set vad.enabled = true."
+        if not self._consumer.continuous_available:  # vad.enabled, but no model (04 §4.3)
+            return "vad_disabled", "VAD model unavailable", "Run: local-stt doctor"
+        return None
+
+    def _cont_matches(self, recording_id: int, capture_id: int | None = None) -> bool:
+        cont = self._cont
+        return (
+            cont is not None
+            and self.mode is Mode.CONTINUOUS
+            and cont.recording_id == recording_id
+            and (capture_id is None or cont.capture_id == capture_id)
         )
+
+    def _on_capture_open_due(self, event: ev.CaptureOpenDue) -> None:
+        cont = self._cont
+        if not self._cont_matches(event.recording_id) or cont is None or cont.opened:
+            return self._stale(event)
+        if cont.stopping:
+            return self._unhandled(event)
+        try:
+            self._capture.open(cont.recording_id, cont.capture_id)
+        except AudioOpenError as e:
+            log.error("microphone error: %s", e)
+            self._respond(cont.start_reply, _error("audio_error", str(e)))
+            self._drop_continuous()
+            self._feedback.play("error")
+            self._feedback.notify("audio", "Microphone error", str(e))
+            return None
+        cont.opened = True
+        log.info("continuous dictation started (session %d)", cont.recording_id)
+        self._respond(cont.start_reply, _ok())
+
+    def _on_speech(self, event: ev.SpeechStarted | ev.SpeechEnded) -> None:
+        if not self._cont_matches(event.recording_id, event.capture_id):
+            return self._stale(event)
+        assert self._cont is not None
+        self._cont.speech = isinstance(event, ev.SpeechStarted)
+
+    def _on_segment_ready(self, event: ev.SegmentReady) -> None:
+        cont = self._cont
+        if (
+            not self._cont_matches(event.recording_id, event.capture_id)
+            or cont is None
+            or event.operation_id not in (None, cont.reconnect_op, cont.stop_op)
+        ):
+            return self._stale(event)
+        segment = event.segment
+        job = Job(
+            id=self._new_id("job"),
+            source="continuous",
+            audio=segment.samples,
+            ended_at=segment.ended_at,
+            generation=self._pipeline.generation,
+            session_id=segment.session_id,
+            seq=segment.seq,
+            cut=segment.cut,
+        )
+        self._pipeline.submit(job)
+        self._outstanding[job.id] = len(segment.samples) / SAMPLE_RATE
+        backlog = sum(self._outstanding.values())
+        if backlog > self.config.continuous.max_backlog_s and not cont.stopping:
+            log.warning("backlog %.0f s of audio: stopping continuous dictation", backlog)
+            self._stop_continuous()
+            self._feedback.play("stop")
+            self._feedback.play("error")
+            self._feedback.notify("continuous", "Transcription cannot keep up — dictation stopped")
+
+    def _stop_continuous(self) -> None:
+        """*Stop(flush)* (04 §4.3): the session ends at the matching `FlushDone(stop)`."""
+        cont = self._cont
+        assert cont is not None and not cont.stopping
+        self._capture.close()  # returns after the last callback
+        cont.opened = False
+        cont.stopping = True
+        self._respond(cont.start_reply, _error("cancelled", "continuous start was cancelled"))
+        if not cont.reconnect_flushing:  # otherwise requested after that flush's FlushDone
+            self._request_stop_flush()
+
+    def _request_stop_flush(self) -> None:
+        cont = self._cont
+        assert cont is not None
+        cont.stop_op = self._new_id("operation")
+        self._consumer.flush(
+            cont.recording_id, cont.capture_id, cont.stop_op, "stop", self._clock()
+        )
+
+    def _on_flush_done(self, event: ev.FlushDone) -> None:
+        cont = self._cont
+        if not self._cont_matches(event.recording_id, event.capture_id) or cont is None:
+            return self._stale(event)
+        if event.purpose == "stop" and cont.stopping and event.operation_id == cont.stop_op:
+            log.info("continuous dictation stopped (session %d)", cont.recording_id)
+            self._cont = None
+            self.mode = Mode.IDLE
+            return None
+        if (
+            event.purpose == "reconnect"
+            and cont.reconnect_flushing
+            and event.operation_id == cont.reconnect_op
+        ):
+            cont.reconnect_flushing = False
+            if cont.stopping:
+                return self._request_stop_flush()
+            return self._schedule(
+                RECONNECT_INTERVAL_S, ev.ReconnectTick(cont.recording_id, event.operation_id, 1)
+            )
+        return self._stale(event)
+
+    def _on_device_lost(self, event: ev.AudioError) -> None:
+        cont = self._cont
+        assert cont is not None
+        if cont.reconnecting or cont.stopping:
+            return self._unhandled(event)
+        log.warning("microphone lost: %s; reconnecting", event.description)
+        self._capture.close()
+        cont.opened = False
+        cont.speech = False
+        cont.reconnecting = cont.reconnect_flushing = True
+        cont.reconnect_op = self._new_id("operation")
+        self._consumer.flush(
+            cont.recording_id, cont.capture_id, cont.reconnect_op, "reconnect", self._clock()
+        )
+
+    def _on_reconnect_tick(self, event: ev.ReconnectTick) -> None:
+        cont = self._cont
+        if (
+            not self._cont_matches(event.recording_id)
+            or cont is None
+            or not cont.reconnecting
+            or cont.reconnect_flushing
+            or event.operation_id != cont.reconnect_op
+        ):
+            return self._stale(event)
+        if cont.stopping:
+            return self._unhandled(event)
+        cont.capture_id = self._new_id("capture")
+        # The same session_id keeps the next seq (05 §5.5, rule 8).
+        self._consumer.reset_continuous(cont.recording_id, cont.capture_id)
+        try:
+            self._capture.open(cont.recording_id, cont.capture_id)
+        except AudioOpenError as e:
+            log.warning("microphone reopen attempt %d failed: %s", event.attempt, e)
+            if event.attempt < RECONNECT_ATTEMPTS:
+                return self._schedule(
+                    RECONNECT_INTERVAL_S,
+                    ev.ReconnectTick(cont.recording_id, event.operation_id, event.attempt + 1),
+                )
+            log.error("microphone lost: continuous dictation stopped")
+            self._stop_continuous()
+            self._feedback.play("stop")
+            self._feedback.play("error")
+            self._feedback.notify("audio", "Microphone lost — dictation stopped", str(e))
+            return None
+        cont.opened = True
+        cont.reconnecting = False
+        cont.reconnect_op = None
+        log.info("microphone reconnected (attempt %d)", event.attempt)
+
+    def _drop_continuous(self) -> None:
+        """Invalidates the session and its operations; nothing more is submitted."""
+        cont = self._cont
+        assert cont is not None
+        self._cont = None
+        self.mode = Mode.IDLE
+        self._capture.close()
+        self._consumer.discard(cont.recording_id, cont.capture_id)
+        self._respond(cont.start_reply, _error("cancelled", "continuous start was cancelled"))
 
     # --- engine and jobs ("Any state") ---------------------------------------------------
 
@@ -505,6 +751,13 @@ class Controller:
             if self._watch_restart:
                 self._watch_restart = False
                 self._restart_failed("the server did not become ready")
+            if self._cont is not None and not self._cont.stopping:
+                self._stop_continuous()  # segments wait in the paused queue (04 §4.5)
+                self._feedback.play("stop")
+                self._feedback.play("error")
+                self._feedback.notify(
+                    "continuous", "STT engine stopped working — dictation stopped"
+                )
 
     def _on_job_started(self, event: ev.JobStarted) -> None:
         self._busy_job = event.job_id
@@ -658,6 +911,8 @@ class Controller:
         log.info("shutting down")
         if self._rec is not None:
             self._drop_recording()
+        if self._cont is not None:
+            self._drop_continuous()
         self._cancel_pipeline()
         self._lifecycle.shutdown(x11_alive=True)
         self._stop(0)
@@ -666,6 +921,8 @@ class Controller:
         log.warning("X11 connection lost; the session is ending")
         if self._rec is not None:
             self._drop_recording()
+        if self._cont is not None:
+            self._drop_continuous()
         self._lifecycle.shutdown(x11_alive=False)
         self._stop(0)
 

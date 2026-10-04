@@ -40,6 +40,7 @@ class World:
         self.next_config: Config | Exception = Config()
         self.statuses: list[str] = []
         self.hotkey_problems: list[HotkeyProblem] = []
+        self.vad_available = True
 
     # AudioCaptureControl
     def open(self, recording_id: int, capture_id: int) -> None:
@@ -99,7 +100,7 @@ class Consumer:
 
     @property
     def continuous_available(self) -> bool:
-        return True
+        return self.w.vad_available
 
     def reset_continuous(self, recording_id: int, capture_id: int) -> None:
         self.w.calls.append(("consumer.reset_continuous", recording_id, capture_id))
@@ -168,6 +169,7 @@ def make(w: World, *, engine: EngineHealth | None = EngineHealth.READY) -> Contr
         reload_target=Reload(w),
         load_config=w.load_config,
         clock=lambda: w.now,
+        schedule=lambda delay, event: w.calls.append(("schedule", delay, event)),
         on_status=w.statuses.append,
     )
     if engine is not None:
@@ -265,23 +267,6 @@ def test_idle_ptt_pressed_without_engine_is_rejected(
     assert not any(name.startswith("capture") for name in w.names())
     assert c.mode is Mode.IDLE
     assert r.result()["error"] == code
-
-
-def test_continuous_toggle_from_hotkey_plays_error(c: Controller, w: World) -> None:
-    c.handle(ev.ContinuousToggle())
-    assert w.sounds() == ["error"]
-    assert c.mode is Mode.IDLE
-
-
-def test_continuous_toggle_from_ipc_is_invalid_in_mode(c: Controller, w: World) -> None:
-    r = reply()
-    c.handle(ev.ContinuousToggle(r))
-    assert w.sounds() == []
-    assert r.result() == {
-        "ok": False,
-        "error": "invalid_in_mode",
-        "message": "continuous dictation arrives in v0.2",
-    }
 
 
 def test_idle_cancel_with_discarded_jobs_plays_cancel(c: Controller, w: World) -> None:

@@ -74,8 +74,6 @@ Combinations of (state, event) **not present** in the table:
 - events with `reply` → reject with `invalid_in_mode`,
 - events without `reply` → ignore and log DEBUG `ignored <event> in <mode>`.
 
-Until continuous mode exists (v0.2, task 2.3), `ContinuousToggle` is rejected in every mode with `invalid_in_mode` (“continuous dictation arrives in v0.2”); from the hotkey it also plays the `error` sound.
-
 Sounds are referred to by the names from [10](10-cli-ipc-status.md) §10.6 (the single source of truth for sounds).
 
 ### IDLE
@@ -84,8 +82,8 @@ Sounds are referred to by the names from [10](10-cli-ipc-status.md) §10.6 (the 
 |---|---|---|---|
 | `PttPressed` | `engine == READY` | assign `recording_id` and `capture_id`, remember press time; request `audio_consumer.begin_ptt(ids)`, then `capture.open(ids)` (synchronously, 30–150 ms); open failure → handle like `AudioError` in PTT_RECORDING | PTT_RECORDING |
 | `PttPressed` | `engine != READY` | `error` sound, “STT engine unavailable” notification, reject with `engine_down`/`engine_starting` | IDLE |
-| `ContinuousToggle` | `engine == READY` and `vad.enabled` | `start` sound, new `recording_id` (`session_id`) and `capture_id`; request a Segmenter reset with these identifiers in the audio consumer; schedule `CaptureOpenDue(recording_id)` in 150 ms (the Controller does not block). Send the IPC response only after the open attempt | CONTINUOUS |
-| `ContinuousToggle` | `engine != READY` / `!vad.enabled` | `error` sound, reject with `engine_*` / `vad_disabled` | IDLE |
+| `ContinuousToggle` | `engine == READY`, `vad.enabled` and the Segmenter's VAD model loaded | `start` sound, new `recording_id` (`session_id`) and `capture_id`; request a Segmenter reset with these identifiers in the audio consumer; schedule `CaptureOpenDue(recording_id)` in 150 ms (the Controller does not block). Send the IPC response only after the open attempt | CONTINUOUS |
+| `ContinuousToggle` | `engine != READY` / `!vad.enabled` / VAD model not loaded | `error` sound, notification, reject with `engine_*` / `vad_disabled` / `vad_disabled`. Without Silero, continuous mode has no way to segment speech, unlike PTT, which falls back to the RMS gate (user decision 2026-10-04) | IDLE |
 | `CancelRequested` | — | `pipeline.cancel_all()`; `cancel` sound if anything was discarded | IDLE |
 | `JobDiscarded(no_speech)` | PTT source | `cancel` sound | IDLE |
 

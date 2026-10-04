@@ -104,6 +104,22 @@ class FlushDone:
 
 
 @dataclass(frozen=True)
+class CaptureOpenDue:
+    """Controller timer: open the microphone 150 ms after continuous mode starts (10 §10.6)."""
+
+    recording_id: int
+
+
+@dataclass(frozen=True)
+class ReconnectTick:
+    """Controller timer: the next microphone reopen attempt (04 §4.3)."""
+
+    recording_id: int
+    operation_id: int
+    attempt: int
+
+
+@dataclass(frozen=True)
 class AudioError:
     recording_id: int
     capture_id: int
@@ -184,6 +200,8 @@ Event = (
     | SpeechEnded
     | SegmentReady
     | FlushDone
+    | CaptureOpenDue
+    | ReconnectTick
     | AudioError
     | ServerRestartDone
     | JobStarted

@@ -1,0 +1,413 @@
+"""Controller in CONTINUOUS mode (docs/04-state-machine.md §4.3, task 2.3b), one test per row."""
+
+import dataclasses
+from typing import Any
+
+import numpy as np
+import pytest
+
+from local_stt import events as ev
+from local_stt.config import Config, ContinuousConfig, VadConfig
+from local_stt.controller import Controller, Mode
+from local_stt.interfaces import AudioSegment, EngineHealth, SegmentCut
+
+from .test_controller import Consumer, Pipeline, Reload, World, make, reply, status_of
+
+
+@pytest.fixture
+def w() -> World:
+    return World()
+
+
+@pytest.fixture
+def c(w: World) -> Controller:
+    return make(w)
+
+
+def start(c: Controller, w: World) -> tuple[int, int]:
+    """IDLE → CONTINUOUS with the microphone open; returns (recording_id, capture_id)."""
+    c.handle(ev.ContinuousToggle())
+    cont = c._cont
+    assert cont is not None
+    c.handle(ev.CaptureOpenDue(cont.recording_id))
+    assert cont.opened
+    w.calls.clear()
+    return cont.recording_id, cont.capture_id
+
+
+def segment(seq: int = 1, seconds: float = 2.0, cut: SegmentCut = "silence") -> AudioSegment:
+    samples = np.zeros(int(seconds * 16000), dtype=np.float32)
+    return AudioSegment(samples, 1, seq, ended_at=99.0, speech_ms=1500, cut=cut)
+
+
+def ops(w: World, name: str) -> list[tuple[Any, ...]]:
+    return [call for call in w.calls if call[0] == name]
+
+
+def stop_op(c: Controller) -> int:
+    assert c._cont is not None and c._cont.stop_op is not None
+    return c._cont.stop_op
+
+
+# --- IDLE: ContinuousToggle -----------------------------------------------------------------
+
+
+def test_toggle_plays_start_resets_the_consumer_and_delays_the_open(
+    c: Controller, w: World
+) -> None:
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    assert w.calls == [
+        ("sound", "start"),
+        ("consumer.reset_continuous", 1, 1),
+        ("schedule", 0.150, ev.CaptureOpenDue(1)),
+    ]
+    assert c.mode is Mode.CONTINUOUS
+    assert not r.done()  # answered after the open attempt
+    c.handle(ev.CaptureOpenDue(1))
+    assert ("capture.open", 1, 1) in w.calls
+    assert r.result() == {"ok": True}
+
+
+@pytest.mark.parametrize(
+    ("engine", "code"),
+    [(EngineHealth.STARTING, "engine_starting"), (EngineHealth.DOWN, "engine_down")],
+)
+def test_toggle_without_engine_is_rejected(w: World, engine: EngineHealth, code: str) -> None:
+    c = make(w, engine=engine)
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    assert w.sounds() == ["error"]
+    assert r.result()["error"] == code
+    assert c.mode is Mode.IDLE
+
+
+def test_toggle_with_vad_disabled_is_rejected(c: Controller, w: World) -> None:
+    c.config = dataclasses.replace(c.config, vad=VadConfig(enabled=False))
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    assert w.sounds() == ["error"]
+    assert r.result()["error"] == "vad_disabled"
+    assert c.mode is Mode.IDLE
+
+
+def test_toggle_without_a_vad_model_is_rejected(c: Controller, w: World) -> None:
+    w.vad_available = False
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    assert w.sounds() == ["error"]
+    assert w.notifications() == ["VAD model unavailable"]
+    assert r.result()["error"] == "vad_disabled"
+    assert not any(name.startswith("consumer") for name in w.names())
+
+
+def test_toggle_during_ptt_is_invalid_in_mode(c: Controller, w: World) -> None:
+    c.handle(ev.PttPressed(100.0))
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    assert r.result()["error"] == "invalid_in_mode"
+    assert c.mode is Mode.PTT_RECORDING
+
+
+def test_ptt_during_continuous_is_invalid_in_mode(c: Controller, w: World) -> None:
+    start(c, w)
+    r = reply()
+    c.handle(ev.PttPressed(100.0, r))
+    assert r.result()["error"] == "invalid_in_mode"
+
+
+# --- CONTINUOUS: start ----------------------------------------------------------------------
+
+
+def test_open_failure_rejects_the_start(c: Controller, w: World) -> None:
+    w.open_error = "no such device"
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    c.handle(ev.CaptureOpenDue(1))
+    assert r.result()["error"] == "audio_error"
+    assert w.sounds() == ["start", "error"]
+    assert ("consumer.discard", 1, 1) in w.calls
+    assert c.mode is Mode.IDLE
+
+
+def test_stop_before_the_open_cancels_the_start(c: Controller, w: World) -> None:
+    started = reply()
+    c.handle(ev.ContinuousToggle(started))
+    stopped = reply()
+    c.handle(ev.ContinuousToggle(stopped))
+    assert started.result()["error"] == "cancelled"
+    assert stopped.result() == {"ok": True}
+    c.handle(ev.CaptureOpenDue(1))  # the timer fires anyway: nothing opens
+    assert ops(w, "capture.open") == []
+    c.handle(ev.FlushDone(1, 1, stop_op(c), "stop"))
+    assert c.mode is Mode.IDLE
+
+
+def test_stale_open_timer_is_ignored(c: Controller, w: World) -> None:
+    start(c, w)
+    c.handle(ev.CaptureOpenDue(1))  # already open
+    c.handle(ev.CaptureOpenDue(99))
+    assert w.calls == []
+
+
+# --- CONTINUOUS: speech and segments --------------------------------------------------------
+
+
+def test_speech_flag_and_listening_status(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    assert c.display_status() == "LISTENING"
+    c.handle(ev.SpeechStarted(rid, cid))
+    assert c.display_status() == "LISTENING (speech)"
+    status = status_of(c)
+    assert (status["mode"], status["speech"], status["audio"]["open"]) == (
+        "CONTINUOUS",
+        True,
+        True,
+    )
+    c.handle(ev.SpeechEnded(rid, cid))
+    assert c.display_status() == "LISTENING"
+
+
+def test_segment_is_submitted_as_a_continuous_job(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=3, cut="max_length")))
+    (job,) = w.jobs
+    assert (job.source, job.session_id, job.seq, job.cut, job.ended_at) == (
+        "continuous",
+        1,
+        3,
+        "max_length",
+        99.0,
+    )
+    assert job.generation == 7
+    assert c.display_status() == "LISTENING, transcribing 1"
+    assert c.snapshot().queued_audio_s == 2.0
+
+
+def test_segments_of_another_session_or_stream_are_ignored(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    c.handle(ev.SegmentReady(rid + 1, cid, segment()))
+    c.handle(ev.SegmentReady(rid, cid + 1, segment()))
+    c.handle(ev.SegmentReady(rid, cid, segment(), operation_id=42))
+    assert w.jobs == []
+
+
+def test_backlog_stops_dictation_once(w: World) -> None:
+    c = make(w)
+    c.config = dataclasses.replace(c.config, continuous=ContinuousConfig(max_backlog_s=5.0))
+    rid, cid = start(c, w)
+    c.handle(ev.SegmentReady(rid, cid, segment(seconds=3)))
+    assert c._cont is not None and not c._cont.stopping
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=2, seconds=3)))
+    assert w.sounds() == ["stop", "error"]
+    assert w.notifications() == ["Transcription cannot keep up — dictation stopped"]
+    op = stop_op(c)
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=3, cut="flush"), operation_id=op))
+    assert len(ops(w, "consumer.flush")) == 1  # no second flush
+    assert len(w.jobs) == 3  # the queue is finished, the flushed segment included
+    c.handle(ev.FlushDone(rid, cid, op, "stop"))
+    assert c.mode is Mode.IDLE
+
+
+# --- CONTINUOUS: stop, cancel, engine DOWN --------------------------------------------------
+
+
+def test_toggle_stops_with_a_flush(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    w.now = 120.0
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    op = stop_op(c)
+    assert w.calls == [
+        ("capture.close",),
+        ("consumer.flush", rid, cid, op, "stop", 120.0),
+        ("sound", "stop"),
+    ]
+    assert r.result() == {"ok": True}
+    again = reply()
+    c.handle(ev.ContinuousToggle(again))  # while stopping
+    assert again.result()["error"] == "invalid_in_mode"
+    c.handle(ev.SegmentReady(rid, cid, segment(cut="flush"), operation_id=op))
+    assert len(w.jobs) == 1
+    c.handle(ev.FlushDone(rid, cid, op, "stop"))
+    assert c.mode is Mode.IDLE
+    c.handle(ev.SegmentReady(rid, cid, segment(), operation_id=op))  # late: ignored
+    c.handle(ev.FlushDone(rid, cid, op, "stop"))
+    assert len(w.jobs) == 1 and c.mode is Mode.IDLE
+
+
+def test_cancel_discards_the_session_and_the_queue(c: Controller, w: World) -> None:
+    started = reply()
+    c.handle(ev.ContinuousToggle(started))
+    w.calls.clear()
+    r = reply()
+    c.handle(ev.CancelRequested(r))
+    assert w.calls == [
+        ("capture.close",),
+        ("consumer.discard", 1, 1),
+        ("pipeline.cancel_all",),
+        ("sound", "cancel"),
+    ]
+    assert started.result()["error"] == "cancelled"
+    assert r.result()["ok"] is True
+    assert c.mode is Mode.IDLE
+
+
+def test_cancel_while_stopping_ends_at_once(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    c.handle(ev.ContinuousToggle())
+    op = stop_op(c)
+    c.handle(ev.CancelRequested())
+    assert c.mode is Mode.IDLE
+    c.handle(ev.SegmentReady(rid, cid, segment(cut="flush"), operation_id=op))
+    assert w.jobs == []
+
+
+def test_engine_down_stops_dictation(c: Controller, w: World) -> None:
+    start(c, w)
+    c.handle(ev.EngineStateChanged(EngineHealth.DOWN))
+    assert ("pipeline.pause",) in w.calls
+    assert len(ops(w, "consumer.flush")) == 1
+    assert w.sounds() == ["stop", "error"]
+    assert w.notifications() == ["STT engine stopped working — dictation stopped"]
+    c.handle(ev.EngineStateChanged(EngineHealth.DOWN))  # repeated: no second flush
+    assert len(ops(w, "consumer.flush")) == 1
+
+
+def test_job_failure_keeps_dictating(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    c.handle(ev.JobFailed(w.jobs[0].id, "continuous", 2.0, "HTTP 500"))
+    assert c.mode is Mode.CONTINUOUS
+    assert w.notifications() == ["Could not transcribe segment (2 s)"]
+
+
+@pytest.mark.parametrize("event", [ev.ShutdownRequested(), ev.X11ConnectionLost()])
+def test_shutdown_discards_the_session(c: Controller, w: World, event: ev.Event) -> None:
+    start(c, w)
+    c.handle(event)
+    assert ("capture.close",) in w.calls
+    assert ("consumer.discard", 1, 1) in w.calls
+    assert c.exit_code == 0
+
+
+# --- CONTINUOUS: reconnect ------------------------------------------------------------------
+
+
+def lose(c: Controller, w: World) -> tuple[int, int, int]:
+    """CONTINUOUS(reconnecting) after device loss; returns (rid, old cid, operation_id)."""
+    rid, cid = start(c, w)
+    c.handle(ev.AudioError(rid, cid, "device_lost", "stream stopped"))
+    assert c._cont is not None and c._cont.reconnect_op is not None
+    op = c._cont.reconnect_op
+    assert w.calls == [("capture.close",), ("consumer.flush", rid, cid, op, "reconnect", 100.0)]
+    w.calls.clear()
+    return rid, cid, op
+
+
+def test_device_loss_flushes_then_reopens(c: Controller, w: World) -> None:
+    rid, cid, op = lose(c, w)
+    assert c.display_status() == "LISTENING (reconnecting)"
+    assert status_of(c)["reconnecting"] is True
+    c.handle(ev.AudioError(rid, cid, "device_lost", "again"))  # while reconnecting: ignored
+    c.handle(ev.SegmentReady(rid, cid, segment(cut="flush"), operation_id=op))
+    assert len(w.jobs) == 1
+    c.handle(ev.FlushDone(rid, cid, op, "reconnect"))
+    assert c.mode is Mode.CONTINUOUS
+    assert w.calls[-1] == ("schedule", 1.0, ev.ReconnectTick(rid, op, 1))
+    w.calls.clear()
+    c.handle(ev.ReconnectTick(rid, op, 1))
+    new_cid = cid + 1
+    assert w.calls == [
+        ("consumer.reset_continuous", rid, new_cid),
+        ("capture.open", rid, new_cid),
+    ]
+    assert c.display_status() == "LISTENING, transcribing 1"  # the reconnect segment
+    c.handle(ev.SegmentReady(rid, new_cid, segment(seq=2)))
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=9)))  # the old stream: ignored
+    assert [job.seq for job in w.jobs] == [1, 2]
+
+
+def test_three_failed_reopens_stop_dictation(c: Controller, w: World) -> None:
+    rid, cid, op = lose(c, w)
+    c.handle(ev.FlushDone(rid, cid, op, "reconnect"))
+    w.open_error = "gone"
+    for attempt in (1, 2):
+        w.calls.clear()
+        c.handle(ev.ReconnectTick(rid, op, attempt))
+        assert w.calls[-1] == ("schedule", 1.0, ev.ReconnectTick(rid, op, attempt + 1))
+    w.calls.clear()
+    c.handle(ev.ReconnectTick(rid, op, 3))
+    assert w.sounds() == ["stop", "error"]
+    assert w.notifications() == ["Microphone lost — dictation stopped"]
+    assert c._cont is not None
+    stop = stop_op(c)
+    c.handle(ev.FlushDone(rid, c._cont.capture_id, stop, "stop"))
+    assert c.mode is Mode.IDLE
+
+
+def test_stop_during_the_reconnect_flush_waits_for_it(c: Controller, w: World) -> None:
+    rid, cid, op = lose(c, w)
+    r = reply()
+    c.handle(ev.ContinuousToggle(r))
+    assert ops(w, "consumer.flush") == []  # the reconnect flush is still running
+    c.handle(ev.SegmentReady(rid, cid, segment(cut="flush"), operation_id=op))
+    c.handle(ev.FlushDone(rid, cid, op, "reconnect"))
+    stop = stop_op(c)
+    assert ops(w, "consumer.flush") == [("consumer.flush", rid, cid, stop, "stop", 100.0)]
+    assert ops(w, "schedule") == []  # no reopen timer
+    c.handle(ev.FlushDone(rid, cid, stop, "stop"))
+    assert c.mode is Mode.IDLE
+    assert len(w.jobs) == 1  # the reconnect segment exactly once
+
+
+def test_stop_while_waiting_for_a_reopen(c: Controller, w: World) -> None:
+    rid, cid, op = lose(c, w)
+    c.handle(ev.FlushDone(rid, cid, op, "reconnect"))
+    c.handle(ev.ContinuousToggle())
+    stop = stop_op(c)
+    c.handle(ev.ReconnectTick(rid, op, 1))  # blocked by stopping
+    assert ops(w, "capture.open") == []
+    c.handle(ev.FlushDone(rid, cid, op, "reconnect"))  # duplicate: ignored
+    c.handle(ev.FlushDone(rid, cid, stop, "stop"))
+    assert c.mode is Mode.IDLE
+
+
+# --- reload ---------------------------------------------------------------------------------
+
+
+def test_vad_reload_waits_for_idle(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    w.next_config = Config(vad=VadConfig(min_silence_ms=500))
+    r = reply()
+    c.handle(ev.ReloadRequested(r))
+    assert r.result()["deferred"] == ["vad.min_silence_ms"]
+    assert ops(w, "reload.idle") == []
+    c.handle(ev.ContinuousToggle())
+    c.handle(ev.FlushDone(rid, cid, stop_op(c), "stop"))
+    assert len(ops(w, "reload.idle")) == 1
+    assert c.config.vad.min_silence_ms == 500
+
+
+def test_stale_speech_and_reconnect_events_are_ignored(c: Controller, w: World) -> None:
+    rid, cid, op = lose(c, w)
+    c.handle(ev.SpeechStarted(rid, cid + 5))
+    c.handle(ev.ReconnectTick(rid, op, 1))  # the reconnect flush has not finished
+    c.handle(ev.AudioError(rid, cid, "open_failed", "x"))
+    assert w.calls == []
+    assert status_of(c)["speech"] is False
+
+
+def test_default_schedule_posts_the_event_after_the_delay(w: World) -> None:
+    c = Controller(
+        Config(),
+        capture=w,
+        consumer=Consumer(w),
+        pipeline=Pipeline(w),
+        feedback=w,
+        lifecycle=w,
+        reload_target=Reload(w),
+        load_config=w.load_config,
+    )
+    c._schedule(0.01, ev.CaptureOpenDue(5))
+    assert c.events.get(timeout=2) == ev.CaptureOpenDue(5)
