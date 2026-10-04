@@ -2,6 +2,7 @@
 """Daemon commands of the CLI (docs/10-cli-ipc-status.md §10.1, §10.4)."""
 
 import json
+import sys
 import tempfile
 import threading
 from collections.abc import Iterator
@@ -94,6 +95,7 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> FakeIpc:
         (["ptt", "start"], {"cmd": "ptt", "action": "start"}),
         (["ptt", "stop"], {"cmd": "ptt", "action": "stop"}),
         (["cancel"], {"cmd": "cancel"}),
+        (["toggle"], {"cmd": "toggle"}),
         (["status"], {"cmd": "status"}),
     ],
 )
@@ -175,6 +177,81 @@ def test_reload(
         assert "config error: stt.port: must be in 1-65535 (got 0)" in captured.err
 
 
+# --- status --watch (task 2.5) ----------------------------------------------------------------
+
+
+def state(name: str) -> dict[str, Any]:
+    return {"event": "state", "status": {**STATUS, "state": name}}
+
+
+JOB = {
+    "event": "job",
+    "job_id": 1,
+    "source": "continuous",
+    "audio_s": 2.0,
+    "processing_s": 1.0,
+    "chars": 9,
+    "result": "injected",
+}
+
+
+def fake_stream(monkeypatch: pytest.MonkeyPatch, messages: list[Any]) -> None:
+    def subscribe() -> Iterator[dict[str, Any]]:
+        for m in messages:
+            if isinstance(m, BaseException):
+                raise m
+            yield m
+
+    monkeypatch.setattr(ipc, "subscribe", subscribe)
+
+
+def test_watch_prints_a_line_per_state_change(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_stream(monkeypatch, [state("IDLE"), JOB, state("LISTENING (speech)"), KeyboardInterrupt()])
+    assert cli.main(["status", "--watch"]) == 0
+    assert capsys.readouterr().out == "IDLE\nLISTENING (speech)\n"  # not a terminal: no rewriting
+
+
+def test_watch_rewrites_one_line_on_a_terminal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_stream(monkeypatch, [state("IDLE"), state("LISTENING"), KeyboardInterrupt()])
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    assert cli.main(["status", "--watch"]) == 0
+    assert capsys.readouterr().out == "\r\033[KIDLE\r\033[KLISTENING\n"
+
+
+def test_watch_json_passes_every_event(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_stream(monkeypatch, [state("IDLE"), JOB])
+    assert cli.main(["status", "--watch", "--json"]) == 3  # the stream ended: daemon stopped
+    captured = capsys.readouterr()
+    assert [json.loads(line) for line in captured.out.splitlines()] == [state("IDLE"), JOB]
+    assert captured.err == "daemon stopped\n"
+
+
+@pytest.mark.parametrize(
+    ("messages", "code", "err"),
+    [
+        ([{"ok": False, "error": "timeout", "message": "no answer"}], 4, "rejected: no answer\n"),
+        ([ipc.DaemonNotRunning("x")], 3, "daemon not running\n"),
+        ([ipc.IpcError("broken")], 1, "error: broken\n"),
+    ],
+)
+def test_watch_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    messages: list[Any],
+    code: int,
+    err: str,
+) -> None:
+    fake_stream(monkeypatch, messages)
+    assert cli.main(["status", "--watch"]) == code
+    assert capsys.readouterr().err == err
+
+
 def test_devices(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     devices = [
         DeviceInfo("alsa_input.usb", "USB Mic", False),
@@ -234,3 +311,17 @@ def test_round_trip_through_the_socket(running: World, capsys: pytest.CaptureFix
     assert cli.main(["ptt", "start"]) == 4  # engine not ready yet: rejected
     assert "engine" in capsys.readouterr().err
     assert cli.main(["cancel"]) == 0
+
+
+def test_watch_through_the_socket(
+    running: World, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    real = ipc.subscribe
+
+    def first_state_then_interrupt() -> Iterator[dict[str, Any]]:
+        yield next(real())
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(ipc, "subscribe", first_state_then_interrupt)
+    assert cli.main(["status", "--watch"]) == 0
+    assert capsys.readouterr().out == "STARTING\n"

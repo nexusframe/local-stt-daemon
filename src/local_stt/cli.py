@@ -37,8 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser("status", help="daemon status")
     status.add_argument("--json", action="store_true", help="machine-readable status")
+    status.add_argument(
+        "--watch", action="store_true", help="follow state changes until interrupted (Ctrl+C)"
+    )
     ptt = commands.add_parser("ptt", help="start/stop push-to-talk, like the hotkey")
     ptt.add_argument("action", choices=["start", "stop"])
+    commands.add_parser("toggle", help="start/stop continuous dictation, like the hotkey")
     commands.add_parser("cancel", help="cancel the recording and pending jobs")
     commands.add_parser("reload", help="reload the config file")
     commands.add_parser("devices", help="list PipeWire microphones for audio.device")
@@ -283,6 +287,40 @@ def _run_daemon_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_watch(*, json_lines: bool) -> int:
+    """`status --watch` (10 §10.4): one rewritten line on a terminal, a line per change
+    otherwise (status bars); `--json` prints the raw stream, job events included."""
+    from local_stt import ipc
+
+    tty = sys.stdout.isatty()
+    try:
+        for message in ipc.subscribe():
+            if "event" not in message:  # an error response instead of the stream
+                return _rejected(message)
+            if json_lines:
+                print(json.dumps(message, ensure_ascii=False), flush=True)
+            elif message["event"] == "state":
+                state = message["status"]["state"]
+                if tty:
+                    print(f"\r\033[K{state}", end="", flush=True)
+                else:
+                    print(state, flush=True)
+    except KeyboardInterrupt:
+        if tty and not json_lines:
+            print()
+        return 0
+    except ipc.DaemonNotRunning:
+        print("daemon not running", file=sys.stderr)
+        return EXIT_NOT_RUNNING
+    except ipc.IpcError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if tty and not json_lines:
+        print()
+    print("daemon stopped", file=sys.stderr)
+    return EXIT_NOT_RUNNING
+
+
 def _format_reload(response: dict[str, Any]) -> str:
     applied, deferred = response.get("applied", []), response.get("deferred", [])
     if not applied and not deferred:
@@ -361,7 +399,9 @@ def _run_devices() -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command in ("status", "ptt", "cancel", "reload"):
+    if args.command == "status" and args.watch:
+        return _run_watch(json_lines=args.json)
+    if args.command in ("status", "ptt", "toggle", "cancel", "reload"):
         return _run_daemon_command(args)
     if args.command == "devices":
         return _run_devices()

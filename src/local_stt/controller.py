@@ -145,6 +145,7 @@ class Controller:
         clock: Callable[[], float] = time.monotonic,
         schedule: Callable[[float, ev.Event], None] | None = None,
         on_status: Callable[[str], None] | None = None,
+        on_publish: Callable[[dict[str, Any]], None] | None = None,
         hotkey_problems: Sequence[HotkeyProblem] = (),
     ):
         self.events: queue.Queue[ev.Event] = queue.Queue()
@@ -160,6 +161,7 @@ class Controller:
         self._clock = clock
         self._schedule = schedule or self._timer
         self._on_status = on_status
+        self._on_publish = on_publish  # IPC `subscribe` stream (10 §10.2)
 
         self.mode = Mode.IDLE
         self.engine = EngineHealth.STARTING
@@ -339,6 +341,32 @@ class Controller:
             self._last_status = status
             if self._on_status is not None:
                 self._on_status(status)
+            if self._on_publish is not None:
+                self._on_publish({"event": "state", "status": self.status()})
+
+    def _publish_job(
+        self,
+        job_id: int,
+        source: str,
+        result: str,
+        *,
+        audio_s: float | None,
+        processing_s: float | None = None,
+        chars: int = 0,
+    ) -> None:
+        """A `job` event for subscribers (10 §10.2); never contains text."""
+        if self._on_publish is not None:
+            self._on_publish(
+                {
+                    "event": "job",
+                    "job_id": job_id,
+                    "source": source,
+                    "audio_s": audio_s,
+                    "processing_s": processing_s,
+                    "chars": chars,
+                    "result": result,
+                }
+            )
 
     # --- helpers -------------------------------------------------------------------------
 
@@ -768,8 +796,18 @@ class Controller:
             self._busy_job = None
 
     def _on_job_finished(self, event: ev.JobFinished) -> None:
+        audio_s = self._outstanding.get(event.job_id)
         self._job_done(event.job_id)
         result = event.result
+        outcome = "clipboard" if result.left_in_clipboard else "injected" if result.ok else "failed"
+        self._publish_job(
+            event.job_id,
+            event.source,
+            outcome,
+            audio_s=event.timings.get("audio", audio_s),
+            processing_s=event.timings.get("stt"),
+            chars=result.chars,
+        )
         if result.ok:
             self._jobs_ok += 1
         else:
@@ -790,7 +828,9 @@ class Controller:
             self._feedback.notify("clipboard", "Could not enter text", result.error or "")
 
     def _on_job_discarded(self, event: ev.JobDiscarded) -> None:
+        audio_s = self._outstanding.get(event.job_id)
         self._job_done(event.job_id)
+        self._publish_job(event.job_id, event.source, event.reason, audio_s=audio_s)
         if event.reason in ("no_speech", "filtered"):
             self._jobs_filtered += 1
         if event.reason == "no_speech" and event.source == "ptt" and self.mode is Mode.IDLE:
@@ -798,6 +838,7 @@ class Controller:
 
     def _on_job_failed(self, event: ev.JobFailed) -> None:
         self._job_done(event.job_id)
+        self._publish_job(event.job_id, event.source, "failed", audio_s=event.audio_s)
         self._jobs_failed += 1
         log.error("job %d failed (%.1f s of audio): %s", event.job_id, event.audio_s, event.error)
         now = self._clock()

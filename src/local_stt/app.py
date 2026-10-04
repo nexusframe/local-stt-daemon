@@ -347,6 +347,7 @@ class Daemon:
             reload_target=reloader,
             load_config=lambda: load_config(pre.config_path),
             on_status=self._publish_status,
+            on_publish=self.ipc.publish,
         )
 
     def start(self) -> None:

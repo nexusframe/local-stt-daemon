@@ -5,6 +5,7 @@ import os
 import socket
 import stat
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,6 @@ def test_commands_become_events(
     [
         (b'{"cmd": "nope"}\n', "unknown_command"),
         (b'{"cmd": "ptt", "action": "hold"}\n', "bad_request"),
-        (b'{"cmd": "subscribe"}\n', "unsupported"),
         (b"[1, 2]\n", "bad_request"),
         (b"{not json\n", "bad_request"),
         (b"\xff\xfe\n", "bad_request"),
@@ -177,3 +177,62 @@ def test_second_instance_is_refused(server: ipc.IpcServer, path: Path, daemon: D
     with pytest.raises(ipc.AnotherInstanceRunning):
         ipc.IpcServer(path, daemon.post).start()
     assert ipc.call({"cmd": "cancel"}, path=path) == {"ok": True}  # the first one is intact
+
+
+# --- subscribe (task 2.5) ---------------------------------------------------------------------
+
+
+def wait_until(condition: Any, timeout_s: float = 3.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not condition():
+        assert time.monotonic() < deadline, "condition not reached"
+        time.sleep(0.01)
+
+
+def test_subscribe_streams_the_state_then_published_messages(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = {"ok": True, "status": {"state": "IDLE"}}
+    stream = ipc.subscribe(path=path)
+    assert next(stream) == {"event": "state", "status": {"state": "IDLE"}}
+    assert [type(e) for e in daemon.events] == [ev.StatusRequested]
+    wait_until(lambda: len(server.subscribers._subs) == 1)
+    job = {"event": "job", "job_id": 3, "result": "injected"}
+    server.publish(job)
+    assert next(stream) == job
+    server.stop()  # the daemon shuts down: the stream ends
+    assert list(stream) == []
+
+
+def test_subscribe_without_a_controller_answer_is_an_error(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = None
+    assert next(ipc.subscribe(path=path))["error"] == "timeout"
+    wait_until(lambda: not server.subscribers._subs)
+
+
+def test_a_disconnected_subscriber_is_removed(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = {"ok": True, "status": {}}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(2)
+        s.connect(str(path))
+        s.sendall(b'{"cmd": "subscribe"}\n')
+        assert json.loads(s.makefile("rb").readline())["event"] == "state"
+        wait_until(lambda: len(server.subscribers._subs) == 1)
+    wait_until(lambda: not server.subscribers._subs)  # noticed without a published message
+
+
+def test_a_subscriber_that_falls_behind_is_dropped() -> None:
+    subscribers = ipc.Subscribers()
+    sub = subscribers.add()
+    for i in range(ipc.SUBSCRIBER_BACKLOG + 1):
+        subscribers.publish({"n": i})
+    assert sub.dropped and not subscribers._subs
+
+
+def test_subscribe_to_a_stopped_daemon(path: Path) -> None:
+    with pytest.raises(ipc.DaemonNotRunning):
+        next(ipc.subscribe(path=path))

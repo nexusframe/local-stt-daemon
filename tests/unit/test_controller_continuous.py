@@ -9,7 +9,7 @@ import pytest
 from local_stt import events as ev
 from local_stt.config import Config, ContinuousConfig, VadConfig
 from local_stt.controller import Controller, Mode
-from local_stt.interfaces import AudioSegment, EngineHealth, SegmentCut
+from local_stt.interfaces import AudioSegment, EngineHealth, InjectResult, SegmentCut
 
 from .test_controller import Consumer, Pipeline, Reload, World, make, reply, status_of
 
@@ -411,3 +411,61 @@ def test_default_schedule_posts_the_event_after_the_delay(w: World) -> None:
     )
     c._schedule(0.01, ev.CaptureOpenDue(5))
     assert c.events.get(timeout=2) == ev.CaptureOpenDue(5)
+
+
+# --- IPC subscribe stream (task 2.5; 10 §10.2) ----------------------------------------------
+
+
+def test_state_changes_and_jobs_are_published(w: World) -> None:
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    rid, cid = start(c, w)
+    assert [m["status"]["state"] for m in published] == ["LISTENING"]
+    c.handle(ev.SpeechStarted(rid, cid))
+    c.handle(ev.SpeechStarted(rid, cid))  # no change: nothing published
+    c.handle(ev.SegmentReady(rid, cid, segment(seconds=2)))
+    job_id = w.jobs[0].id
+    c.handle(ev.JobDiscarded(job_id, "continuous", "filtered"))
+    assert [m.get("status", {}).get("state") or m["result"] for m in published] == [
+        "LISTENING",
+        "LISTENING (speech)",
+        "LISTENING (speech), transcribing 1",
+        "filtered",
+        "LISTENING (speech)",
+    ]
+    assert published[3] == {
+        "event": "job",
+        "job_id": job_id,
+        "source": "continuous",
+        "audio_s": 2.0,
+        "processing_s": None,
+        "chars": 0,
+        "result": "filtered",
+    }
+
+
+@pytest.mark.parametrize(
+    ("result", "outcome"),
+    [
+        (InjectResult(True, "clipboard", 9, "gedit", False, None), "injected"),
+        (InjectResult(True, "clipboard", 9, None, True, None, no_target=True), "clipboard"),
+        (InjectResult(False, "type", 0, "xterm", False, "xdotool failed"), "failed"),
+    ],
+)
+def test_finished_and_failed_jobs_are_published(
+    w: World, result: InjectResult, outcome: str
+) -> None:
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    timings = {"audio": 1.5, "stt": 0.7}
+    c.handle(ev.JobFinished(4, "ptt", result, timings))
+    c.handle(ev.JobFailed(5, "ptt", 3.0, "HTTP 500"))
+    jobs = [m for m in published if m["event"] == "job"]
+    assert [
+        (j["job_id"], j["result"], j["audio_s"], j["processing_s"], j["chars"]) for j in jobs
+    ] == [
+        (4, outcome, 1.5, 0.7, result.chars),
+        (5, "failed", 3.0, None, 0),
+    ]
