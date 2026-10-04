@@ -78,6 +78,19 @@ Status: checklist completed 2026-10-04, results in [acceptance-v0.2.md](acceptan
 
 Preliminary-design requirements covered by v0.2: continuous dictation, VAD, automatic segmentation, automatic insertion of successive segments, daemon status, and audio error handling.
 
+### v0.2 follow-ups — external code review (2026-10-04)
+
+A static review of `a23c111` reported four defects; each was confirmed by reading the code (not reproduced at runtime). Targeted fixes only: E14 stays as it is, and the pipeline gets no catch-all for unexpected exceptions (user decision 2026-10-04). Each fix comes with a test that reproduces the defect.
+
+| # | Task | Severity |
+|---|---|---|
+| R1 | **Replacement template not validated:** `config.py` checks only the regex pattern, not `replace`. A pattern `(a)` with `replace = "\2"` passes validation, and `re.sub` then raises `re.error` on **every** text, even without a match (checked in Python). The pipeline thread crashes, E14 ends the process, and after the systemd restart the first dictation crashes it again. Fix: the validator runs `re.sub(pattern, replace, "")`, which parses the template without a match (Python 3.12 raises `IndexError`, not `re.error`, for an unknown group name), so a bad reload is rejected and the previous config is kept | high |
+| R2 | **Truncated HTTP response kills the daemon:** `WhisperServerEngine._request` maps only `TimeoutError` and `OSError`; `http.client.IncompleteRead` (and other `http.client.HTTPException`s that are not `OSError`) escapes `EngineError` handling in the pipeline, and E14 ends the process, losing queued audio. Fix: `IncompleteRead` → `EngineConnectionError` (requeue, as for a dropped connection), other `HTTPException`s → `EngineResponseError`; `health()` uses the same request and no longer crashes the monitor thread either. Test: a server that declares a larger `Content-Length`, sends part of the body and closes | medium |
+| R3 | **Server-group reload does not reach the pipeline:** after a restart, `switch_server` (`app.py`) swaps the engine and the controller updates its `config.stt`, but `pipeline.update_config` is called only for the `live` group. Changing only `stt.language` (the only server key the pipeline reads; its timeouts are live keys) leaves the pipeline on the old value. Fix: the controller passes `use_server` its effective config (the restart's server keys + live keys reloaded in the meantime, so a later live reload is not reverted), and `ComponentReloader.use_server` re-applies the live components, the pipeline among them. Test: the language of the next transcription request, not just the restart call | medium |
+| R4 | **Microphone stream not always closed on errors (`capture.py`):** if `stream.start()` fails, the created `InputStream` is not closed; if `stop()`/`abort()` raises, `close()` is skipped although `self._stream` is already cleared. Fix: attempt `close()` in `finally` on both paths. Test: an error raised after the stream was created | low |
+
+Status: R1–R4 fixed 2026-10-04; each new test fails on the old code and passes with the fix (full suite: 802 passed before the last test-only lint fix, ruff and mypy clean). Live check 2026-10-04 after `install.sh --no-apt` (`doctor` 17 OK): R1 — a `(a)` → `\2` rule makes `local-stt reload` exit 78 with the validator message, same daemon PID; R3 — after a reload of only `stt.language` pl → en, Polish PTT speech came out in English (job 1), then restored to pl. R2 and R4 cannot be provoked safely on the live daemon and are covered by unit tests only. Spec updated in [04](04-state-machine.md) §4.6, [06](06-stt-engine.md) §6.5, [09](09-configuration.md).
+
 ## v0.3 — Quality and control
 
 The preliminary design scope (“partial transcription, result stabilization, improved context management, model switching, CPU/latency benchmark”) becomes the following ADR-010-compatible tasks:
