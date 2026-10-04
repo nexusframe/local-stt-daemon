@@ -99,7 +99,11 @@ class Session:
 
 @contextmanager
 def running_daemon(
-    server: ws.TemporaryWhisperServer, monkeypatch: pytest.MonkeyPatch, **stt: Any
+    server: ws.TemporaryWhisperServer,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    audio: Path = FIXTURE,
+    **stt: Any,
 ) -> Iterator[Session]:
     assert server.engine is not None
     base = Config()
@@ -118,7 +122,7 @@ def running_daemon(
         daemon = app.Daemon(
             pre,
             SdNotifier({}),
-            capture=lambda frames, _device, _lost: FileAudioSource(frames, FIXTURE),
+            capture=lambda frames, _device, _lost: FileAudioSource(frames, audio),
         )
         receiver = Receiver(display)
         started = False
