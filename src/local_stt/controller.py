@@ -622,6 +622,7 @@ class Controller:
             return None
         cont.opened = True
         log.info("continuous dictation started (session %d)", cont.recording_id)
+        self._feedback.notify("dictation", "Dictation enabled", informational=True)
         self._respond(cont.start_reply, _ok())
 
     def _on_speech(self, event: ev.SpeechStarted | ev.SpeechEnded) -> None:
@@ -697,6 +698,7 @@ class Controller:
             log.info("continuous dictation stopped (session %d)", cont.recording_id)
             self._cont = None
             self.mode = Mode.IDLE
+            self._feedback.notify("dictation", "Dictation disabled", informational=True)
             return None
         if (
             event.purpose == "reconnect"
@@ -761,7 +763,7 @@ class Controller:
         cont.reconnect_op = None
         log.info("microphone reconnected (attempt %d)", event.attempt)
 
-    def _drop_continuous(self) -> None:
+    def _drop_continuous(self, *, notify: bool = True) -> None:
         """Invalidates the session and its operations; nothing more is submitted."""
         cont = self._cont
         assert cont is not None
@@ -770,6 +772,8 @@ class Controller:
         self._capture.close()
         self._consumer.discard(cont.recording_id, cont.capture_id)
         self._respond(cont.start_reply, _error("cancelled", "continuous start was cancelled"))
+        if notify and cont.opened:
+            self._feedback.notify("dictation", "Dictation disabled", informational=True)
 
     # --- engine and jobs ("Any state") ---------------------------------------------------
 
@@ -966,7 +970,7 @@ class Controller:
         if self._rec is not None:
             self._drop_recording()
         if self._cont is not None:
-            self._drop_continuous()
+            self._drop_continuous(notify=False)
         self._cancel_pipeline()
         self._lifecycle.shutdown(x11_alive=True)
         self._stop(0)
@@ -976,7 +980,7 @@ class Controller:
         if self._rec is not None:
             self._drop_recording()
         if self._cont is not None:
-            self._drop_continuous()
+            self._drop_continuous(notify=False)  # no X11: notify-send would fail anyway
         self._lifecycle.shutdown(x11_alive=False)
         self._stop(0)
 

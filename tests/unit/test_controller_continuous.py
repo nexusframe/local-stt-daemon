@@ -493,3 +493,48 @@ def test_muted_microphone_is_notified_once(c: Controller, w: World) -> None:
 def test_status_reports_the_consumer_overflows(c: Controller, w: World) -> None:
     w.overflows = 3
     assert status_of(c)["audio"]["overflows"] == 3
+
+
+# --- informational notifications (task 2.8; 10 §10.6, level "all") --------------------------
+
+
+def informational(w: World) -> list[tuple[str, str]]:
+    return [(c[1], c[2]) for c in w.calls if c[0] == "notify" and c[3]]
+
+
+def test_dictation_enabled_and_disabled_are_informational(c: Controller, w: World) -> None:
+    c.handle(ev.ContinuousToggle())
+    assert informational(w) == []  # not before the microphone opens
+    c.handle(ev.CaptureOpenDue(1))
+    assert informational(w) == [("dictation", "Dictation enabled")]
+    c.handle(ev.ContinuousToggle())
+    assert len(informational(w)) == 1  # not until the flush is confirmed
+    c.handle(ev.FlushDone(1, 1, stop_op(c), "stop"))
+    assert informational(w)[-1] == ("dictation", "Dictation disabled")
+
+
+def test_error_stops_keep_their_own_notification(w: World) -> None:
+    c = make(w)
+    rid, cid = start(c, w)
+    c.handle(ev.EngineStateChanged(EngineHealth.DOWN))
+    c.handle(ev.FlushDone(rid, cid, stop_op(c), "stop"))
+    keys = [(call[1], call[2]) for call in w.calls if call[0] == "notify"]
+    assert keys == [
+        ("continuous", "STT engine stopped working — dictation stopped"),
+        ("dictation", "Dictation disabled"),  # another key: the error stays visible
+    ]
+
+
+def test_cancel_notifies_only_an_open_session(c: Controller, w: World) -> None:
+    c.handle(ev.ContinuousToggle())
+    c.handle(ev.CancelRequested())  # before the open: nothing was enabled
+    assert informational(w) == []
+    start(c, w)
+    c.handle(ev.CancelRequested())
+    assert informational(w) == [("dictation", "Dictation disabled")]
+
+
+def test_shutdown_does_not_notify(c: Controller, w: World) -> None:
+    start(c, w)
+    c.handle(ev.ShutdownRequested())
+    assert informational(w) == []
