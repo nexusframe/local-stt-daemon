@@ -12,3 +12,8 @@ dist/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Local assistant configuration and pre-publication backup (not published)
+.claude/
+CLAUDE.md
+backup/

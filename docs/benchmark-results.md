@@ -14,7 +14,7 @@
 # Benchmark results — corpus A (2026-10-03)
 
 - Run: 2026-10-03T09:10:49+00:00; CPU: Intel(R) Core(TM) i5-8365U CPU @ 1.60GHz; governor: powersave; power: AC; kernel: 7.0.0-38-generic
-- whisper.cpp: v1.9.4; dataset: `/home/leto/stt-corpus`; repeats: 3; decoding: `{"temperature": 0.0, "temperature_inc": 0.2, "language": "pl", "prompt": null, "rms_gate_dbfs": -50.0, "nice": 5}`
+- whisper.cpp: v1.9.4; dataset: `~/stt-corpus`; repeats: 3; decoding: `{"temperature": 0.0, "temperature_inc": 0.2, "language": "pl", "prompt": null, "rms_gate_dbfs": -50.0, "nice": 5}`
 - text_ready_s = RMS gate + HTTP transcription + text normalization (excludes injection, capture finalization and queueing). **N2 is not confirmed by this report**: it requires `total` from the full daemon in v0.1 (13 §13.5).
 
 ## Stage 1 — medium group
@@ -91,7 +91,7 @@ Excluded configurations:
 
 ## History — interim public corpus B (2026-09-17)
 
-Run `2026-09-17T16-28-19Z` on `/home/leto/stt-corpus-public` (13.2B: FLEURS + Wolne Lektury audiobook, other speakers, studio-like audio, no `short` group). It produced the provisional default that corpus A later confirmed. Notes from that run:
+Run `2026-09-17T16-28-19Z` on `~/stt-corpus-public` (13.2B: FLEURS + Wolne Lektury audiobook, other speakers, studio-like audio, no `short` group). It produced the provisional default that corpus A later confirmed. Notes from that run:
 
 > - Run on the interim public corpus (13.2B), not corpus A. Rerun on corpus A before fixing the defaults for good.
 > - Provisional default: `small-q8_0`, `threads = 4`, `audio_ctx = 1000` (WER 24.1 %, p90 text_ready 3.73 s, peak RSS 442 MB). Approved by the user on 2026-09-17 under the 13 §13.5 rule with N2 = 5 s.
