@@ -482,7 +482,8 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
         _check_regex(pattern, f"text.hallucination_patterns[{i}]", errors)
     for i, rule in enumerate(config.text.replacements):
         if rule.regex:
-            _check_regex(rule.pattern, f"text.replacements[{i}].pattern", errors)
+            if _check_regex(rule.pattern, f"text.replacements[{i}].pattern", errors):
+                _check_template(rule, f"text.replacements[{i}].replace", errors)
         else:
             check(
                 rule.pattern != "",
@@ -528,11 +529,22 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
     return warnings
 
 
-def _check_regex(pattern: str, key: str, errors: list[str]) -> None:
+def _check_regex(pattern: str, key: str, errors: list[str]) -> bool:
     try:
         re.compile(pattern)
     except re.error as e:
         errors.append(f"{key}: invalid regex: {e} (got {_show(pattern)})")
+        return False
+    return True
+
+
+def _check_template(rule: Replacement, key: str, errors: list[str]) -> None:
+    # re.sub parses the template even without a match, so a bad one would fail on every
+    # text. Python 3.12 raises IndexError (not re.error) for an unknown group name.
+    try:
+        re.sub(rule.pattern, rule.replace, "")
+    except (re.error, IndexError) as e:
+        errors.append(f"{key}: invalid replacement template: {e} (got {_show(rule.replace)})")
 
 
 # --- files the daemon needs --------------------------------------------------------------

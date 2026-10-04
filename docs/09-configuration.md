@@ -119,6 +119,7 @@ timings = true                       # timing line for each job (without content
 | `stt.extra_server_args` does not contain `-pr`/`--print-realtime` or `-debug`/`--debug-mode`: `--print-realtime` prints transcribed text to the server's stdout, which ends up in journald (12 §12.1; verified in `examples/server/server.cpp`, v1.9.4); `--debug-mode` enables whisper.cpp debug output derived from the audio | `stt.extra_server_args: flag X would log transcribed content` |
 | `continuous` requires `vad.enabled` | warning `vad.enabled=false: continuous dictation unavailable`; `toggle` returns `vad_disabled` |
 | regexes in `text.*` compile | `text.hallucination_patterns[2]: invalid regex: …` |
+| the `replace` template of a regex `text.replacements` rule is valid for its pattern (group references exist, no bad escapes); `re.sub` parses the template even without a match, so a bad one would fail on every transcript | `text.replacements[0].replace: invalid replacement template: …` |
 
 Notes on the implementation (`local_stt/config.py`):
 
