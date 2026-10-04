@@ -11,7 +11,14 @@ import pytest
 
 from local_stt.audio.wav import wav_bytes_to_float32
 from local_stt.config import Config, FeedbackConfig
-from local_stt.feedback import PATTERNS, SOUND_RATE, DesktopFeedback, render, sounds_dir
+from local_stt.feedback import (
+    PATTERNS,
+    SOUND_GAP_S,
+    SOUND_RATE,
+    DesktopFeedback,
+    render,
+    sounds_dir,
+)
 
 
 class Proc:
@@ -53,13 +60,32 @@ class Tools:
         return subprocess.CompletedProcess(args, 0, f"{self.next_id - 1}\n", "")
 
 
-def make(tmp_path: Path, tools: Tools, **config: Any) -> DesktopFeedback:
+class Clock:
+    """Manual time for sound sequencing; `later` records deferred starts."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.scheduled: list[tuple[float, Any]] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def later(self, delay_s: float, start: Any) -> None:
+        self.scheduled.append((delay_s, start))
+
+
+def make(
+    tmp_path: Path, tools: Tools, clock: Clock | None = None, **config: Any
+) -> DesktopFeedback:
+    clock = clock or Clock()
     fb = DesktopFeedback(
         FeedbackConfig(**config),
         tmp_path / "sounds",
         which=tools.which,
         popen=tools.popen,
         run=tools.run,
+        clock=clock,
+        later=clock.later,
     )
     fb.start()
     return fb
@@ -100,13 +126,46 @@ def test_play_starts_player_without_waiting(tmp_path: Path) -> None:
 
 
 def test_finished_players_are_reaped(tmp_path: Path) -> None:
-    tools = Tools()
-    fb = make(tmp_path, tools)
+    tools, clock = Tools(), Clock()
+    fb = make(tmp_path, tools, clock)
     fb.play("start")
+    clock.now = 1.0
     fb.play("stop")
     tools.played[0].done = True
+    clock.now = 2.0
     fb.play("cancel")
     assert fb._playing == tools.played[1:]
+    flush(fb)
+
+
+def test_overlapping_sound_waits_for_the_previous_one(tmp_path: Path) -> None:
+    """PTT without speech: `cancel` comes ~70 ms after `stop` and would be masked by it."""
+    tools, clock = Tools(), Clock()
+    fb = make(tmp_path, tools, clock)
+    assert fb.play("stop") == pytest.approx(0.13)
+    clock.now = 0.07
+    # starts after the rest of `stop` (0.06 s) and the gap, then plays for 0.12 s
+    assert fb.play("cancel") == pytest.approx(0.06 + SOUND_GAP_S + 0.12)
+    assert [p.args[1] for p in tools.played] == [str(tmp_path / "sounds" / "stop.wav")]
+    [(delay, start)] = clock.scheduled
+    assert delay == pytest.approx(0.06 + SOUND_GAP_S)
+    start()
+    assert tools.played[-1].args[1] == str(tmp_path / "sounds" / "cancel.wav")
+    flush(fb)
+
+
+def test_sounds_queue_in_order(tmp_path: Path) -> None:
+    """`stop` + `error` at the same moment (backlog, microphone lost) play one after the other."""
+    tools, clock = Tools(), Clock()
+    fb = make(tmp_path, tools, clock)
+    fb.play("stop")
+    fb.play("error")
+    fb.play("cancel")
+    delays = [d for d, _ in clock.scheduled]
+    assert delays == pytest.approx([0.13 + SOUND_GAP_S, 0.13 + 0.25 + 2 * SOUND_GAP_S])
+    clock.now = 5.0  # long after: plays at once again
+    fb.play("start")
+    assert len(clock.scheduled) == 2 and len(tools.played) == 2
     flush(fb)
 
 

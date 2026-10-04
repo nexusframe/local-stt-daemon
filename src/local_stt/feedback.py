@@ -12,6 +12,7 @@ import queue
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,9 @@ PATTERNS: dict[Sound, list[tuple[float, float]]] = {
     "error": [(330.0, 0.050), (0.0, 0.050), (330.0, 0.050), (0.0, 0.050), (330.0, 0.050)],
 }
 PLAYERS = ("pw-play", "paplay")
+# Silence between queued sounds. Overlapping sounds mask each other: `cancel` ~70 ms after
+# `stop` was inaudible (v0.2 acceptance, 2026-10-04); a 70 ms gap was clearly heard.
+SOUND_GAP_S = 0.07
 NOTIFY_TIMEOUT_S = 5.0
 APP_NAME = "local-stt"
 ICON = "audio-input-microphone"
@@ -62,6 +66,12 @@ def render(sound: Sound, volume: float) -> NDArray[np.float32]:
         tone[-fade:] *= ramp[::-1]
         parts.append(tone)
     return np.concatenate(parts)
+
+
+def _start_timer(delay_s: float, start: Callable[[], object]) -> None:
+    timer = threading.Timer(delay_s, start)
+    timer.daemon = True
+    timer.start()
 
 
 def duration(sound: Sound) -> float:
@@ -99,6 +109,8 @@ class DesktopFeedback:
         which: Callable[[str], str | None] = shutil.which,
         popen: Callable[..., Any] = subprocess.Popen,
         run: Callable[..., Any] = subprocess.run,
+        clock: Callable[[], float] = time.monotonic,
+        later: Callable[[float, Callable[[], object]], None] | None = None,
     ):
         self._config = config
         self._directory = directory or sounds_dir()
@@ -108,6 +120,10 @@ class DesktopFeedback:
         self._notify_send = which("notify-send")
         self._paths: dict[Sound, Path] = {}
         self._playing: list[Any] = []  # Popen objects, reaped on the next play()
+        self._clock = clock
+        self._later = later or _start_timer
+        self._sound_lock = threading.Lock()  # _playing is also appended to by timer threads
+        self._busy_until = 0.0  # clock() when the last started or queued sound ends
         self._ids: dict[str, str] = {}  # key → notification id; feedback thread only
         self._queue: queue.Queue[_Notification | None] = queue.Queue()
         self._thread = threading.Thread(target=self._notify_loop, name="feedback", daemon=True)
@@ -134,23 +150,38 @@ class DesktopFeedback:
     # --- Feedback -------------------------------------------------------------------------
 
     def play(self, sound: Sound) -> float | None:
-        self._playing = [p for p in self._playing if p.poll() is None]
+        with self._sound_lock:
+            self._playing = [p for p in self._playing if p.poll() is None]
         path = self._paths.get(sound)
         if not self._config.sounds or self._player is None or path is None:
             return None
+        now = self._clock()
+        delay = self._busy_until - now
+        if delay <= 0:
+            if not self._spawn(sound, path):
+                return None
+            delay = 0.0
+        else:  # still playing: queue after it, so neither masks the other
+            delay += SOUND_GAP_S
+            self._later(delay, lambda: self._spawn(sound, path))
+        self._busy_until = now + delay + duration(sound)
+        return delay + duration(sound)
+
+    def _spawn(self, sound: Sound, path: Path) -> bool:
+        assert self._player is not None
         try:
-            self._playing.append(
-                self._popen(
-                    [self._player, str(path)],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+            proc = self._popen(
+                [self._player, str(path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
         except OSError as e:
             log.warning("cannot play %s sound: %s", sound, e)
-            return None
-        return duration(sound)
+            return False
+        with self._sound_lock:
+            self._playing.append(proc)
+        return True
 
     def notify(self, key: str, title: str, body: str = "", *, informational: bool = False) -> None:
         level = self._config.notifications

@@ -229,7 +229,8 @@ class Feedback(Protocol):
     """Sounds and notifications (10 §10.6); notifications never contain transcript text."""
 
     def play(self, sound: Sound) -> float | None:
-        """Starts playback without waiting; returns its duration, or None if nothing plays."""
+        """Starts playback without waiting, after any sound still playing; returns the seconds
+        until it ends (queueing delay + duration), or None if nothing plays."""
 
     def notify(self, key: str, title: str, body: str = "", *, informational: bool = False) -> None:
         """A notification with the same `key` replaces the previous one; `informational`

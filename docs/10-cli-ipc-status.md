@@ -171,7 +171,7 @@ At startup, the daemon generates four short WAV files (sine waves with 5 ms fade
 | Text injected | none (the result is visible in the window) |
 | `JobFailed`, unconfirmed paste | no sound, notification only |
 
-Playback: `subprocess.Popen(["pw-play", path])` (fallback `paplay`), without waiting for completion. The separate process does not interfere with the PortAudio input stream. When continuous mode starts, the microphone opens only after the `start` sound—the `CaptureOpenDue` event occurs 150 ms later ([04](04-state-machine.md) §4.3).
+Playback: `subprocess.Popen(["pw-play", path])` (fallback `paplay`), without waiting for completion. Sounds never overlap: a sound requested while another is still playing starts 70 ms after it ends (a timer thread), and `play()` returns the time until the queued sound ends, so the start-sound masking window covers the delay. Added in the v0.2 acceptance (2026-10-04): after a PTT without speech the `cancel` sound came ~70 ms after `stop` and was inaudible under it (checked by ear: overlapped vs. a 70 ms gap); the same applied to `stop` + `error` when the backlog limit is reached or the microphone is lost. The separate process does not interfere with the PortAudio input stream. When continuous mode starts, the microphone opens only after the `start` sound—the `CaptureOpenDue` event occurs 150 ms later ([04](04-state-machine.md) §4.3).
 
 ### Notifications (`feedback.notifications`)
 
