@@ -8,14 +8,14 @@ Results of the v0.1 acceptance from [15](15-implementation-plan.md): the [14.4](
 - Code: commit `c7b5471` (task 1.15); from 2026-10-04 00:08 with the VAD gate (tasks 2.1 + 2.6), from 00:59 also with the clipboard restore fix, from 01:50 with the paste-confirmation fix; each time reinstalled with `install.sh` (`doctor` 0 FAIL). Installed 2026-10-03 23:05 with `scripts/uninstall.sh` (without `--purge`: models, the whisper.cpp v1.9.4 build and `~/.config/local-stt` kept) followed by `scripts/install.sh`.
 - Config: the defaults (`config.toml` equal to `config.example.toml`): `small-q8_0`, `threads = 4`, `audio_ctx = 1000`.
 - Not installed on this machine: LibreOffice, a clipboard-history manager (user decision 2026-10-03: no installs). ONLYOFFICE Desktop Editors (deb, `/opt/onlyoffice`) replaces LibreOffice Writer in items 3 and 11; its editor runs in embedded Chromium (CEF), so it does not cover LibreOffice's own (VCL) clipboard handling.
-- During the manual items and N2, `logging.level = "DEBUG"` (live reload; `log_text = false`), so the log records each paste target's WM_CLASS; restored to INFO afterwards.
+- During the manual items and N2, `logging.level = "DEBUG"` (live reload; `log_text = false`), so the log records each paste target's WM_CLASS; restored to INFO on 2026-10-04 after N2 (`config.toml` again equal to `config.example.toml`).
 
 ## Nonfunctional requirements
 
 | Req. | Result | Method and values |
 |---|---|---|
-| N1 RAM | idle: pass; peak after N2: pending | 2026-10-03, idle after install: daemon RSS 49 MB (limit 150 MB), `whisper-server` RSS 359 MB (limit 1 GB). `VmRSS`/`VmHWM` from `/proc/<MainPID>/status`. |
-| N2 PTT latency | pending | p90 `total` over ≥ 20 dictations of 4–10 s with successful injection (13 §13.5) |
+| N1 RAM | pass | 2026-10-03 idle after install: daemon 49 MB, `whisper-server` 359 MB. 2026-10-04 peak after all tests and N2 (`VmHWM` from `/proc/<MainPID>/status`): daemon **108 MB** (limit 150 MB; the increase is mostly onnxruntime + Silero for the VAD gate), `whisper-server` **582 MB** (limit 1 GB; process running since the item 13 restart, so it covers N2). |
+| N2 PTT latency | pass | 2026-10-04: p90 `total` **3.70 s** (limit 5 s) over 20 dictations of 4–10 s; see [N2](#n2-ptt-latency). |
 | N5 no network | pass | 2026-10-03: `ss -ltnp` — `whisper-server` listens only on `127.0.0.1:8178`; the daemon has only `/run/user/1000/local-stt/control.sock` and no TCP sockets; `doctor` port check OK (loopback only). The E2E suite passes in a network namespace without network (`unshare -rn`, 14 §14.3 item 4, task 1.15). |
 | N8 config | pass | 2026-10-03: every setting comes from `config.toml`. Environment variables read by the daemon only select paths (`XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `LOCAL_STT_CONFIG`) or the session (`DISPLAY`, `JOURNAL_STREAM`, `NOTIFY_SOCKET`); `secret` and `whisper-server.env` are generated, not user configuration. |
 | N9 restart | pass | 2026-10-03: `kill -9` of the daemon's MainPID → new process `active` (after `READY=1`) in 2.39 s, IPC `status` answers in 2.63 s (limit 5 s); `NRestarts=1`, `RestartSec=2s`. |
@@ -26,8 +26,8 @@ Results of the v0.1 acceptance from [15](15-implementation-plan.md): the [14.4](
 |---|---|---|---|
 | 1 | Fresh `install.sh` → `doctor` reports no FAIL | pass | 2026-10-03: 0 FAIL, 0 WARN, 17 OK |
 | 2 | After logging out and back in, both services run; `status` = IDLE within 60 s | pending | |
-| 3 | PTT in GNOME Text Editor, Firefox, VS Code, GNOME Terminal, LibreOffice Writer — Polish characters correct | pending | ONLYOFFICE instead of Writer |
-| 4 | PTT with text in the clipboard → the old text remains afterwards | pending | |
+| 3 | PTT in GNOME Text Editor, Firefox, VS Code, GNOME Terminal, LibreOffice Writer — Polish characters correct | pass | 2026-10-04 (N2 session): GNOME Text Editor, Firefox, VS Code, GNOME Terminal (`Ctrl+Shift+V`) and ONLYOFFICE instead of Writer; all pasted with Polish characters (ą ć ę ł ń ó ś ź ż). Recognition errors occurred (WER), but no character was mangled by injection. |
+| 4 | PTT with text in the clipboard → the old text remains afterwards | pass | 2026-10-04: blocks in Text Editor, VS Code and ONLYOFFICE started with “SCHOWEK-A/C/E” copied; after 4–5 dictations each, Ctrl+V pasted the expected word. |
 | 5 | PTT with an image in the clipboard → `type` backend, image remains | pass | 2026-10-04: a 37 KB area screenshot (`image/png`, within limits, no INCR) was saved and restored through the clipboard (`backend=clipboard`, same SHA-256 before and after) — the image remained, but the item's assumption “image → `type`” holds only for images over the limits. A full-screen screenshot: `clipboard cannot be restored (content too large): typing instead`, text typed character by character, the image pasted afterwards in ONLYOFFICE. Item wording corrected in 14.4. |
 | 6 | PTT on the unfocused desktop → “text left in clipboard” notification | pass | 2026-10-03: notification shown, log `no active window: text left in the clipboard`; Ctrl+V in Text Editor pasted the text |
 | 7 | Tap right Ctrl (< 300 ms) → no transcription or stop sound | pass | 2026-10-03, GNOME Text Editor |
@@ -40,7 +40,21 @@ Results of the v0.1 acceptance from [15](15-implementation-plan.md): the [14.4](
 | 14 | `kill -9` the daemon → restart within 5 s (N9) | pass | see N9 |
 | 15 | Change `stt.model` + `local-stt reload` → server restarts; `status` STARTING → IDLE with the new model (N6) | pass | 2026-10-03: `small-q8_0` → `small-q5_1`: STARTING at 0.43 s, READY at 1.00 s; the server process loaded `ggml-small-q5_1.bin`. Config restored and reloaded (back on `small-q8_0`). |
 | 16 | Copy files in Nautilus → after PTT they can still be pasted in Nautilus | pass (after fix) | 2026-10-04 first run **FAIL**: files not pasted. See [silent restore](#finding-a-silent-clipboard-restore-hides-copied-files-from-nautilus). Fixed in `inject/clipboard.py` + 08 §8.5 step 8; retest: files copied after PTT. |
-| 17 | `journalctl --user -u local-stt` contains no dictated text | pending | checked after N2 |
+| 17 | `journalctl --user -u local-stt` contains no dictated text | pass | 2026-10-04: the journal of both units since the install (4639 lines, DEBUG level most of the time) contains none of 12 distinctive dictated or copied words (“łódź”, “sprawozdanie”, “Gdańsk”, “pszczoły”, “SCHOWEK”, “To jest zimno”, …), while the control strings `job=` (126) and `WM_CLASS` (129) are found. |
+
+## N2 PTT latency
+
+2026-10-04 13:12–13:32, 24 prepared sentences (Polish characters in each) in five blocks: GNOME Text Editor, Firefox (text field), VS Code (file editor), GNOME Terminal (at the prompt, no Enter), ONLYOFFICE; text in the clipboard before the Text Editor, VS Code and ONLYOFFICE blocks. Source: the `local_stt.timings` lines; `audio` is the VAD-trimmed duration.
+
+- 28 jobs, 27 with audio 4–10 s (one 2.49 s excluded). All 27: `result=injected`, backend `clipboard`, 0 failed or unconfirmed pastes.
+- 7 of the 27 overlapped: the next PTT was pressed before the text was inserted, so the injector waited for its release (08 §8.5 step 1) — `inject` 4.2–8.1 s (jobs 19, 21, 22 in Firefox; 24, 25 in VS Code; 36, 37 in ONLYOFFICE; e.g. job 19: text ready ≈ 13:21:43, PTT held 13:21:42.6–49.5, pasted 17 ms after release). Excluded from N2 under the 13 §13.5 rule added for this (user decision 2026-10-04).
+
+| Set | n | `total` p50 | `total` p90 | `total` max | `stt` p90 | `inject` p50 / p90 |
+|---|---|---|---|---|---|---|
+| non-overlapping (N2) | 20 | 2.91 s | **3.70 s** | 3.86 s | 3.29 s | 194 / 214 ms |
+| all, for reference | 27 | 3.26 s | 9.42 s | 12.06 s | 3.34 s | 206 / 6208 ms |
+
+Maximum `total` per application (N2 set): Text Editor 3.55 s (n=5), Firefox 3.70 s (2), VS Code 3.73 s (6), GNOME Terminal 2.84 s (4), ONLYOFFICE 3.86 s (3). Conditions: AC and `powersave` governor (checked right after the session; no power-change event in the system journal), the developer's usual desktop (VS Code, Firefox, Brave, TeamViewer running).
 
 ## Findings
 
