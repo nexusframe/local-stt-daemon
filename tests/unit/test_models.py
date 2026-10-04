@@ -155,3 +155,45 @@ def test_cli_does_not_load_network_code() -> None:
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_list_bench_shows_results_marks_and_unmeasured_models(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from local_stt.bench.report import ConfigStats, ModelResult
+
+    (tmp_path / "ggml-small-q8_0.bin").write_bytes(b"x" * (1 << 20))
+    q8 = ConfigStats("k", "small-q8_0", 4, 1000, -1, wer_runs=[0.074])
+    q8.p90_text_ready_s, q8.peak_rss_mb = 3.67, 467.0
+    turbo = ConfigStats("k", "large-v3-turbo-q5_0", 4, 0, -1, wer_runs=[0.079])
+    results = {
+        "small-q8_0": ModelResult(q8, "r", "2026-10-03", "A", True, True),
+        "large-v3-turbo-q5_0": ModelResult(turbo, "r", "2026-09-17", "B", False, False),
+    }
+    assert (
+        models.cmd_list_bench(
+            tmp_path,
+            results,
+            current="small-q8_0",
+            config_label="t=4 ctx=1000 greedy",
+            bench_dir=tmp_path,
+        )
+        == 0
+    )
+    rows = {
+        line.split()[1] if line.startswith("*") else line.split()[0]: line
+        for line in capsys.readouterr().out.splitlines()[1:7]
+    }
+    assert rows["small-q8_0"].startswith("* small-q8_0")
+    assert "1.0 MiB" in rows["small-q8_0"] and "7.4" in rows["small-q8_0"]
+    assert "3.67" in rows["small-q8_0"] and "467" in rows["small-q8_0"]
+    assert rows["small-q8_0"].endswith("t=4 ctx=1000 greedy    2026-10-03 A")
+    assert rows["large-v3-turbo-q5_0"].endswith("t=4 ctx=full greedy !  2026-09-17 B stage 1")
+    assert "missing" in rows["base-q5_1"] and "not measured" in rows["base-q5_1"]
+
+
+def test_list_bench_without_runs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    models.cmd_list_bench(
+        tmp_path, {}, current="small-q8_0", config_label="t=4", bench_dir=tmp_path / "bench"
+    )
+    assert "no benchmark results in" in capsys.readouterr().out

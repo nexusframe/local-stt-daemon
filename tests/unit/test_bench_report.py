@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -195,3 +197,90 @@ def test_whole_corpus_falls_back_to_stage1_medium_for_old_runs() -> None:
     ]
     s = report.summarize(lines, stage=None)[key(c)]
     assert s.p90_text_ready_s == pytest.approx(5.5)
+
+
+# --- latest results per model (models list --bench, task 3.1) ------------------------------
+
+
+def write_run(
+    bench_dir: Path, name: str, timestamp: str, lines: list[dict[str, Any]], public: bool = False
+) -> None:
+    run = bench_dir / name
+    run.mkdir(parents=True)
+    run.joinpath("results.jsonl").write_text("".join(json.dumps(ln) + "\n" for ln in lines))
+    info = {"timestamp": timestamp, "dataset_is_public_interim": public}
+    run.joinpath("system.json").write_text(json.dumps(info))
+
+
+def whole_corpus_lines(c: dict[str, Any], word_errors: int = 0) -> list[dict[str, Any]]:
+    return [file_line(c, stage=2, word_errors=word_errors), config_line(c, stage=2)]
+
+
+def latest(bench_dir: Path) -> dict[str, report.ModelResult]:
+    return report.latest_results(bench_dir, threads=4, audio_ctx=1000, beam_size=-1)
+
+
+def test_latest_results_prefer_the_config_file_configuration(tmp_path: Path) -> None:
+    exact, other = cfg("small-q8_0", ctx=1000), cfg("small-q8_0", ctx=0)
+    write_run(
+        tmp_path,
+        "r1",
+        "2026-10-03T09:10:49+00:00",
+        whole_corpus_lines(other, word_errors=1) + whole_corpus_lines(exact, word_errors=2),
+    )
+    r = latest(tmp_path)["small-q8_0"]
+    assert (r.stats.audio_ctx, r.exact, r.whole_corpus) == (1000, True, True)
+    assert (r.date, r.corpus, r.run) == ("2026-10-03", "A", "r1")
+    assert r.stats.wer_mean == pytest.approx(0.2)
+    assert r.stats.peak_rss_mb == 400.0
+
+
+def test_latest_results_fall_back_to_the_closest_configuration(tmp_path: Path) -> None:
+    # audio_ctx matters more than threads; neither matches here, so threads decide.
+    lines = whole_corpus_lines(cfg("m", threads=8, ctx=0)) + whole_corpus_lines(cfg("m", ctx=0))
+    lines += whole_corpus_lines(cfg("m", threads=8, ctx=1000, beam=5))
+    write_run(tmp_path, "r1", "2026-09-17T05:29:00+00:00", lines, public=True)
+    r = latest(tmp_path)["m"]
+    assert (r.stats.threads, r.stats.audio_ctx, r.stats.beam_size) == (8, 1000, 5)
+    assert not r.exact and r.corpus == "B"
+
+
+def test_latest_results_newest_run_wins_but_stage1_never_replaces_whole_corpus(
+    tmp_path: Path,
+) -> None:
+    c = cfg("small-q8_0", ctx=1000)
+    write_run(tmp_path, "old", "2026-09-17T16:28:19+00:00", whole_corpus_lines(c, 5), public=True)
+    write_run(tmp_path, "new", "2026-10-03T09:10:49+00:00", whole_corpus_lines(c, 1))
+    write_run(tmp_path, "partial", "2026-10-04T08:00:00+00:00", [file_line(c), config_line(c)])
+    m = cfg("medium-q5_0", ctx=1000)
+    write_run(tmp_path, "medium", "2026-10-03T10:00:00+00:00", [file_line(m), config_line(m)])
+    (tmp_path / "soak-2026-10-04").mkdir()  # no results.jsonl: skipped
+    results = latest(tmp_path)
+    assert results["small-q8_0"].run == "new"
+    assert results["small-q8_0"].whole_corpus
+    assert results["medium-q5_0"].run == "medium"
+    assert not results["medium-q5_0"].whole_corpus
+
+
+def test_latest_results_without_runs(tmp_path: Path) -> None:
+    assert latest(tmp_path / "missing") == {}
+
+
+def test_cli_models_list_bench_uses_the_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from local_stt.bench import runner
+    from local_stt.cli import main
+
+    c = cfg("small-q5_1", threads=8, ctx=0)
+    write_run(tmp_path / "bench", "r1", "2026-10-03T09:10:49+00:00", whole_corpus_lines(c))
+    monkeypatch.setattr(runner, "BENCH_DIR", tmp_path / "bench")
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'[stt]\nmodel = "small-q5_1"\nthreads = 8\naudio_ctx = 0\nmodels_dir = "{tmp_path}"\n'
+    )
+    assert main(["models", "list", "--bench", "--config", str(config)]) == 0
+    out = capsys.readouterr().out
+    row = next(line for line in out.splitlines() if line.startswith("* small-q5_1"))
+    assert row.endswith("t=8 ctx=full greedy    2026-10-03 A")
+    assert "config file (t=8 ctx=full greedy)" in out

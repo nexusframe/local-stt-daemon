@@ -50,7 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     models = commands.add_parser("models", help="list, download and verify models")
     models_commands = models.add_subparsers(dest="models_command", metavar="ACTION", required=True)
-    _add_config_option(models_commands.add_parser("list", help="models in models_dir"))
+    models_list = models_commands.add_parser("list", help="models in models_dir")
+    _add_config_option(models_list)
+    models_list.add_argument(
+        "--bench",
+        action="store_true",
+        help="with the latest benchmark results (WER, p90 latency, RAM)",
+    )
     pull = models_commands.add_parser("pull", help="download a model and verify its SHA256")
     _add_config_option(pull)
     pull.add_argument("name")
@@ -144,6 +150,22 @@ def _run_models(args: argparse.Namespace) -> int:
     if config is None:
         return EXIT_CONFIG
     models_dir = config.stt.models_dir
+    if args.models_command == "list" and args.bench:
+        from local_stt.bench import report
+        from local_stt.bench.runner import BENCH_DIR
+
+        stt = config.stt
+        results = report.latest_results(
+            BENCH_DIR, threads=stt.threads, audio_ctx=stt.audio_ctx, beam_size=stt.beam_size
+        )
+        beam = "greedy" if stt.beam_size < 0 else f"beam {stt.beam_size}"
+        return models.cmd_list_bench(
+            models_dir,
+            results,
+            current=stt.model,
+            config_label=f"t={stt.threads} ctx={stt.audio_ctx or 'full'} {beam}",
+            bench_dir=BENCH_DIR,
+        )
     if args.models_command == "list":
         return models.cmd_list(models_dir)
     if args.models_command == "pull":

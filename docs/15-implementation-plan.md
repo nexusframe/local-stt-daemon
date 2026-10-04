@@ -104,6 +104,8 @@ The preliminary design scope (“partial transcription, result stabilization, im
 | 3.5 | `stt.continuous_model` (second server)—**only if** required by the rule in 13 §13.5 | ADR-016 |
 | 3.6 | Full benchmark report (`bench report`) with thermals; update `docs/benchmark-results.md` | 13 |
 
+Status: 3.1 done 2026-10-04 (`models list --bench`, details in [10](10-cli-ipc-status.md) §10.1); checked on the stored runs — the values match [benchmark-results](benchmark-results.md).
+
 **v0.3 acceptance:**
 
 - the 14.4 (v0.3) checklist,

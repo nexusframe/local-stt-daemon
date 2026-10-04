@@ -414,3 +414,74 @@ def render(lines: list[dict[str, Any]], info: dict[str, Any], control: str = "ba
             f"| `{b['model']}` | {_fmt(b.get('encode_ms'), '.0f')} |" for b in bench
         ]
     return "\n".join(out) + "\n"
+
+
+# --- latest results per model (`models list --bench`, task 3.1) ------------------------------
+
+
+@dataclass(frozen=True)
+class ModelResult:
+    """A model's latest benchmark result, in the configuration closest to the config file."""
+
+    stats: ConfigStats
+    run: str  # run directory name
+    date: str  # YYYY-MM-DD
+    corpus: str  # "A" (the user's recordings) or "B" (public interim corpus, 13 §13.2)
+    whole_corpus: bool  # False: stage 1 only, the medium group
+    exact: bool  # threads, audio_ctx and beam_size match the config
+
+
+def _run_dirs(bench_dir: Path) -> list[tuple[str, Path, dict[str, Any]]]:
+    """Runs with results, oldest first, as (timestamp, dir, system.json)."""
+    runs = []
+    for run_dir in sorted(bench_dir.iterdir()) if bench_dir.is_dir() else []:
+        if not (run_dir / "results.jsonl").is_file():
+            continue  # soak runs and empty directories
+        info_path = run_dir / "system.json"
+        info = json.loads(info_path.read_text()) if info_path.is_file() else {}
+        runs.append((str(info.get("timestamp", run_dir.name)), run_dir, info))
+    return sorted(runs, key=lambda run: run[0])
+
+
+def _closest(
+    candidates: Iterable[ConfigStats], threads: int, audio_ctx: int, beam_size: int
+) -> tuple[ConfigStats, bool]:
+    """The exact configuration, else the closest: audio_ctx first, then beam, then threads."""
+
+    def distance(s: ConfigStats) -> tuple[bool, bool, bool, int]:
+        return (s.audio_ctx != audio_ctx, s.beam_size != beam_size, s.threads != threads, s.threads)
+
+    best = min(candidates, key=distance)
+    return best, distance(best)[:3] == (False, False, False)
+
+
+def latest_results(
+    bench_dir: Path, *, threads: int, audio_ctx: int, beam_size: int
+) -> dict[str, ModelResult]:
+    """Per model, the newest run with whole-corpus results, else the newest stage-1 run."""
+    found: dict[str, ModelResult] = {}
+    for timestamp, run_dir, info in _run_dirs(bench_dir):
+        lines, _ = load_results(run_dir)
+        corpus = "B" if info.get("dataset_is_public_interim") else "A"
+        full = summarize(lines, stage=None)
+        in_full = {s.model for s in full.values()}
+        for whole_corpus, stats in ((False, summarize(lines, stage=1)), (True, full)):
+            by_model: dict[str, list[ConfigStats]] = defaultdict(list)
+            for s in stats.values():
+                by_model[s.model].append(s)
+            for model, candidates in by_model.items():
+                if not whole_corpus and model in in_full:
+                    continue  # this run has whole-corpus results for the model
+                previous = found.get(model)
+                if previous is not None and previous.whole_corpus and not whole_corpus:
+                    continue  # a newer stage-1-only run does not replace whole-corpus results
+                best, exact = _closest(candidates, threads, audio_ctx, beam_size)
+                found[model] = ModelResult(
+                    best, run_dir.name, timestamp[:10], corpus, whole_corpus, exact
+                )
+    return found
+
+
+def config_label(s: ConfigStats) -> str:
+    """Plain-text form of a configuration: `t=4 ctx=1000 greedy`."""
+    return _config_label(s).split(" ", 1)[1]

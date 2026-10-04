@@ -8,11 +8,15 @@ import hashlib
 import os
 import sys
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from importlib import resources
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
+
+if TYPE_CHECKING:
+    from local_stt.bench.report import ModelResult
 
 WHISPER_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
 SILERO_URL = "https://github.com/snakers4/silero-vad/raw/v6.2.1/src/silero_vad/data/silero_vad.onnx"
@@ -149,11 +153,60 @@ def _report(stream: TextIO | None, filename: str, done: int, total: int) -> None
 # --- CLI handlers (docs/10-cli-ipc-status.md §10.1) ---
 
 
+def _file_state(models_dir: Path, filename: str) -> str:
+    path = models_dir / filename
+    return f"{path.stat().st_size / (1 << 20):7.1f} MiB" if path.is_file() else "    missing"
+
+
 def cmd_list(models_dir: Path) -> int:
     for model in load_registry().values():
-        path = models_dir / model.filename
-        state = f"{path.stat().st_size / (1 << 20):7.1f} MiB" if path.is_file() else "    missing"
-        print(f"{model.name:22} {state}  {model.filename}")
+        print(f"{model.name:22} {_file_state(models_dir, model.filename)}  {model.filename}")
+    return 0
+
+
+def cmd_list_bench(
+    models_dir: Path,
+    results: Mapping[str, "ModelResult"],
+    *,
+    current: str,
+    config_label: str,
+    bench_dir: Path,
+) -> int:
+    """`models list --bench` (task 3.1): Whisper models with their latest benchmark results."""
+    from local_stt.bench.report import config_label as measured_as
+
+    registry = load_registry()
+    names = [*WHISPER_MODELS, *sorted(set(results) - set(WHISPER_MODELS))]
+    print(
+        f"  {'MODEL':22} {'FILE':>11}  {'WER %':>6} {'p90 s':>6} {'RAM MB':>7}  "
+        f"{'MEASURED AS':22} RUN"
+    )
+    for name in names:
+        mark = "*" if name == current else " "
+        state = _file_state(models_dir, registry[name].filename) if name in registry else ""
+        r = results.get(name)
+        if r is None:
+            print(f"{mark} {name:22} {state:>11}  {'—':>6} {'—':>6} {'—':>7}  {'not measured':22}")
+            continue
+        s = r.stats
+        p90 = "—" if s.p90_text_ready_s is None else f"{s.p90_text_ready_s:.2f}"
+        rss = "—" if s.peak_rss_mb is None else f"{s.peak_rss_mb:.0f}"
+        measured = measured_as(s) + ("" if r.exact else " !")
+        run = f"{r.date} {r.corpus}" + ("" if r.whole_corpus else " stage 1")
+        print(
+            f"{mark} {name:22} {state:>11}  {100 * s.wer_mean:6.1f} {p90:>6} {rss:>7}  "
+            f"{measured:22} {run}"
+        )
+    if not results:
+        print(f"\nno benchmark results in {bench_dir} (run: local-stt bench)")
+        return 0
+    print(
+        f"\n* stt.model; ! measured in another configuration than the config file ({config_label})."
+        "\nWER: mean over repeats, whole corpus (stage 1: medium group only); p90: text_ready,"
+        "\nmedium group; RAM: peak whisper-server RSS. Corpus A = your recordings, B = the public"
+        "\ninterim corpus: results from different corpora or stages are not comparable."
+        f"\nRuns: {bench_dir}"
+    )
     return 0
 
 
