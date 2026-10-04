@@ -88,6 +88,8 @@ The server processes **one request at a time** (`std::mutex`), matching the sing
 
 All paths have the `--request-path` prefix. The client reads the secret from `~/.config/local-stt/secret`. In v1.9.4, the model is loaded before HTTP begins listening, so normal startup produces **connection failure → 200**, with no observable 503. The client then derives `STARTING` from the time since startup/restart ([server code](https://github.com/ggml-org/whisper.cpp/blob/v1.9.4/examples/server/server.cpp)).
 
+On both endpoints, a response cut off mid-body (`http.client.IncompleteRead`: the server closed the connection) counts as a connection error; other malformed HTTP responses (`http.client.HTTPException`, which is not an `OSError`) → `EngineResponseError` (job failed, no retry).
+
 ### `POST /inference` (multipart/form-data)
 
 | Field | Value | Notes |

@@ -234,6 +234,10 @@ class WhisperServerEngine:
             raise EngineTimeoutError(f"{method} {path}: timed out after {timeout_s:.1f} s") from e
         except OSError as e:  # refused, reset, remote disconnected
             raise EngineConnectionError(f"{method} {path}: {e}") from e
+        except http.client.IncompleteRead as e:  # the server closed mid-response
+            raise EngineConnectionError(f"{method} {path}: truncated response: {e!r}") from e
+        except http.client.HTTPException as e:  # not OSError: malformed status line, headers
+            raise EngineResponseError(f"{method} {path}: invalid HTTP response: {e!r}") from e
         finally:
             conn.close()
 

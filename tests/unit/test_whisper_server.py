@@ -26,6 +26,7 @@ class Stub:
         self.status = 200
         self.body = VERBOSE_JSON
         self.delay_s = 0.0
+        self.declared_length: int | None = None  # a larger value truncates the response
         self.requests: list[tuple[str, str, dict[str, str], bytes]] = []
 
 
@@ -40,9 +41,11 @@ def stub() -> Iterator[tuple[Stub, int]]:
             state.requests.append((method, self.path, dict(self.headers), body))
             time.sleep(state.delay_s)
             self.send_response(state.status)
-            self.send_header("Content-Length", str(len(state.body)))
+            self.send_header("Content-Length", str(state.declared_length or len(state.body)))
             self.end_headers()
             self.wfile.write(state.body)
+            if state.declared_length is not None:
+                self.close_connection = True
 
         def do_GET(self) -> None:
             self._respond("GET")
@@ -200,6 +203,16 @@ def test_timeout_mapping(stub: tuple[Stub, int]) -> None:
         _engine(port).transcribe(
             _audio(), sample_rate=16000, language="pl", prompt=None, timeout_s=0.2
         )
+
+
+def test_truncated_response_is_connection_error(stub: tuple[Stub, int]) -> None:
+    # R2: http.client.IncompleteRead is not an OSError and used to escape EngineError.
+    state, port = stub
+    state.declared_length = len(state.body) + 100
+    engine = _engine(port)
+    with pytest.raises(ws.EngineConnectionError, match="truncated response"):
+        engine.transcribe(_audio(), sample_rate=16000, language="pl", prompt=None, timeout_s=5)
+    assert engine.health() is EngineHealth.DOWN
 
 
 def test_connection_refused_mapping() -> None:
