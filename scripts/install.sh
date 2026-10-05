@@ -78,6 +78,9 @@ check_environment() {
     [[ "${XDG_SESSION_TYPE:-}" == "x11" ]] \
         || warn "XDG_SESSION_TYPE is '${XDG_SESSION_TYPE:-unset}', the daemon requires an X11 session"
 
+    # Everything installs into $HOME and runs as systemd user units
+    ((EUID != 0)) || die "run as your regular user, not root or sudo (sudo is used only for apt)"
+
     grep -qw avx2 /proc/cpuinfo || die "CPU does not support AVX2"
 
     # systemd splits \$LOCAL_STT_WHISPER_ARGS on whitespace (§11.4)
