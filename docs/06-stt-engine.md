@@ -96,7 +96,7 @@ On both endpoints, a response cut off mid-body (`http.client.IncompleteRead`: th
 |---|---|---|
 | `file` | WAV RIFF PCM s16le, 16000 Hz, mono | built in memory (`io.BytesIO` + `wave`) |
 | `response_format` | `verbose_json` | segments with `no_speech_prob`, `avg_logprob` |
-| `language` | `pl` | redundant with `-l`, to avoid depending on server flags |
+| `language` | `stt.language` | the server uses it instead of `-l` (tested below), so `stt.language` is a live reload key; `-l` in `whisper-server.env` is only the default and is refreshed at the next server restart |
 | `no_language_probabilities` | `true` | **otherwise the server runs the encoder a second time** |
 | `temperature` / `temperature_inc` | `0.0` / `0.2` | temperature fallback on high entropy |
 | `prompt` | vocabulary + context (6.6) | omitted when empty |
@@ -119,6 +119,8 @@ Response (the portion we read):
 - `avg_logprob` includes special tokens and is therefore biased. We treat it as a relative signal with a configurable threshold, not as an absolute value.
 - The response's `temperature` field echoes the requested value rather than the temperature actually used, so we ignore it.
 - `compression_ratio` does not exist. We detect hallucination loops ourselves (6.8).
+
+**Per-request `language` (tested 2026-10-05, whisper.cpp v1.9.4, `small-q8_0`):** the running server started with `-l pl` received `tests/fixtures/pl_short.wav` and `pl_sezon.wav` three times each, with `language` = `pl`, `en`, `pl`. With `en`, both came back in English (Polish speech is translated, e.g. “It's worth spending half an hour walking around this intriguing village”); the following `pl` request returned the same Polish text as the first, so nothing carries over between requests. Processing time did not change (3.96–4.50 s). Changing the language therefore needs no server restart: `stt.language` is a live reload key ([04](04-state-machine.md) §4.6). Before this test it was a server-restart key, which took ~0.57 s from `reload` to `READY` and waited for IDLE and an empty queue. Live check 2026-10-05 on the installed daemon: `reload` pl → en and back reported `server_restart=False` with the same `whisper-server` PID, and PTT dictation followed the switch at once (Polish speech came out in English, then in Polish again). The language is enforced on the output in both directions: English speech with `language=pl` also came out translated into Polish.
 
 Request timeout: `max(10 s, 4 × audio_length × RTF_from_last_10_jobs)`, capped at `stt.request_timeout_max_s` (120 s). The RTF is the mean over the last 10 jobs; before the first job there is no history and the cap itself is used, because the first request after start may be slow (user decision 2026-10-03).
 

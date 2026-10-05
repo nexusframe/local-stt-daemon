@@ -52,7 +52,7 @@ STATS_WINDOW = 10  # rtf_avg_10 / latency_avg_10_s (10 §10.4)
 SERVER_KEYS = frozenset(
     f"stt.{k}"
     for k in (
-        "engine", "model", "models_dir", "language", "threads", "beam_size", "port",
+        "engine", "model", "models_dir", "threads", "beam_size", "port",
         "extra_server_args", "audio_ctx", "audio_ctx_margin",
     )
 )  # fmt: skip

@@ -208,15 +208,15 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
 
 | Group | Keys | When applied |
 |---|---|---|
-| **live** | `logging.*`, `text.*`, `injection.*`, `feedback.*`, `ptt.*`, `continuous.*`, `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.no_speech_threshold`, `stt.logprob_threshold`, `stt.startup_timeout_s`, `stt.request_timeout_max_s` | immediately |
+| **live** | `logging.*`, `text.*`, `injection.*`, `feedback.*`, `ptt.*`, `continuous.*`, `stt.language`, `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.no_speech_threshold`, `stt.logprob_threshold`, `stt.startup_timeout_s`, `stt.request_timeout_max_s` | immediately |
 | **at IDLE** | `audio.*`, `vad.*`, `hotkeys.*` | immediately if `mode == IDLE`; otherwise stored in `pending_reload` and applied on the next transition to IDLE (without interrupting the recording) |
-| **server restart** ⟳ | `stt.engine`, `stt.model`, `stt.models_dir`, `stt.language`, `stt.threads`, `stt.beam_size`, `stt.port`, `stt.extra_server_args`, `stt.audio_ctx`, `stt.audio_ctx_margin` (a server only ever sees one fixed `audio_ctx` plus the full window, 06 §6.7) | see below |
+| **server restart** ⟳ | `stt.engine`, `stt.model`, `stt.models_dir`, `stt.threads`, `stt.beam_size`, `stt.port`, `stt.extra_server_args`, `stt.audio_ctx`, `stt.audio_ctx_margin` (a server only ever sees one fixed `audio_ctx` plus the full window, 06 §6.7) | see below |
 
 3. **Server restart** (⟳):
    - the daemon generates a new `whisper-server.env` ([09](09-configuration.md) §9.4); *implementation (task 1.10):* the file is written when the restart actually starts (`ReloadTarget.restart_server`), not when the reload arrives, so a second reload during the wait simply wins and, until then, the env file still matches the running server; a write failure (e.g. unreadable `secret`) is reported as `ServerRestartDone(1)` → E16,
    - waits until `mode == IDLE` and the queue is empty (or `engine == DOWN`, in which case a restart is needed anyway),
    - pauses the pipeline and runs `systemctl --user restart local-stt-whisper.service` in a helper thread (the Controller does not block), which reports `ServerRestartDone`,
-   - switches the client to the new `port` and re-applies the live components with the effective config (the restart's server keys + live keys reloaded in the meantime), because the pipeline also reads a server key (`stt.language`, sent with each request), sets `engine = STARTING`, and resumes the pipeline after `READY`; exit code ≠ 0 or no `READY` within `startup_timeout_s` → error E16 ([12](12-logging-privacy-errors.md)).
+   - switches the client to the new `port` and re-applies the live components with the effective config (the restart's server keys + live keys reloaded in the meantime, so no component keeps an older config), sets `engine = STARTING`, and resumes the pipeline after `READY`; exit code ≠ 0 or no `READY` within `startup_timeout_s` → error E16 ([12](12-logging-privacy-errors.md)).
    - `stt.models_dir` also affects the VAD model path, which is applied like the “at IDLE” group.
 
    We do not use `POST /load`; the rationale is in [06](06-stt-engine.md) §6.5.

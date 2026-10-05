@@ -18,7 +18,7 @@ engine = "whisper-server"            # only implementation in v0.1–v0.3
 port = 8178                          # ⟳
 model = "small-q8_0"                 # ⟳ ggml-<model>.bin filename in models_dir (stage-0 benchmark)
 models_dir = "~/.local/share/local-stt/models"   # ⟳
-language = "pl"                      # ⟳
+language = "pl"                      # sent with every request; reload applies it at once
 threads = 4                          # ⟳ -t for whisper-server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk."

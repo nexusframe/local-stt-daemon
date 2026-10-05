@@ -9,7 +9,7 @@ engine = "whisper-server"            # only implementation in v0.1–v0.3
 port = 8178                          # ⟳ loopback port; the host is always 127.0.0.1
 model = "small-q8_0"                 # ⟳ ggml-<model>.bin in models_dir (benchmark: docs/benchmark-results.md)
 models_dir = "~/.local/share/local-stt/models"   # ⟳ no whitespace, quotes, backslashes or $
-language = "pl"                      # ⟳
+language = "pl"                      # sent with every request; reload applies it at once
 threads = 4                          # ⟳ -t for whisper-server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk." (max 300 characters)

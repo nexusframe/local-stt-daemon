@@ -670,6 +670,22 @@ def test_reload_live_keys_apply_immediately_even_during_ptt(c: Controller, w: Wo
     assert c.config.stt.vocabulary_prompt == "x"
 
 
+def test_reload_language_is_live_without_server_restart(c: Controller, w: World) -> None:
+    # whisper-server v1.9.4 honours the per-request `language` (06 §6.5, tested 2026-10-05).
+    press(c, w)
+    w.next_config = with_changes(Config(), stt={"language": "en"})
+    r = reply()
+    c.handle(ev.ReloadRequested(r))
+    assert w.names() == ["reload.live"]
+    assert r.result() == {
+        "ok": True,
+        "applied": ["stt.language"],
+        "deferred": [],
+        "server_restart": False,
+    }
+    assert c.config.stt.language == "en"
+
+
 def test_reload_idle_keys_in_idle_apply_immediately(c: Controller, w: World) -> None:
     w.next_config = with_changes(Config(), hotkeys={"push_to_talk": "Pause"})
     r = reply()
@@ -720,15 +736,15 @@ def test_reload_server_keys_restart_when_idle_and_empty(c: Controller, w: World)
 
 
 def test_restarted_server_gets_the_effective_config(c: Controller, w: World) -> None:
-    # R3: use_server re-applies the live components (the pipeline sends stt.language), so it
-    # gets the server keys of the restart and the live keys reloaded while it was running.
-    w.next_config = with_changes(Config(), stt={"language": "en"})
+    # R3: use_server re-applies the live components, so it gets the server keys of the
+    # restart and the live keys reloaded while it was running.
+    w.next_config = with_changes(Config(), stt={"threads": 2})
     c.handle(ev.ReloadRequested())
-    w.next_config = with_changes(Config(), stt={"language": "en", "vocabulary_prompt": "x"})
+    w.next_config = with_changes(Config(), stt={"threads": 2, "vocabulary_prompt": "x"})
     c.handle(ev.ReloadRequested())
     w.calls.clear()
     c.handle(ev.ServerRestartDone(0))
-    expected = with_changes(Config(), stt={"language": "en", "vocabulary_prompt": "x"})
+    expected = with_changes(Config(), stt={"threads": 2, "vocabulary_prompt": "x"})
     assert w.calls == [("reload.use_server", expected)]
     assert c.config == expected
 
