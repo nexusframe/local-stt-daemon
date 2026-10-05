@@ -35,6 +35,9 @@ PATTERNS: dict[Sound, list[tuple[float, float]]] = {
     "stop": [(880.0, 0.065), (660.0, 0.065)],
     "cancel": [(440.0, 0.120)],
     "error": [(330.0, 0.050), (0.0, 0.050), (330.0, 0.050), (0.0, 0.050), (330.0, 0.050)],
+    # language switch (task 3.7): one tone for the startup language, two for any other
+    "language": [(880.0, 0.080)],
+    "language_alt": [(880.0, 0.060), (0.0, 0.060), (880.0, 0.060)],
 }
 PLAYERS = ("pw-play", "paplay")
 # Silence between queued sounds. Overlapping sounds mask each other: `cancel` ~70 ms after

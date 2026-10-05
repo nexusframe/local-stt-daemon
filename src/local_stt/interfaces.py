@@ -63,7 +63,7 @@ class SttEngine(Protocol):
 
 # --- audio, jobs and injection (02 §2.6, 08 §8.3) ----------------------------------------
 
-Sound = Literal["start", "stop", "cancel", "error"]  # 10 §10.6
+Sound = Literal["start", "stop", "cancel", "error", "language", "language_alt"]  # 10 §10.6
 Cut = Literal["release", "max_duration", "silence", "max_length", "flush"]
 JobSource = Literal["ptt", "continuous"]
 
@@ -104,6 +104,7 @@ class Job:
     session_id: int | None
     seq: int | None
     cut: Cut
+    language: str  # active when the recording (PTT) or segment (continuous) was taken
 
     @property
     def duration_s(self) -> float:

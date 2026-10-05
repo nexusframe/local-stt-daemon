@@ -18,7 +18,7 @@ engine = "whisper-server"            # only implementation in v0.1–v0.3
 port = 8178                          # ⟳
 model = "small-q8_0"                 # ⟳ ggml-<model>.bin filename in models_dir (stage-0 benchmark)
 models_dir = "~/.local/share/local-stt/models"   # ⟳
-language = "pl"                      # sent with every request; reload applies it at once
+languages = ["pl", "en"]             # first = startup; the language hotkey cycles them; sent with every request
 threads = 4                          # ⟳ -t for whisper-server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk."
@@ -58,6 +58,7 @@ enabled = true
 push_to_talk = "Control_R"
 continuous_toggle = "Shift+Control_R"
 ptt_cancel_key = "Escape"            # single keysym; active only while PTT is held
+language_toggle = "Ctrl+Control_R"   # next of stt.languages; left Ctrl first; "" = no hotkey
 
 [text]
 append_space = true
@@ -66,6 +67,10 @@ hallucination_patterns = [
   '(zdjęcia|tłumaczenie) i napisy stworzone przez społeczność amara\.org',
   '^\s*dzięk(i|uję) za (uwagę|obejrzenie|oglądanie)[.!]?\s*$',
   '^\s*(za)?subskrybuj[^.]*[.!]?\s*$',
+  # English, for "en" in stt.languages
+  'subtitles by the amara\.org community',
+  '^\s*thank(s| you)( very much)? for watching[.!]?\s*$',
+  '^\s*(please )?(like and )?subscribe[^.]*[.!]?\s*$',
 ]
 # [[text.replacements]]
 # pattern = '(?i)\bnowa linia\b'
@@ -111,9 +116,12 @@ timings = true                       # timing line for each job (without content
 | the `models_dir/ggml-<model>.bin` file exists | `stt.model: file not found: … (run: local-stt models pull small-q8_0)` |
 | when `vad.enabled`: the `models_dir/<vad.model>` file exists | `vad.model: file not found: … (run: local-stt models pull silero-vad)` |
 | `len(stt.vocabulary_prompt) ≤ 300` | vocabulary character limit, not token count; the engine may truncate the prompt ([06](06-stt-engine.md) §6.6) |
+| `stt.languages` names at least one language; each is a language code (`[a-z]{2,3}` or `auto`), none repeated (task 3.7) | `stt.languages[1]: must be a language code such as "pl"`, `stt.languages: must not repeat a language` |
+| the removed key `stt.language` is not used | `stt.language: replaced by stt.languages, the first is the startup language: languages = ["pl", "en"]` |
 | `hotkeys.push_to_talk != hotkeys.continuous_toggle` | |
+| `hotkeys.language_toggle` is `""` (no hotkey) or differs from the PTT and continuous shortcuts | `hotkeys.language_toggle: must differ from push_to_talk and continuous_toggle` |
 | the hotkey does not use `ISO_Level3_Shift`, `Alt_R`, `Super_L` (conflict), or `Control_L`, `Shift_L` (used by XTest during paste, [08](08-text-injection.md) §8.5) | [07](07-hotkeys-x11.md) §7.2 |
-| `hotkeys.ptt_cancel_key` is a single unmodified keysym, distinct from the PTT and continuous keysyms | |
+| `hotkeys.ptt_cancel_key` is a single unmodified keysym, distinct from the PTT, continuous and language keysyms | |
 | `stt.extra_server_args` does not contain `--host`, `--port`, `--request-path`, `--inference-path`, `-m`/`--model`, `-l`/`--language`, `-t`/`--threads`, `-bs`/`--beam-size`, `--public`, `--convert` (also as `--flag=value`) | `stt.extra_server_args: flag X is managed by local-stt` |
 | `stt.extra_server_args` items and the model path (`stt.models_dir`) contain no whitespace, quotes, backslashes, or `$`: systemd splits the unbraced `$LOCAL_STT_WHISPER_ARGS` on whitespace (9.4) | `stt.models_dir: must not contain whitespace, quotes, backslashes or $` |
 | `stt.extra_server_args` does not contain `-pr`/`--print-realtime` or `-debug`/`--debug-mode`: `--print-realtime` prints transcribed text to the server's stdout, which ends up in journald (12 §12.1; verified in `examples/server/server.cpp`, v1.9.4); `--debug-mode` enables whisper.cpp debug output derived from the audio | `stt.extra_server_args: flag X would log transcribed content` |

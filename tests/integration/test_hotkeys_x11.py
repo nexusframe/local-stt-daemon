@@ -18,6 +18,7 @@ from local_stt.config import HotkeysConfig
 from local_stt.events import (
     ContinuousToggle,
     Event,
+    LanguageSwitch,
     PttCancelKey,
     PttPressed,
     PttReleased,
@@ -104,6 +105,28 @@ def test_toggle_with_shift_released_first(env: Env) -> None:
         (X.KeyRelease, "Control_R"),
     )
     assert env.next() == ContinuousToggle()
+    env.quiet()
+
+
+def test_language_toggle_left_ctrl_first(env: Env) -> None:
+    # task 3.7: left Ctrl, then right Ctrl, in either release order; right Ctrl first is PTT.
+    for alt_up_first in (False, True):
+        env.kb.send((X.KeyPress, "Control_L"), (X.KeyPress, "Control_R"))
+        releases = [(X.KeyRelease, "Control_R"), (X.KeyRelease, "Control_L")]
+        env.kb.send(*(releases[::-1] if alt_up_first else releases))
+        assert env.next() == LanguageSwitch()
+        env.quiet()
+    env.kb.send((X.KeyPress, "Control_R"), (X.KeyPress, "Control_L"))
+    env.kb.send((X.KeyRelease, "Control_L"), (X.KeyRelease, "Control_R"))
+    assert isinstance(env.next(), PttPressed)
+    assert isinstance(env.next(), PttReleased)
+    env.quiet()
+
+
+def test_without_language_hotkey(env: Env) -> None:
+    assert env.apply(language_toggle="") == []
+    env.kb.send((X.KeyPress, "Control_L"), (X.KeyPress, "Control_R"))
+    env.kb.send((X.KeyRelease, "Control_R"), (X.KeyRelease, "Control_L"))
     env.quiet()
 
 

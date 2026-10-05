@@ -30,11 +30,14 @@ def test_parse(text: str, parsed: tuple[frozenset[str], str]) -> None:
         ({"push_to_talk": "Control_L"}, 'hotkeys.push_to_talk: Control_L used by XTest when pasting (08 §8.5) (got "Control_L")'),
         ({"continuous_toggle": "Ctrl+Shift_L"}, 'hotkeys.continuous_toggle: Shift_L used by XTest when pasting (08 §8.5) (got "Ctrl+Shift_L")'),
         ({"ptt_cancel_key": "Ctrl+Escape"}, 'hotkeys.ptt_cancel_key: must be a single keysym without modifiers (got "Ctrl+Escape")'),
-        ({"ptt_cancel_key": "Control_R"}, 'hotkeys.ptt_cancel_key: must differ from the push_to_talk and continuous_toggle keysyms (got "Control_R")'),
+        ({"ptt_cancel_key": "Control_R"}, 'hotkeys.ptt_cancel_key: must differ from the push_to_talk, continuous_toggle and language_toggle keysyms (got "Control_R")'),
         ({"push_to_talk": "Hyper+F9"}, "hotkeys.push_to_talk: unknown modifier 'Hyper' (use Ctrl, Shift, Alt, Super) (got \"Hyper+F9\")"),
         ({"push_to_talk": "Ctrl+Ctrl+F9"}, 'hotkeys.push_to_talk: repeated modifier (got "Ctrl+Ctrl+F9")'),
         ({"push_to_talk": "Ctrl+"}, "hotkeys.push_to_talk: unknown keysym '' (got \"Ctrl+\")"),
         ({"push_to_talk": "Kontrol_R"}, "hotkeys.push_to_talk: unknown keysym 'Kontrol_R' (got \"Kontrol_R\")"),
+        ({"language_toggle": "Shift+Control_R"}, 'hotkeys.language_toggle: must differ from push_to_talk and continuous_toggle (got "Shift+Control_R")'),
+        ({"language_toggle": "Alt_R"}, 'hotkeys.language_toggle: Alt_R conflicts with AltGr (got "Alt_R")'),
+        ({"push_to_talk": "F9", "continuous_toggle": "Shift+F9", "language_toggle": "Escape"}, 'hotkeys.ptt_cancel_key: must differ from the push_to_talk, continuous_toggle and language_toggle keysyms (got "Escape")'),
     ],
 )  # fmt: skip
 def test_rules(fields: dict[str, Any], message: str) -> None:
@@ -48,6 +51,8 @@ def test_rules(fields: dict[str, Any], message: str) -> None:
         {"push_to_talk": "Pause", "continuous_toggle": "Ctrl+Pause"},
         {"push_to_talk": "Super+F9", "ptt_cancel_key": "space"},
         {"push_to_talk": "Shift+Control_R", "continuous_toggle": "Control_R"},
+        {"language_toggle": ""},  # no language hotkey
+        {"language_toggle": "Pause"},
     ],
 )
 def test_valid(fields: dict[str, Any]) -> None:

@@ -24,7 +24,8 @@ STATUS: dict[str, Any] = {
     "speech": False,
     "reconnecting": False,
     "engine": {"state": "READY", "name": "whisper.cpp", "model": "small-q8_0", "port": 8178, "threads": 4},
-    "hotkeys": {"state": "OK", "push_to_talk": "Control_R", "continuous_toggle": "Shift+Control_R", "problems": []},
+    "hotkeys": {"state": "OK", "push_to_talk": "Control_R", "continuous_toggle": "Shift+Control_R", "language_toggle": "Ctrl+Control_R", "problems": []},
+    "language": {"active": "pl", "languages": ["pl", "en"]},
     "audio": {"device": "default", "open": False, "overflows": 0},
     "pipeline": {
         "queued": 0,
@@ -43,7 +44,8 @@ def test_format_status_matches_the_spec_example() -> None:
     assert cli.format_status(STATUS) == (
         "local-stt 0.1.0 — IDLE\n"
         "  engine     READY   whisper.cpp small-q8_0 @127.0.0.1:8178 (t=4)\n"
-        "  hotkeys    OK      PTT=Control_R  continuous=Shift+Control_R\n"
+        "  hotkeys    OK      PTT=Control_R  continuous=Shift+Control_R  language=Ctrl+Control_R\n"
+        "  language   pl (languages: pl, en)\n"
         "  audio      default (closed)\n"
         "  pipeline   0 queued, last: 3.8 s audio → 1.6 s (RTF 0.42) 2 min ago\n"
         "  uptime     2 h 14 min"
@@ -97,6 +99,9 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> FakeIpc:
         (["cancel"], {"cmd": "cancel"}),
         (["toggle"], {"cmd": "toggle"}),
         (["status"], {"cmd": "status"}),
+        (["language"], {"cmd": "status"}),  # shows the language, switches nothing
+        (["language", "toggle"], {"cmd": "language"}),
+        (["language", "en"], {"cmd": "language", "set": "en"}),
     ],
 )
 def test_requests(
@@ -104,9 +109,42 @@ def test_requests(
     argv: list[str],
     request_: dict[str, Any],
 ) -> None:
-    fake.response = {"ok": True, "status": STATUS}
+    fake.response = {"ok": True, "status": STATUS, "language": STATUS["language"]}
     assert cli.main(argv) == 0
     assert fake.sent == [request_]
+
+
+@pytest.mark.parametrize(
+    ("argv", "response", "out"),
+    [
+        (["language"], {"ok": True, "status": STATUS}, "pl (languages: pl, en)\n"),
+        (
+            ["language", "toggle"],
+            {"ok": True, "language": {"active": "en", "languages": ["pl", "en"]}},
+            "en (languages: pl, en)\n",
+        ),
+    ],
+)
+def test_language_output(
+    fake: FakeIpc,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    response: dict[str, Any],
+    out: str,
+) -> None:
+    fake.response = response
+    assert cli.main(argv) == 0
+    assert capsys.readouterr().out == out
+
+
+def test_language_rejected(fake: FakeIpc, capsys: pytest.CaptureFixture[str]) -> None:
+    fake.response = {
+        "ok": False,
+        "error": "bad_language",
+        "message": "language must be one of stt.languages: pl, en",
+    }
+    assert cli.main(["language", "de"]) == 4
+    assert "language must be one of stt.languages: pl, en" in capsys.readouterr().err
 
 
 def test_status_json(
@@ -220,6 +258,19 @@ def test_watch_rewrites_one_line_on_a_terminal(
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     assert cli.main(["status", "--watch"]) == 0
     assert capsys.readouterr().out == "\r\033[KIDLE\r\033[KLISTENING\n"
+
+
+def test_watch_shows_a_switched_language(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    switched = {"event": "language", "language": {"active": "en", "languages": ["pl", "en"]}}
+    back = {"event": "language", "language": {"active": "pl", "languages": ["pl", "en"]}}
+    fake_stream(
+        monkeypatch, [state("IDLE"), switched, state("RECORDING"), back, KeyboardInterrupt()]
+    )
+    assert cli.main(["status", "--watch"]) == 0
+    # the state events still carry the configured language in this fake stream
+    assert capsys.readouterr().out == "IDLE\nIDLE [EN]\nRECORDING\nRECORDING\n"
 
 
 def test_watch_json_passes_every_event(

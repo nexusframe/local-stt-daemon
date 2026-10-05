@@ -157,7 +157,13 @@ class Harness:
     def _report(self) -> None:
         self.connection_failures += 1
 
-    def job(self, audio: NDArray[np.float32] | None = None, *, ended_at: float = 0.0) -> Job:
+    def job(
+        self,
+        audio: NDArray[np.float32] | None = None,
+        *,
+        ended_at: float = 0.0,
+        language: str = "pl",
+    ) -> Job:
         self._next_id += 1
         return Job(
             id=self._next_id,
@@ -168,6 +174,7 @@ class Harness:
             session_id=None,
             seq=None,
             cut="release",
+            language=language,
         )
 
     def submit(self, audio: NDArray[np.float32] | None = None) -> Job:
@@ -270,11 +277,12 @@ def test_jobs_run_in_submit_order(h: Harness) -> None:
     assert h.injector.texts == ["jeden ", "dwa ", "trzy "]
 
 
-def test_vocabulary_prompt_and_language_are_sent() -> None:
-    h = Harness(config(stt={"vocabulary_prompt": "PipeWire, Gdańsk.", "language": "en"}))
+def test_vocabulary_prompt_and_the_job_language_are_sent() -> None:
+    # The job's language, not the startup one: the hotkey may have switched it (task 3.7).
+    h = Harness(config(stt={"vocabulary_prompt": "PipeWire, Gdańsk."}))
     h.worker.start()
     try:
-        h.submit()
+        h.worker.submit(h.job(language="en"))
         assert isinstance(h.outcome(), JobFinished)
     finally:
         h.worker.stop()
@@ -594,7 +602,7 @@ def test_live_reload_shortens_pause_timeout() -> None:
     ],
 )
 def test_timing_line_outcome(result: InjectResult, outcome: str) -> None:
-    job = Job(7, "continuous", speech(2.0), 0.0, 0, 1, 4, "silence")
+    job = Job(7, "continuous", speech(2.0), 0.0, 0, 1, 4, "silence", "pl")
     t = {"audio": 2.0, "queued": 0.1, "stt": 1.0, "text": 0.002, "inject": 0.2, "total": 1.5}
     line = pipeline_mod._timing_line(job, transcript(audio_s=2.0, proc_s=1.0), t, result)
     assert line == (
@@ -625,9 +633,11 @@ def test_token_operation_refused_after_cancel() -> None:
 # --- continuous session context (task 2.4; 06 §6.6, 08 §8.1) -------------------------------
 
 
-def continuous_job(h: Harness, seq: int, *, session_id: int = 1, cut: Cut = "silence") -> Job:
+def continuous_job(
+    h: Harness, seq: int, *, session_id: int = 1, cut: Cut = "silence", language: str = "pl"
+) -> Job:
     return dataclasses.replace(
-        h.job(), source="continuous", session_id=session_id, seq=seq, cut=cut
+        h.job(language=language), source="continuous", session_id=session_id, seq=seq, cut=cut
     )
 
 
@@ -651,6 +661,20 @@ def test_session_text_goes_into_the_prompt(h: Harness) -> None:
         "Ala ma kota.",
         "Ala ma kota. Kot ma Alę.",
     ]
+
+
+def test_language_switch_drops_the_session_context(h: Harness) -> None:
+    # task 3.7: Polish context would only mislead an English segment, and the other way round.
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" A cat."), transcript(" Dog.")]
+    run_continuous(
+        h,
+        continuous_job(h, 1),
+        continuous_job(h, 2, language="en"),
+        continuous_job(h, 3, language="en"),
+        continuous_job(h, 4),
+    )
+    assert [c["language"] for c in h.engine.calls] == ["pl", "en", "en", "pl"]
+    assert [c["prompt"] for c in h.engine.calls] == [None, None, "A cat.", None]
 
 
 def test_context_keeps_the_last_200_characters(h: Harness) -> None:

@@ -24,7 +24,9 @@ CONFLICTING_KEYSYMS = {
     "Control_L": "used by XTest when pasting (08 §8.5)",
     "Shift_L": "used by XTest when pasting (08 §8.5)",
 }
-HOTKEY_NAMES = ("push_to_talk", "continuous_toggle", "ptt_cancel_key")
+HOTKEY_NAMES = ("push_to_talk", "continuous_toggle", "ptt_cancel_key", "language_toggle")
+# Keys that may be "" (no hotkey).
+OPTIONAL_HOTKEYS = frozenset({"language_toggle"})
 
 
 def parse_hotkey(text: str) -> tuple[frozenset[str], str]:
@@ -50,6 +52,8 @@ def validate_hotkeys(hk: "HotkeysConfig") -> list[str]:
     for name in HOTKEY_NAMES:
         value = getattr(hk, name)
         key = f"hotkeys.{name}"
+        if value == "" and name in OPTIONAL_HOTKEYS:
+            continue
         try:
             mods, keysym = parse_hotkey(value)
         except ValueError as e:
@@ -61,10 +65,16 @@ def validate_hotkeys(hk: "HotkeysConfig") -> list[str]:
         parsed[name] = (mods, keysym)
 
     ptt, toggle = parsed.get("push_to_talk"), parsed.get("continuous_toggle")
+    language = parsed.get("language_toggle")
     if ptt is not None and ptt == toggle:
         errors.append(
             f"hotkeys.continuous_toggle: must differ from push_to_talk "
             f"(got {_show(hk.continuous_toggle)})"
+        )
+    if language is not None and language in (ptt, toggle):
+        errors.append(
+            f"hotkeys.language_toggle: must differ from push_to_talk and continuous_toggle "
+            f"(got {_show(hk.language_toggle)})"
         )
     cancel = parsed.get("ptt_cancel_key")
     if cancel is not None:
@@ -73,10 +83,10 @@ def validate_hotkeys(hk: "HotkeysConfig") -> list[str]:
                 f"hotkeys.ptt_cancel_key: must be a single keysym without modifiers "
                 f"(got {_show(hk.ptt_cancel_key)})"
             )
-        elif cancel[1] in {k for _, k in (s for s in (ptt, toggle) if s is not None)}:
+        elif cancel[1] in {k for _, k in (s for s in (ptt, toggle, language) if s is not None)}:
             errors.append(
-                f"hotkeys.ptt_cancel_key: must differ from the push_to_talk and "
-                f"continuous_toggle keysyms (got {_show(hk.ptt_cancel_key)})"
+                f"hotkeys.ptt_cancel_key: must differ from the push_to_talk, continuous_toggle "
+                f"and language_toggle keysyms (got {_show(hk.ptt_cancel_key)})"
             )
     return errors
 

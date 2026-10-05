@@ -43,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
     ptt = commands.add_parser("ptt", help="start/stop push-to-talk, like the hotkey")
     ptt.add_argument("action", choices=["start", "stop"])
     commands.add_parser("toggle", help="start/stop continuous dictation, like the hotkey")
+    language = commands.add_parser(
+        "language", help="show or switch the active language (one of stt.languages)"
+    )
+    language.add_argument(
+        "target", nargs="?", metavar="toggle|CODE", help="switch like the hotkey, or to CODE"
+    )
     commands.add_parser("cancel", help="cancel the recording and pending jobs")
     commands.add_parser("reload", help="reload the config file")
     commands.add_parser("devices", help="list PipeWire microphones for audio.device")
@@ -200,7 +206,7 @@ def _run_transcribe(args: argparse.Namespace) -> int:
                 beam_size=stt.beam_size,
                 audio_ctx=stt.audio_ctx,
                 audio_ctx_margin=stt.audio_ctx_margin,
-                language=stt.language,
+                language=stt.startup_language,
                 startup_timeout_s=stt.startup_timeout_s,
             )
             with server as engine:
@@ -239,7 +245,7 @@ def _transcribe(
     return engine.transcribe(
         audio,
         sample_rate=16000,
-        language=stt.language,
+        language=stt.startup_language,
         prompt=stt.vocabulary_prompt or None,
         timeout_s=stt.request_timeout_max_s,
     )
@@ -340,6 +346,11 @@ def _run_daemon_command(args: argparse.Namespace) -> int:
     request: dict[str, Any] = {"cmd": args.command}
     if args.command == "ptt":
         request["action"] = args.action
+    if args.command == "language":
+        if args.target is None:  # show: read it from the status, switch nothing
+            request = {"cmd": "status"}
+        elif args.target != "toggle":
+            request["set"] = args.target
     response = _call(request)
     if isinstance(response, int):
         return response
@@ -358,7 +369,15 @@ def _run_daemon_command(args: argparse.Namespace) -> int:
         print("Remaining jobs cancelled; injection already in progress may finish.")
     elif args.command == "reload":
         print(_format_reload(response))
+    elif args.command == "language":
+        # a switch answers with the language, a plain `language` reads the status
+        print(_format_language(response.get("language") or response["status"]["language"]))
     return 0
+
+
+def _format_language(language: dict[str, Any]) -> str:
+    """`en (languages: pl, en)`; the first listed is the startup language."""
+    return f"{language['active']} (languages: {', '.join(language['languages'])})"
 
 
 def _run_watch(*, json_lines: bool) -> int:
@@ -367,18 +386,27 @@ def _run_watch(*, json_lines: bool) -> int:
     from local_stt import ipc
 
     tty = sys.stdout.isatty()
+    state = ""
     try:
         for message in ipc.subscribe():
             if "event" not in message:  # an error response instead of the stream
                 return _rejected(message)
             if json_lines:
                 print(json.dumps(message, ensure_ascii=False), flush=True)
-            elif message["event"] == "state":
-                state = message["status"]["state"]
-                if tty:
-                    print(f"\r\033[K{state}", end="", flush=True)
+            elif message["event"] in ("state", "language"):
+                if message["event"] == "state":
+                    state = message["status"]["state"]
+                    language = message["status"]["language"]
                 else:
-                    print(state, flush=True)
+                    language = message["language"]
+                # The language is shown only while it differs from the startup one.
+                line = state
+                if language["active"] != language["languages"][0]:
+                    line += f" [{language['active'].upper()}]"
+                if tty:
+                    print(f"\r\033[K{line}", end="", flush=True)
+                else:
+                    print(line, flush=True)
     except KeyboardInterrupt:
         if tty and not json_lines:
             print()
@@ -428,12 +456,16 @@ def format_status(status: dict[str, Any]) -> str:
     if hotkeys["state"] == "disabled":
         lines.append("  hotkeys    disabled")
     else:
-        lines.append(
+        line = (
             f"  hotkeys    {hotkeys['state']:<7} PTT={hotkeys['push_to_talk']}  "
             f"continuous={hotkeys['continuous_toggle']}"
         )
+        if hotkeys.get("language_toggle"):
+            line += f"  language={hotkeys['language_toggle']}"
+        lines.append(line)
         for p in hotkeys["problems"]:
             lines.append(f"             {p['hotkey']} ({p['value']}): {p['reason']}")
+    lines.append(f"  language   {_format_language(status['language'])}")
     lines.append(f"  audio      {audio['device']} ({'open' if audio['open'] else 'closed'})")
     work = f"{pipeline['queued']} queued"
     if pipeline["busy"]:
@@ -475,7 +507,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "status" and args.watch:
         return _run_watch(json_lines=args.json)
-    if args.command in ("status", "ptt", "toggle", "cancel", "reload"):
+    if args.command in ("status", "ptt", "toggle", "language", "cancel", "reload"):
         return _run_daemon_command(args)
     if args.command == "devices":
         return _run_devices()

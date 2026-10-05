@@ -27,6 +27,7 @@ from local_stt.events import (
     CancelRequested,
     ContinuousToggle,
     Event,
+    LanguageSwitch,
     PttPressed,
     PttReleased,
     ReloadRequested,
@@ -88,6 +89,11 @@ def request_event(request: Any, reply: "Future[Response]") -> Event | Response:
         return ReloadRequested(reply)
     if cmd == "toggle":
         return ContinuousToggle(reply)  # rejected by the controller until v0.2
+    if cmd == "language":
+        target = request.get("set")
+        if target is not None and not isinstance(target, str):
+            return error("bad_request", 'language "set" must be a language code')
+        return LanguageSwitch(target, reply)
     return error("unknown_command", f"unknown command {cmd!r}")
 
 

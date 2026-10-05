@@ -9,7 +9,7 @@ engine = "whisper-server"            # only implementation in v0.1–v0.3
 port = 8178                          # ⟳ loopback port; the host is always 127.0.0.1
 model = "small-q8_0"                 # ⟳ ggml-<model>.bin in models_dir (benchmark: docs/benchmark-results.md)
 models_dir = "~/.local/share/local-stt/models"   # ⟳ no whitespace, quotes, backslashes or $
-language = "pl"                      # sent with every request; reload applies it at once
+languages = ["pl", "en"]             # first = startup; the language hotkey cycles them; sent with every request
 threads = 4                          # ⟳ -t for whisper-server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk." (max 300 characters)
@@ -51,6 +51,7 @@ enabled = true
 push_to_talk = "Control_R"
 continuous_toggle = "Shift+Control_R"
 ptt_cancel_key = "Escape"            # single keysym; active only while PTT is held
+language_toggle = "Ctrl+Control_R"   # next of stt.languages; left Ctrl first; "" = no hotkey
 
 [text]
 append_space = true
@@ -60,6 +61,10 @@ hallucination_patterns = [
   '(zdjęcia|tłumaczenie) i napisy stworzone przez społeczność amara\.org',
   '^\s*dzięk(i|uję) za (uwagę|obejrzenie|oglądanie)[.!]?\s*$',
   '^\s*(za)?subskrybuj[^.]*[.!]?\s*$',
+  # English, for "en" in stt.languages
+  'subtitles by the amara\.org community',
+  '^\s*thank(s| you)( very much)? for watching[.!]?\s*$',
+  '^\s*(please )?(like and )?subscribe[^.]*[.!]?\s*$',
 ]
 # Replacements applied in order; regex defaults to false (plain text).
 # [[text.replacements]]

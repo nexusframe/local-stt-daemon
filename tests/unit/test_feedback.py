@@ -96,7 +96,15 @@ def flush(fb: DesktopFeedback) -> None:
 
 
 @pytest.mark.parametrize(
-    ("sound", "seconds"), [("start", 0.13), ("stop", 0.13), ("cancel", 0.12), ("error", 0.25)]
+    ("sound", "seconds"),
+    [
+        ("start", 0.13),
+        ("stop", 0.13),
+        ("cancel", 0.12),
+        ("error", 0.25),
+        ("language", 0.08),
+        ("language_alt", 0.18),
+    ],
 )
 def test_generated_wav_files(tmp_path: Path, sound: str, seconds: float) -> None:
     fb = make(tmp_path, Tools(), sound_volume=0.4)

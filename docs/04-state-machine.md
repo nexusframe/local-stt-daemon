@@ -17,7 +17,7 @@ pipeline = { queued_jobs: int, queued_audio_s: float, busy: bool, paused: bool, 
 engine   ∈ { STARTING, READY, DOWN }
 ```
 
-The controller also stores `pending_reload: Config | None` (4.6), the identifiers described in 4.2, and the `stopping` flag for PTT and continuous mode. While a recording is being finalized, the mode remains active until the audio consumer confirms completion.
+The controller also stores `pending_reload: Config | None` (4.6), the identifiers described in 4.2, the `stopping` flag for PTT and continuous mode, and the active `language` (task 3.7: starts as the first of `stt.languages`, switched by `LanguageSwitch`). While a recording is being finalized, the mode remains active until the audio consumer confirms completion.
 
 ## 4.2 Events
 
@@ -29,6 +29,7 @@ All sources send events to a single `controller.events` queue (`queue.Queue`). T
 | `PttReleased` | HotkeyListener / IPC `ptt stop` | `at: float` (monotonic, at the source), `reply` |
 | `PttCancelKey` | HotkeyListener (`hotkeys.ptt_cancel_key` while PTT is held) | — |
 | `ContinuousToggle` | HotkeyListener / IPC `toggle` | `reply` |
+| `LanguageSwitch` | HotkeyListener (`hotkeys.language_toggle`) / IPC `language` | `target: str \| None` (None = toggle), `reply` |
 | `CancelRequested` | IPC `cancel` | `reply` |
 | `RecordingStarted` | audio consumer (first frame after opening the stream) | `recording_id`, `capture_id` |
 | `RecordingLimitReached` | audio consumer (Recorder, PTT) | `recording_id`, `capture_id`, `ended_at` |
@@ -208,7 +209,7 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
 
 | Group | Keys | When applied |
 |---|---|---|
-| **live** | `logging.*`, `text.*`, `injection.*`, `feedback.*`, `ptt.*`, `continuous.*`, `stt.language`, `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.no_speech_threshold`, `stt.logprob_threshold`, `stt.startup_timeout_s`, `stt.request_timeout_max_s` | immediately |
+| **live** | `logging.*`, `text.*`, `injection.*`, `feedback.*`, `ptt.*`, `continuous.*`, `stt.languages`, `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.no_speech_threshold`, `stt.logprob_threshold`, `stt.startup_timeout_s`, `stt.request_timeout_max_s` | immediately |
 | **at IDLE** | `audio.*`, `vad.*`, `hotkeys.*` | immediately if `mode == IDLE`; otherwise stored in `pending_reload` and applied on the next transition to IDLE (without interrupting the recording) |
 | **server restart** ⟳ | `stt.engine`, `stt.model`, `stt.models_dir`, `stt.threads`, `stt.beam_size`, `stt.port`, `stt.extra_server_args`, `stt.audio_ctx`, `stt.audio_ctx_margin` (a server only ever sees one fixed `audio_ctx` plus the full window, 06 §6.7) | see below |
 
@@ -221,6 +222,15 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
 
    We do not use `POST /load`; the rationale is in [06](06-stt-engine.md) §6.5.
 4. Response: `{"ok": true, "applied": [...], "deferred": [...], "server_restart": true|false}`. Lists contain changed keys (`section.key`). Server keys are `applied` when the restart starts immediately and `deferred` while it waits for IDLE, an empty queue, or a restart already in progress. A restart failure is detected either from the `systemctl` exit code or from `EngineStateChanged(DOWN)` arriving before `READY`.
+
+### Language switch (task 3.7)
+
+`LanguageSwitch` is handled in every mode; it changes only the active `language`, never the config file (ADR-008):
+
+- `target` None moves to the next language of `stt.languages`, after the last back to the first; a `target` in the list selects it; any other code → `bad_language`, nothing changes.
+- A job takes the language active when its recording started (PTT: at `PttPressed`) or when its segment arrived (continuous: at `SegmentReady`), so jobs already recorded or queued keep theirs. The pipeline sends the job's language and drops the continuous prompt context when it differs from the previous segment's (06 §6.6).
+- Feedback: the `language` / `language_alt` sound only while the microphone is closed (in continuous mode or during PTT the tone would be recorded), and the notification “Language: XX” with key `language` (10 §10.6). Subscribers receive `{"event": "language", ...}`.
+- A reload that changes `stt.languages` resets the active language to its first entry; any other reload keeps it. A daemon restart starts again from the first entry.
 
 ## 4.7 Externally visible status
 

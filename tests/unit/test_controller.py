@@ -673,17 +673,17 @@ def test_reload_live_keys_apply_immediately_even_during_ptt(c: Controller, w: Wo
 def test_reload_language_is_live_without_server_restart(c: Controller, w: World) -> None:
     # whisper-server v1.9.4 honours the per-request `language` (06 §6.5, tested 2026-10-05).
     press(c, w)
-    w.next_config = with_changes(Config(), stt={"language": "en"})
+    w.next_config = with_changes(Config(), stt={"languages": ("en", "pl")})
     r = reply()
     c.handle(ev.ReloadRequested(r))
     assert w.names() == ["reload.live"]
     assert r.result() == {
         "ok": True,
-        "applied": ["stt.language"],
+        "applied": ["stt.languages"],
         "deferred": [],
         "server_restart": False,
     }
-    assert c.config.stt.language == "en"
+    assert c.config.stt.languages == ("en", "pl") and c.language == "en"
 
 
 def test_reload_idle_keys_in_idle_apply_immediately(c: Controller, w: World) -> None:
@@ -849,8 +849,10 @@ def test_status_document(c: Controller, w: World) -> None:
             "state": "OK",
             "push_to_talk": "Control_R",
             "continuous_toggle": "Shift+Control_R",
+            "language_toggle": "Ctrl+Control_R",
             "problems": [],
         },
+        "language": {"active": "pl", "languages": ["pl", "en"]},
         "audio": {"device": "default", "open": False, "overflows": 0},
         "pipeline": {
             "queued": 0,
@@ -933,3 +935,99 @@ def test_status_hotkey_problems_from_startup_and_regrab(w: World) -> None:
     w.next_config = with_changes(Config(), hotkeys={"enabled": False})
     c.handle(ev.ReloadRequested())
     assert status_of(c)["hotkeys"]["state"] == "disabled"
+
+
+# --- language switch (task 3.7) ----------------------------------------------------------
+
+PL_EN = {"active": "pl", "languages": ["pl", "en"]}
+EN = {"active": "en", "languages": ["pl", "en"]}
+
+
+def test_language_cycles_through_the_list(c: Controller, w: World) -> None:
+    r = reply()
+    c.handle(ev.LanguageSwitch(reply=r))
+    assert c.language == "en"
+    assert w.calls == [("sound", "language_alt"), ("notify", "language", "Language: EN", False)]
+    assert r.result() == {"ok": True, "language": EN}
+    w.calls.clear()
+    c.handle(ev.LanguageSwitch())
+    assert c.language == "pl"
+    assert w.sounds() == ["language"]  # one tone: back to the startup language
+    assert c.status()["language"] == PL_EN
+
+
+def test_language_cycle_of_three(w: World) -> None:
+    c = make(w)
+    w.next_config = with_changes(Config(), stt={"languages": ("pl", "en", "de")})
+    c.handle(ev.ReloadRequested())
+    w.calls.clear()
+    seen = []
+    for _ in range(4):
+        c.handle(ev.LanguageSwitch())
+        seen.append(c.language)
+    assert seen == ["en", "de", "pl", "en"]
+    assert w.sounds() == ["language_alt", "language_alt", "language", "language_alt"]
+
+
+def test_language_set_to_a_code_and_rejects_others(c: Controller, w: World) -> None:
+    c.handle(ev.LanguageSwitch("en"))
+    c.handle(ev.LanguageSwitch("en"))  # already active: confirmed again, no change
+    assert c.language == "en"
+    assert w.sounds() == ["language_alt", "language_alt"]
+    w.calls.clear()
+    r = reply()
+    c.handle(ev.LanguageSwitch("de", r))
+    assert r.result() == {
+        "ok": False,
+        "error": "bad_language",
+        "message": "language must be one of stt.languages: pl, en",
+    }
+    assert c.language == "en" and w.calls == []
+
+
+def test_language_is_published_to_subscribers(w: World) -> None:
+    published: list[dict[str, Any]] = []
+    c = Controller(
+        Config(),
+        capture=w,
+        consumer=Consumer(w),
+        pipeline=Pipeline(w),
+        feedback=w,
+        lifecycle=w,
+        reload_target=Reload(w),
+        load_config=w.load_config,
+        clock=lambda: w.now,
+        on_publish=published.append,
+    )
+    c.handle(ev.LanguageSwitch())
+    assert [m for m in published if m["event"] == "language"] == [
+        {"event": "language", "language": EN}
+    ]
+
+
+def test_ptt_job_keeps_the_language_of_its_press(c: Controller, w: World) -> None:
+    rid, cid, op = record_and_release(c, w)
+    c.handle(ev.LanguageSwitch())  # switched before the recording was finalized
+    c.handle(ev.RecordingFinished(rid, cid, op, clip(), "release"))
+    assert w.jobs[-1].language == "pl"
+    assert finish_job(c, w).language == "en"
+
+
+def test_language_sound_is_skipped_while_the_microphone_records(c: Controller, w: World) -> None:
+    press(c, w)
+    c.handle(ev.LanguageSwitch())
+    assert w.sounds() == []  # the tone would be recorded
+    assert w.notifications() == ["Language: EN"]
+
+
+def test_reload_of_the_languages_resets_the_active_language(c: Controller, w: World) -> None:
+    c.handle(ev.LanguageSwitch())
+    w.next_config = with_changes(Config(), stt={"vocabulary_prompt": "x"})
+    c.handle(ev.ReloadRequested())
+    assert c.language == "en"  # an unrelated reload keeps the switch
+    w.next_config = with_changes(
+        Config(), stt={"vocabulary_prompt": "x", "languages": ("pl", "en", "de")}
+    )
+    c.handle(ev.ReloadRequested())
+    assert c.language == "pl"
+    assert c.status()["language"] == {"active": "pl", "languages": ["pl", "en", "de"]}

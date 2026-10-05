@@ -90,6 +90,7 @@ class _PttRecording:
     recording_id: int
     capture_id: int
     pressed_at: float
+    language: str  # active at the press (task 3.7)
     stopping: bool = False
     operation_id: int | None = None
     ended_at: float | None = None
@@ -166,6 +167,7 @@ class Controller:
 
         self.mode = Mode.IDLE
         self.engine = EngineHealth.STARTING
+        self.language = config.stt.startup_language  # active; the hotkey cycles it (3.7)
         self._rec: _PttRecording | None = None
         self._cont: _Continuous | None = None
         self._next_recording_id = 0
@@ -202,6 +204,7 @@ class Controller:
             ev.PttReleased: self._on_ptt_released,
             ev.PttCancelKey: self._on_ptt_cancel_key,
             ev.ContinuousToggle: self._on_continuous_toggle,
+            ev.LanguageSwitch: self._on_language_switch,
             ev.CancelRequested: self._on_cancel,
             ev.RecordingStarted: self._on_recording_started,
             ev.RecordingLimitReached: self._on_recording_limit,
@@ -308,8 +311,10 @@ class Controller:
                 "state": hotkeys_state,
                 "push_to_talk": cfg.hotkeys.push_to_talk,
                 "continuous_toggle": cfg.hotkeys.continuous_toggle,
+                "language_toggle": cfg.hotkeys.language_toggle,
                 "problems": [dataclasses.asdict(p) for p in self.hotkey_problems],
             },
+            "language": self._language_status(),
             "audio": {
                 "device": cfg.audio.device,
                 "open": snap.mode is Mode.PTT_RECORDING
@@ -333,6 +338,9 @@ class Controller:
             },
             "uptime_s": now - self._started_at,
         }
+
+    def _language_status(self) -> dict[str, Any]:
+        return {"active": self.language, "languages": list(self.config.stt.languages)}
 
     def _on_status_requested(self, event: ev.StatusRequested) -> None:
         self._respond(event.reply, _ok(status=self.status()))
@@ -446,7 +454,9 @@ class Controller:
             code = "engine_starting" if starting else "engine_down"
             return self._respond(event.reply, _error(code, "STT engine unavailable"))
 
-        rec = _PttRecording(self._new_id("recording"), self._new_id("capture"), event.at)
+        rec = _PttRecording(
+            self._new_id("recording"), self._new_id("capture"), event.at, self.language
+        )
         self._rec = rec
         self.mode = Mode.PTT_RECORDING
         self._consumer.begin_ptt(rec.recording_id, rec.capture_id)
@@ -522,6 +532,7 @@ class Controller:
             session_id=None,
             seq=None,
             cut=event.cut,
+            language=rec.language,
         )
         self._rec = None
         self.mode = Mode.IDLE
@@ -584,6 +595,36 @@ class Controller:
         self.mode = Mode.CONTINUOUS
         self._consumer.reset_continuous(cont.recording_id, cont.capture_id)
         self._schedule(CAPTURE_OPEN_DELAY_S, ev.CaptureOpenDue(cont.recording_id))
+
+    # --- language (task 3.7) --------------------------------------------------------------
+
+    def _on_language_switch(self, event: ev.LanguageSwitch) -> None:
+        """Switches the active language among stt.languages (the config is never written,
+        ADR-008; its first language is the startup one).
+
+        Jobs keep the language of their recording; the pipeline drops the continuous prompt
+        context when the language changes. The sound plays only while the microphone is
+        closed, so it is never recorded; the notification always replaces the previous one.
+        """
+        languages = self.config.stt.languages
+        if event.target is None:
+            current = languages.index(self.language) if self.language in languages else -1
+            target = languages[(current + 1) % len(languages)]
+        elif event.target in languages:
+            target = event.target
+        else:
+            message = f"language must be one of stt.languages: {', '.join(languages)}"
+            return self._respond(event.reply, _error("bad_language", message))
+        if target != self.language:
+            log.info("language: %s -> %s", self.language, target)
+            self.language = target
+        mic_open = self.mode is Mode.PTT_RECORDING or self._cont is not None
+        if not mic_open:
+            self._feedback.play("language" if target == languages[0] else "language_alt")
+        self._feedback.notify("language", f"Language: {target.upper()}")
+        if self._on_publish is not None:
+            self._on_publish({"event": "language", "language": self._language_status()})
+        self._respond(event.reply, _ok(language=self._language_status()))
 
     def _continuous_rejection(self) -> tuple[str, str, str] | None:
         if self.engine is EngineHealth.STARTING:
@@ -649,6 +690,7 @@ class Controller:
             session_id=segment.session_id,
             seq=segment.seq,
             cut=segment.cut,
+            language=self.language,
         )
         self._pipeline.submit(job)
         self._outstanding[job.id] = len(segment.samples) / SAMPLE_RATE
@@ -880,6 +922,10 @@ class Controller:
 
         keys = config_diff(self._latest, new)
         self._latest = new
+        startup = new.stt.startup_language
+        if "stt.languages" in keys and self.language != startup:
+            log.info("language: %s -> %s (reload)", self.language, startup)
+            self.language = startup
         groups = {key: reload_group(key) for key in keys}
         live = [k for k, g in groups.items() if g == "live"]
         idle = [k for k, g in groups.items() if g == "idle"]

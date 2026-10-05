@@ -46,6 +46,15 @@ class ContinuousToggle:
 
 
 @dataclass(frozen=True)
+class LanguageSwitch:
+    """Hotkey or IPC `language` (task 3.7): `target` None moves to the next of stt.languages,
+    after the last back to the first."""
+
+    target: str | None = None
+    reply: Reply = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
 class CancelRequested:
     reply: Reply = field(default=None, compare=False)
 
@@ -200,6 +209,7 @@ Event = (
     | PttReleased
     | PttCancelKey
     | ContinuousToggle
+    | LanguageSwitch
     | CancelRequested
     | RecordingStarted
     | RecordingLimitReached

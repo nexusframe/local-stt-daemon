@@ -93,6 +93,7 @@ class _Session:
     session_id: int
     tail: str = ""  # last CONTEXT_CHARS characters of the session's text
     prev_cut: Cut | None = None  # cut of the session's previous segment
+    language: str | None = None  # of the text in `tail` (task 3.7)
 
 
 class PipelineWorker:
@@ -302,6 +303,11 @@ class PipelineWorker:
             return None
         if self._session is None or self._session.session_id != job.session_id:
             self._session = _Session(job.session_id)
+        if self._session.language != job.language:
+            # A language switch starts a new paragraph: context in the other language would
+            # only mislead the prompt (task 3.7).
+            self._session.tail = ""
+            self._session.language = job.language
         return self._session
 
     def _ptt_speech(self, audio: NDArray[np.float32], config: Config) -> NDArray[np.float32] | None:
@@ -322,7 +328,7 @@ class PipelineWorker:
             self._engine.transcribe,
             job.audio,
             sample_rate=SAMPLE_RATE,
-            language=config.stt.language,
+            language=job.language,
             prompt=prompt,
             timeout_s=timeout_s,
         )

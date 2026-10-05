@@ -7,6 +7,7 @@
 | Push-to-talk | **right Ctrl** (`Control_R`), held down | press + release |
 | Continuous start/stop | **Shift + right Ctrl** (`Shift+Control_R`) | toggle on press |
 | Cancel PTT recording | **Esc** (`hotkeys.ptt_cancel_key`) pressed *while holding* right Ctrl | press |
+| Language switch (task 3.7) | **left Ctrl + right Ctrl** (`Ctrl+Control_R`, left Ctrl first; `""` = no hotkey): next of `stt.languages` | press |
 | Cancel continuous | `local-stt cancel` (optionally: a custom GNOME shortcut; see 7.7) | IPC |
 
 ### Why not `Super+Space` from the preliminary design
@@ -26,6 +27,12 @@
   - `KeyPress` and `KeyRelease` reach the daemon,
   - with `Shift+Control_R`, releasing Shift *before* Ctrl also reaches the daemon (active grab), and `KeyRelease Control_R` arrives correctly.
 
+**`Ctrl+Control_R` for the language switch** (task 3.7, user decision 2026-10-05). The applications see the first key pressed and released alone, because the daemon takes the `Control_R` press, so the first key must do nothing on its own:
+
+- **`Alt+Control_R` was rejected.** On Xvfb its grab worked (one switch event, no PTT, either release order), and in the real session a separate client caught 5 of 5 presses next to the running daemon with no menu in Firefox. Live with the daemon in **VS Code**, however, the bare Alt activated the menu bar and the editor lost focus (2026-10-05). Cancelling that with an injected key is possible but sends events to the user's application, so it was not done.
+- **`Ctrl+Control_R` (left Ctrl first):** a bare left Ctrl does nothing in applications, and Mutter's `locate-pointer-key` (`Control_L`) is disabled (see “Why right Ctrl” above). Tested 2026-10-05: on Xvfb one switch event in either release order, right Ctrl first is ordinary PTT, `Shift+Control_R` still toggles continuous mode (`tests/integration/test_hotkeys_x11.py`); live in VS Code the switch worked and the editor kept focus. `Control_L` is rejected only as the hotkey's keysym (XTest presses it when pasting, 08 §8.5), not as the `Ctrl` modifier.
+- `Super` is not an option either: a bare Super opens Activities. GNOME binds nothing to `Ctrl` alone.
+
 The keys are configurable ([09](09-configuration.md)). On keyboards with `Menu`/`Pause`/`Insert`/`Scroll_Lock`, a good alternative is a single unused key.
 
 ## 7.2 Configuration syntax
@@ -42,7 +49,8 @@ Validation at startup and on `reload`:
 
 - the keysym must exist and have a keycode in the current map (`keysym_to_keycode != 0`),
 - the PTT and continuous shortcuts must not be identical,
-- `ptt_cancel_key` must be a single keysym without modifiers, distinct from the PTT and continuous keysyms,
+- `language_toggle` may be `""` (no hotkey); otherwise it must differ from the PTT and continuous shortcuts,
+- `ptt_cancel_key` must be a single keysym without modifiers, distinct from the PTT, continuous and language keysyms,
 - a shortcut whose keysym is `ISO_Level3_Shift`, `Alt_R`, or `Super_L` is rejected with a message about the conflict with AltGr or Mutter,
 - a shortcut whose keysym is `Control_L` or `Shift_L` is rejected because XTest uses these keys when pasting ([08](08-text-injection.md) §8.5).
 

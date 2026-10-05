@@ -47,7 +47,8 @@ class SttConfig:
     port: int = 8178
     model: str = "small-q8_0"
     models_dir: Path = DEFAULT_MODELS_DIR
-    language: str = "pl"
+    # The first is the startup language; the language hotkey cycles through them (task 3.7).
+    languages: tuple[str, ...] = ("pl", "en")
     threads: int = 4
     beam_size: int = -1
     vocabulary_prompt: str = ""
@@ -63,6 +64,10 @@ class SttConfig:
     @property
     def model_path(self) -> Path:
         return self.models_dir / f"ggml-{self.model}.bin"
+
+    @property
+    def startup_language(self) -> str:
+        return self.languages[0] if self.languages else ""
 
 
 @dataclass(frozen=True)
@@ -101,6 +106,7 @@ class HotkeysConfig:
     push_to_talk: str = "Control_R"
     continuous_toggle: str = "Shift+Control_R"
     ptt_cancel_key: str = "Escape"
+    language_toggle: str = "Ctrl+Control_R"  # left Ctrl first; "" = no hotkey (task 3.7)
 
 
 @dataclass(frozen=True)
@@ -115,6 +121,10 @@ DEFAULT_HALLUCINATION_PATTERNS = (
     r"(zdjęcia|tłumaczenie) i napisy stworzone przez społeczność amara\.org",
     r"^\s*dzięk(i|uję) za (uwagę|obejrzenie|oglądanie)[.!]?\s*$",
     r"^\s*(za)?subskrybuj[^.]*[.!]?\s*$",
+    # English, for "en" in stt.languages (task 3.7)
+    r"subtitles by the amara\.org community",
+    r"^\s*thank(s| you)( very much)? for watching[.!]?\s*$",
+    r"^\s*(please )?(like and )?subscribe[^.]*[.!]?\s*$",
 )
 
 
@@ -249,10 +259,21 @@ def parse_config(data: Mapping[str, Any]) -> tuple[Config, list[str]]:
     return config, warnings
 
 
+# Keys removed from the format, with the hint shown instead of "unknown key".
+REPLACED_KEYS = {
+    "stt.language": (
+        'replaced by stt.languages, the first is the startup language: languages = ["pl", "en"]'
+    ),
+}
+
+
 def _build_section(name: str, cls: type[Any], table: dict[str, Any], errors: list[str]) -> Any:
     hints = get_type_hints(cls)
     values: dict[str, Any] = {}
     for key, raw in table.items():
+        if f"{name}.{key}" in REPLACED_KEYS:
+            errors.append(f"{name}.{key}: {REPLACED_KEYS[f'{name}.{key}']}")
+            continue
         if key not in hints:
             errors.append(f"{name}.{key}: unknown key")
             continue
@@ -351,11 +372,19 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
         "must be a model name such as small-q8_0",
         stt.model,
     )
+    check(len(stt.languages) >= 1, "stt.languages", "must name at least one language", [])
+    for i, code in enumerate(stt.languages):
+        check(
+            re.fullmatch(r"[a-z]{2,3}|auto", code) is not None,
+            f"stt.languages[{i}]",
+            'must be a language code such as "pl"',
+            code,
+        )
     check(
-        re.fullmatch(r"[a-z]{2,3}|auto", stt.language) is not None,
-        "stt.language",
-        'must be a language code such as "pl"',
-        stt.language,
+        len(set(stt.languages)) == len(stt.languages),
+        "stt.languages",
+        "must not repeat a language",
+        list(stt.languages),
     )
     check(stt.threads >= 1, "stt.threads", "must be >= 1", stt.threads)
     check(
@@ -574,7 +603,7 @@ def whisper_server_args(stt: SttConfig, request_path: str) -> list[str]:
     # fmt: off
     return [
         "--host", HOST, "--port", str(stt.port), "--request-path", request_path,
-        "-m", str(stt.model_path), "-l", stt.language, "-t", str(stt.threads),
+        "-m", str(stt.model_path), "-l", stt.startup_language, "-t", str(stt.threads),
         "-bs", str(stt.beam_size), "-sns", *stt.extra_server_args,
     ]
     # fmt: on

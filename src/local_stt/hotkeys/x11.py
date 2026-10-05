@@ -24,12 +24,13 @@ from local_stt.config import HotkeysConfig
 from local_stt.events import (
     ContinuousToggle,
     Event,
+    LanguageSwitch,
     PttCancelKey,
     PttPressed,
     PttReleased,
     X11ConnectionLost,
 )
-from local_stt.hotkeys.spec import parse_hotkey
+from local_stt.hotkeys.spec import OPTIONAL_HOTKEYS, parse_hotkey
 from local_stt.interfaces import HotkeyProblem
 
 log = logging.getLogger("local_stt.hotkeys")
@@ -64,16 +65,22 @@ class KeyRouter:
     def __init__(self) -> None:
         self.ptt: Binding | None = None
         self.toggle: Binding | None = None
+        self.language: Binding | None = None
         self.cancel_keycode = 0
         self.relevant = 0  # masks of Shift, Ctrl, Alt, Super
         self.ptt_down = False
 
     def configure(
-        self, ptt: Binding | None, toggle: Binding | None, cancel_keycode: int, relevant: int
+        self,
+        ptt: Binding | None,
+        toggle: Binding | None,
+        cancel_keycode: int,
+        relevant: int,
+        language: Binding | None = None,
     ) -> None:
         if self.ptt_down and (ptt is None or self.ptt is None or ptt.keycode != self.ptt.keycode):
             self.ptt_down = False  # the old key's release would no longer match
-        self.ptt, self.toggle = ptt, toggle
+        self.ptt, self.toggle, self.language = ptt, toggle, language
         self.cancel_keycode, self.relevant = cancel_keycode, relevant
 
     def press(self, keycode: int, state: int, at: float) -> Event | None:
@@ -86,6 +93,11 @@ class KeyRouter:
             return PttPressed(at)
         if self.toggle is not None and (keycode, mods) == (self.toggle.keycode, self.toggle.mods):
             return ContinuousToggle()
+        if self.language is not None and (keycode, mods) == (
+            self.language.keycode,
+            self.language.mods,
+        ):
+            return LanguageSwitch()
         return None
 
     def release(self, keycode: int, at: float) -> Event | None:
@@ -288,8 +300,10 @@ class X11GrabHotkeys:
 
         problems: list[HotkeyProblem] = []
         bindings: dict[str, Binding] = {}
-        for name in ("push_to_talk", "continuous_toggle", "ptt_cancel_key"):
+        for name in ("push_to_talk", "continuous_toggle", "ptt_cancel_key", "language_toggle"):
             value = getattr(config, name)
+            if value == "" and name in OPTIONAL_HOTKEYS:
+                continue
             mods, keysym = parse_hotkey(value)  # syntax was validated with the config
             keycode = self._d.keysym_to_keycode(XK.string_to_keysym(keysym))
             missing = sorted(m for m in mods if m not in masks)
@@ -311,10 +325,12 @@ class X11GrabHotkeys:
             bindings.get("continuous_toggle"),
             cancel.keycode if cancel else 0,
             relevant,
+            bindings.get("language_toggle"),
         )
-        log.info(
-            "hotkeys grabbed: %d of 2", len({"push_to_talk", "continuous_toggle"} & bindings.keys())
-        )
+        grabbed = {"push_to_talk", "continuous_toggle", "language_toggle"}
+        if config.language_toggle == "":
+            grabbed.discard("language_toggle")
+        log.info("hotkeys grabbed: %d of %d", len(grabbed & bindings.keys()), len(grabbed))
         return problems
 
     def _grab(

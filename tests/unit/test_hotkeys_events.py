@@ -2,7 +2,14 @@
 
 from Xlib import X
 
-from local_stt.events import ContinuousToggle, Event, PttCancelKey, PttPressed, PttReleased
+from local_stt.events import (
+    ContinuousToggle,
+    Event,
+    LanguageSwitch,
+    PttCancelKey,
+    PttPressed,
+    PttReleased,
+)
 from local_stt.hotkeys.x11 import Binding, KeyRouter, X11GrabHotkeys
 
 CTRL_R, ESC, F9 = 105, 9, 75
@@ -12,8 +19,22 @@ NUMLOCK = X.Mod2Mask
 
 def router() -> KeyRouter:
     r = KeyRouter()
-    r.configure(Binding(CTRL_R, 0), Binding(CTRL_R, X.ShiftMask), ESC, RELEVANT)
+    r.configure(
+        Binding(CTRL_R, 0),
+        Binding(CTRL_R, X.ShiftMask),
+        ESC,
+        RELEVANT,
+        Binding(CTRL_R, X.ControlMask),
+    )
     return r
+
+
+def test_language_toggle_with_left_ctrl_and_not_during_ptt() -> None:
+    r = router()
+    assert r.press(CTRL_R, X.ControlMask | NUMLOCK, 1.0) == LanguageSwitch()
+    assert r.release(CTRL_R, 1.1) is None and not r.ptt_down
+    assert r.press(CTRL_R, 0, 2.0) == PttPressed(2.0)
+    assert r.press(CTRL_R, X.ControlMask, 2.1) is None  # active grab while PTT is held
 
 
 def test_ptt_press_and_release() -> None:
@@ -47,7 +68,7 @@ def test_cancel_key_only_while_ptt_held() -> None:
 
 def test_other_modifier_combination_is_not_ptt() -> None:
     r = router()
-    assert r.press(CTRL_R, X.Mod1Mask, 1.0) is None
+    assert r.press(CTRL_R, X.Mod4Mask, 1.0) is None  # Super: bound to nothing
 
 
 def test_lost_release() -> None:

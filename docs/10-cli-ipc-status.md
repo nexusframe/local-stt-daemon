@@ -10,6 +10,7 @@ One entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), with sub
 | `local-stt status [--json] [--watch [--preview]]` | v0.1 / `--watch` v0.2 / `--preview` v0.3 | daemon status (10.4) | yes (otherwise: `daemon not running`, code 3) |
 | `local-stt ptt start\|stop` | v0.1 | equivalent to pressing/releasing the PTT key | yes |
 | `local-stt toggle` | v0.2 | enables/disables continuous mode | yes |
+| `local-stt language [toggle\|CODE]` | v0.3 (task 3.7) | without an argument prints the active language (`en (languages: pl, en)`, read from `status`); `toggle` moves to the next of `stt.languages` like the hotkey; `CODE` selects a language from the list (other codes → `bad_language`, code 4). The daemon never writes the config, so a restart returns to the first language of the list | yes |
 | `local-stt cancel` | v0.1 | cancels recording/continuous mode and pending jobs; an injection operation already underway may finish (08 §8.3) | yes |
 | `local-stt reload` | v0.1 | reloads the config; reports applied and deferred changes and whether the server will restart ([04](04-state-machine.md) §4.6) | yes |
 | `local-stt doctor` | v0.1 | environment diagnostics (10.5) | no |
@@ -46,11 +47,15 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 → {"cmd": "toggle"}
 ← {"ok": false, "error": "engine_down", "message": "STT engine unavailable"}
 
+→ {"cmd": "language"}                    // toggle; {"cmd": "language", "set": "en"} selects
+← {"ok": true, "language": {"active": "en", "languages": ["pl", "en"]}}
+
 → {"cmd": "reload"}
 ← {"ok": true, "applied": ["vad.min_silence_ms"], "deferred": [], "server_restart": true}
 
 → {"cmd": "subscribe"}
 ← {"event": "state", "status": {...}}        // stream – one line on every state change
+← {"event": "language", "language": {"active": "en", "languages": ["pl", "en"]}}   // after every switch
 ← {"event": "job", "job_id": 17, "source": "continuous", "audio_s": 4.1, "processing_s": 1.9, "chars": 62, "result": "injected"}
 ```
 
@@ -77,7 +82,8 @@ In v0.3, `status --watch --preview` requires `continuous.preview=true` and expli
 ```text
 local-stt 0.1.0 — IDLE
   engine     READY   whisper.cpp small-q8_0 @127.0.0.1:8178 (t=4)
-  hotkeys    OK      PTT=Control_R  continuous=Shift+Control_R
+  hotkeys    OK      PTT=Control_R  continuous=Shift+Control_R  language=Ctrl+Control_R
+  language   pl (languages: pl, en)
   audio      default (closed)
   pipeline   0 queued, last: 3.8 s audio → 1.6 s (RTF 0.42) 2 min ago
   uptime     2 h 14 min
@@ -94,6 +100,7 @@ local-stt 0.1.0 — IDLE
   "reconnecting": false,
   "engine": {"state": "READY", "name": "whisper.cpp", "model": "small-q8_0", "port": 8178},
   "hotkeys": {"state": "OK", "problems": []},
+  "language": {"active": "pl", "languages": ["pl", "en"]},
   "audio": {"device": "default", "open": true, "overflows": 0},
   "pipeline": {"queued": 1, "queued_audio_s": 3.4, "busy": true, "generation": 5},
   "stats": {"jobs_ok": 42, "jobs_failed": 0, "jobs_filtered": 3, "rtf_avg_10": 0.44, "latency_avg_10_s": 1.7},
@@ -104,6 +111,8 @@ local-stt 0.1.0 — IDLE
 `state` is calculated according to the priorities in [04](04-state-machine.md) §4.7.
 
 *Implementation (task 1.10).* Fields beyond the example above: `engine.threads` (for the `(t=4)` text), `hotkeys.push_to_talk` / `hotkeys.continuous_toggle` (the shortcuts in effect) and `hotkeys.state = "disabled"` with `hotkeys.enabled = false`; each problem is `{"hotkey", "value", "reason"}` ([07](07-hotkeys-x11.md) §7.6); `pipeline.paused`; `pipeline.last = {"audio_s", "stt_s", "ago_s"}` or `null` (the text form's `last:`). Statistics are counted by the Controller since startup: `jobs_ok` = successful `JobFinished`; `jobs_failed` = `JobFailed` plus `JobFinished` with `ok = false`; `jobs_filtered` = `JobDiscarded` with `no_speech` or `filtered` (cancelled jobs are not counted); `rtf_avg_10` (`stt / audio`) and `latency_avg_10_s` (`total`) average the last 10 successful jobs and are `null` before the first. `audio.overflows` counts input overflows since startup (task 2.7, 05 §5.6). The text form shows no `stats` line, as in the example.
+
+*Language (task 3.7).* `language` is the active language and `stt.languages`, the first being the startup language; `hotkeys.language_toggle` is the shortcut in effect (`""` = none). `status --watch` appends ` [EN]` to the state while the active language differs from the startup language, and rewrites the line on every `language` event.
 
 `status --watch` subscribes to events and rewrites one terminal line. It can be used in a status bar (for example, the GNOME “Executor” extension or a future tray; see [15](15-implementation-plan.md)). *Implementation (task 2.5):* the line is the displayed state (`state`); when stdout is not a terminal, every change is printed as a new line instead, which suits status bars that read lines. `status --watch --json` prints the raw stream, `job` events included. Ctrl+C exits with 0; if the daemon stops, `daemon stopped` and exit code 3.
 
@@ -146,7 +155,7 @@ Checks and prints `OK` / `WARN` / `FAIL` with a suggested fix:
 
 ### Sounds (`feedback.sounds`)
 
-At startup, the daemon generates four short WAV files (sine waves with 5 ms fade-in/out, volume `sound_volume`) in `$XDG_RUNTIME_DIR/local-stt/sounds/`:
+At startup, the daemon generates six short WAV files (sine waves with 5 ms fade-in/out, volume `sound_volume`) in `$XDG_RUNTIME_DIR/local-stt/sounds/`:
 
 | Sound | Pattern | Duration |
 |---|---|---|
@@ -154,6 +163,8 @@ At startup, the daemon generates four short WAV files (sine waves with 5 ms fade
 | `stop` | 2 descending tones, 880→660 Hz | 130 ms |
 | `cancel` | 1 tone at 440 Hz | 120 ms |
 | `error` | 3× 330 Hz with pauses | 250 ms |
+| `language` | 1 tone at 880 Hz: the startup language (first of `stt.languages`) is now active (task 3.7) | 80 ms |
+| `language_alt` | 2× 880 Hz with a pause: any other language is now active; the notification names it | 180 ms |
 
 **Event → sound matrix** (the single source of truth; [04](04-state-machine.md) and [05](05-audio-and-vad.md) refer to it):
 
@@ -165,6 +176,7 @@ At startup, the daemon generates four short WAV files (sine waves with 5 ms fade
 | PTT cancelled (cancel key, `local-stt cancel`) | `cancel` |
 | PTT recording with no speech (`JobDiscarded(no_speech)`) | `cancel` |
 | Continuous mode enabled (sound **before** opening the microphone) | `start` |
+| Language switched (hotkey, `local-stt language`) while the microphone is closed | `language` / `language_alt`; no sound while recording or in continuous mode, where the tone would be recorded (notification only) |
 | Continuous mode disabled (toggle, backlog, engine DOWN, microphone after 3 attempts) | `stop`; additionally `error` for backlog/DOWN/microphone |
 | `local-stt cancel` discarding anything | `cancel` |
 | Rejection: engine unavailable, microphone open error, audio error during PTT | `error` |
@@ -182,7 +194,7 @@ Playback: `subprocess.Popen(["pw-play", path])` (fallback `paplay`), without wai
 
 | `errors` level (default) | Additionally with `all` |
 |---|---|
-| engine unavailable, microphone error, “microphone appears muted,” “recording limit reached,” transcription failed (aggregated), “paste failed—text is in the clipboard,” “no active field—text is in the clipboard,” “transcription cannot keep up—dictation stopped,” hotkey conflict at startup, engine restart failed after reload | “Dictation enabled/disabled,” “Engine ready: <model>” |
+“Language: XX” after a language switch (key `language`, task 3.7), engine unavailable, microphone error, “microphone appears muted,” “recording limit reached,” transcription failed (aggregated), “paste failed—text is in the clipboard,” “no active field—text is in the clipboard,” “transcription cannot keep up—dictation stopped,” hotkey conflict at startup, engine restart failed after reload | “Dictation enabled/disabled,” “Engine ready: <model>” |
 
 Notifications **never contain transcribed text**.
 

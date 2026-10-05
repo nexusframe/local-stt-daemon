@@ -538,3 +538,13 @@ def test_shutdown_does_not_notify(c: Controller, w: World) -> None:
     start(c, w)
     c.handle(ev.ShutdownRequested())
     assert informational(w) == []
+
+
+def test_segments_take_the_language_active_when_they_arrive(c: Controller, w: World) -> None:
+    # task 3.7: the switch applies to the next segment; the pipeline drops the context.
+    rid, cid = start(c, w)
+    c.handle(ev.SegmentReady(rid, cid, segment(1)))
+    c.handle(ev.LanguageSwitch())
+    c.handle(ev.SegmentReady(rid, cid, segment(2)))
+    assert [j.language for j in w.jobs] == ["pl", "en"]
+    assert "language_alt" not in w.sounds()  # the microphone is open

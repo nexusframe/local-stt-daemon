@@ -103,8 +103,23 @@ The preliminary design scope (“partial transcription, result stabilization, im
 | 3.4 | **Context:** tune `continuous_context` (tail length; reset after `min_silence` > 5 s = new paragraph) using the `long/` corpus | 06 §6.6 |
 | 3.5 | `stt.continuous_model` (second server)—**only if** required by the rule in 13 §13.5 | ADR-016 |
 | 3.6 | Full benchmark report (`bench report`) with thermals; update `docs/benchmark-results.md` | 13 |
+| 3.7 | **Language switch hotkey (cycles `stt.languages`)**, design below (user decisions 2026-10-05) | 04, 06, 07, 09, 10 |
 
 Status: 3.1 done 2026-10-04 (`models list --bench`, details in [10](10-cli-ipc-status.md) §10.1); checked on the stored runs — the values match [benchmark-results](benchmark-results.md).
+
+**Task 3.7 design — language switch hotkey** (user decisions 2026-10-05). Basis: whisper-server honours the per-request `language` and `stt.language` is already a live reload key (06 §6.5).
+
+- **State:** the daemon holds the active language in memory; the first of `stt.languages` is the startup language. The daemon never writes `config.toml` (ADR-008), so a restart returns to it. A `reload` that changes `stt.languages` resets the active language to its first entry; any other reload keeps it.
+- **Languages:** one list `stt.languages = ["pl", "en"]` (first = startup, codes as before, no repeats, live reload key) replaces `stt.language`; the switch moves to the next entry and wraps around. User decision 2026-10-05, after a first implementation with `stt.alt_language`: a single second language was a design mistake, because adding a third later would need a config migration. An old config with `stt.language` is rejected with a hint (`stt.language: replaced by stt.languages, …`), not aliased.
+- **Key:** new `hotkeys.language_toggle = "Ctrl+Control_R"` (`""` = no hotkey): left Ctrl first, then right Ctrl; right Ctrl first starts PTT. The first design used `Alt+Control_R`; live in VS Code the bare Alt activated the menu bar and the editor lost focus, so the default became `Ctrl+Control_R`, which kept focus in VS Code (user decision 2026-10-05; details in [07](07-hotkeys-x11.md) §7.1).
+- **CLI/IPC:** `local-stt language [toggle|<code>]`, where `<code>` must be in `stt.languages`; without an argument it prints the active language. Works without hotkeys (07 §7.7).
+- **When it applies:** a job records the language active when its recording **started** (`Job.language`; continuous: when its segment arrived), so jobs already recorded or queued keep theirs; a switch while PTT is held applies to the next recording. In continuous mode a switch ends the session context (like a new paragraph): the prompt tail of the other language is dropped.
+- **Feedback:** sound `language` (one 880 Hz tone: the startup language) or `language_alt` (two: any other, user decision 2026-10-05; the notification names it), queued like the other sounds (10 §10.6) and played **only while the microphone is closed** (added during implementation: in continuous mode the tone would be recorded); a notification “Language: EN” shown for `notifications = "errors"` and `"all"` (not for `none`), replacing the previous one.
+- **Status:** `status` text line `language   en (languages: pl, en)`; `--json` field `"language": {"active": "en", "languages": ["pl", "en"]}`; a `language` event in the `subscribe` stream so `status --watch` can show it.
+- **English hallucination filters:** add common Whisper English hallucinations (e.g. “Thank you for watching.”, “Thanks for watching!”, “Subtitles by the Amara.org community”) to the default `text.hallucination_patterns`; they are matched only as whole-utterance patterns, like the Polish ones. `stt.vocabulary_prompt` stays shared (Polish vocabulary in English mode is a known limitation, not addressed here).
+- **Tests:** controller (toggle, job keeps its language, reload reset rules, continuous context reset), hotkey integration (Alt-first order), IPC/CLI, filters; live: switch during PTT and continuous mode.
+
+Status: 3.7 implemented 2026-10-05; specs updated in [04](04-state-machine.md) §4.6, [06](06-stt-engine.md) §6.6, [07](07-hotkeys-x11.md) §7.1–7.2, [09](09-configuration.md), [10](10-cli-ipc-status.md) §10.1–10.6. Live test 2026-10-05 on the reinstalled daemon: CLI `language` show/toggle/reject (`de` → code 4)/select; switch, sounds and notification during PTT and continuous mode (no sound while recording); `Alt+Control_R` lost focus in VS Code, `Ctrl+Control_R` did not.
 
 **v0.3 acceptance:**
 
