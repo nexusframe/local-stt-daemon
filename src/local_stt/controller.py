@@ -691,6 +691,7 @@ class Controller:
             seq=segment.seq,
             cut=segment.cut,
             language=self.language,
+            pause_before_s=segment.pause_before_s,
         )
         self._pipeline.submit(job)
         self._outstanding[job.id] = len(segment.samples) / SAMPLE_RATE

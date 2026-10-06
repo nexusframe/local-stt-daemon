@@ -48,6 +48,9 @@ RETRY_DELAY_S = 1.0  # 04 §4.4: one retry for HTTP 5xx and timeouts
 MIN_REQUEST_TIMEOUT_S = 10.0  # 06: max(10 s, 4 * audio * RTF), capped
 RTF_HISTORY = 10
 CONTEXT_CHARS = 200  # session text passed in the prompt (06 §6.6)
+# A longer pause would start a new paragraph and drop the context. Off: it raised WER on a
+# recording with 4-60 s pauses (task 3.4, docs/15); `bench --context --context-reset` retests it.
+CONTEXT_RESET_S: float | None = None
 RTF_TIMEOUT_FACTOR = 4.0
 
 DiscardReason = Literal["no_speech", "filtered", "cancelled"]
@@ -110,6 +113,8 @@ class PipelineWorker:
         config: Config,
         trimmer: SpeechTrimmer | None = None,
         clock: Callable[[], float] = time.monotonic,
+        context_chars: int = CONTEXT_CHARS,
+        context_reset_s: float | None = CONTEXT_RESET_S,
     ):
         self._engine = engine
         self._processor = processor
@@ -119,6 +124,9 @@ class PipelineWorker:
         self._config = config
         self._trimmer = trimmer
         self._clock = clock
+        # Constructor parameters only so `bench --context` can compare policies (task 3.4).
+        self._context_chars = context_chars
+        self._context_reset_s = context_reset_s
         # One lock for the queue, generation and the injector's operation marker (08 §8.3).
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
@@ -294,8 +302,9 @@ class PipelineWorker:
                 self._current = None
             if session is not None and not requeued:
                 session.prev_cut = job.cut
-                if text:
-                    session.tail = (session.tail + " " + text.strip()).strip()[-CONTEXT_CHARS:]
+                if text and self._context_chars > 0:
+                    tail = (session.tail + " " + text.strip()).strip()
+                    session.tail = tail[-self._context_chars :].lstrip()
 
     def _session_of(self, job: Job) -> _Session | None:
         """The continuous session of `job`; a new session replaces the previous one."""
@@ -308,6 +317,10 @@ class PipelineWorker:
             # only mislead the prompt (task 3.7).
             self._session.tail = ""
             self._session.language = job.language
+        reset_s = self._context_reset_s
+        if reset_s is not None and job.pause_before_s is not None and job.pause_before_s > reset_s:
+            log.debug("job %d: %.1f s pause, new paragraph", job.id, job.pause_before_s)
+            self._session.tail = ""
         return self._session
 
     def _ptt_speech(self, audio: NDArray[np.float32], config: Config) -> NDArray[np.float32] | None:

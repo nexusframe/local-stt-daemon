@@ -165,7 +165,10 @@ class AudioSegment:
     ended_at: float            # monotonic: silence detection / limit / flush request
     speech_ms: int             # speech duration without padding
     cut: Literal["silence", "max_length", "flush"]
+    pause_before_s: float | None = None   # task 3.4, see below
 ```
+
+`pause_before_s` (task 3.4) is the silence, in stream time (frame timestamps), from the last speech frame of the previous **emitted** segment to the first speech frame of this utterance. It is `0` for every part after the first of a `max_length` split (the utterance goes on), and `None` for the first segment after `reset()` (session start or reconnect: the gap is unknown). Dropped segments (rule 7) do not move the reference point. The pipeline uses it to start a new paragraph ([06](06-stt-engine.md) §6.6).
 
 Meaning of `cut`:
 

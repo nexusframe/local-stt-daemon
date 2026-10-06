@@ -58,6 +58,11 @@ class Segmenter:
         self._frames: list[NDArray[np.float32]] = []
         self._probs: list[float] = []
         self._silence_ms = 0
+        # Stream time of the last emitted segment's speech end, and the pause before the
+        # utterance in progress (AudioSegment.pause_before_s, task 3.4).
+        self._last_speech_end: float | None = None
+        self._pause: float | None = None
+        self._frame_end = 0.0
         self._reset_buffers()
 
     @property
@@ -71,11 +76,13 @@ class Segmenter:
             self._session_id, self._seq = session_id, 0
         self._preroll.clear()
         self._reset_buffers()
+        self._last_speech_end = None
         self._vad.reset()
 
     def add(self, frame: "AudioFrame") -> list[SegmenterOutput]:
         p = self._vad(frame.samples)
         frame_end = frame.started_at + len(frame.samples) / SAMPLE_RATE
+        self._frame_end = frame_end
         c = self._config
         if self._state is _State.SILENCE:
             if p < c.start_threshold:
@@ -126,6 +133,9 @@ class Segmenter:
         if len(self._frames) * FRAME_MS < self._config.min_speech_ms:
             return []
         self._state = _State.SPEECH
+        # Every CANDIDATE frame has p >= end_threshold, so speech began with the first one.
+        start = self._frame_end - len(self._frames) * FRAME_MS / 1000
+        self._pause = None if self._last_speech_end is None else start - self._last_speech_end
         if self._pad and self._preroll:
             self._head = np.concatenate(self._preroll)[-self._pad :]
         self._preroll.clear()
@@ -138,13 +148,22 @@ class Segmenter:
         return (speech[0], speech[-1] + 1) if speech else None
 
     def _segment(
-        self, samples: NDArray[np.float32], ended_at: float, speech_ms: int, cut: SegmentCut
+        self,
+        samples: NDArray[np.float32],
+        ended_at: float,
+        speech: tuple[int, int],
+        cut: SegmentCut,
     ) -> list[SegmenterOutput]:
+        """`speech`: the speech frame range within `self._frames`."""
+        speech_ms = (speech[1] - speech[0]) * FRAME_MS
         if speech_ms < self._config.min_speech_ms:
             return []
+        trailing = len(self._frames) - speech[1]
+        self._last_speech_end = self._frame_end - trailing * FRAME_MS / 1000
         self._seq += 1
         assert self._session_id is not None, "reset(session_id) must precede add()"
-        return [AudioSegment(samples, self._session_id, self._seq, ended_at, speech_ms, cut)]
+        pause, self._pause = self._pause, 0.0  # the rest of a max_length split follows at once
+        return [AudioSegment(samples, self._session_id, self._seq, ended_at, speech_ms, cut, pause)]
 
     def _end(self, ended_at: float, cut: SegmentCut) -> list[SegmenterOutput]:
         """Rule 4: the segment runs through the last speech frame plus `speech_pad_ms`; the
@@ -155,7 +174,7 @@ class Segmenter:
         speech = self._speech_range(len(self._frames))
         if speech is not None:
             end = min(len(audio), len(self._head) + speech[1] * FRAME_SAMPLES + self._pad)
-            out += self._segment(audio[:end], ended_at, (speech[1] - speech[0]) * FRAME_MS, cut)
+            out += self._segment(audio[:end], ended_at, speech, cut)
         tail = audio[end:][-self._pad :] if self._pad else audio[:0]
         if cut == "silence" and len(tail):
             self._preroll.extend(np.array_split(tail, math.ceil(len(tail) / FRAME_SAMPLES)))
@@ -177,7 +196,7 @@ class Segmenter:
         out: list[SegmenterOutput] = []
         if speech is not None:
             audio = np.concatenate([self._head, *self._frames[:split]])
-            out = self._segment(audio, ended_at, (speech[1] - speech[0]) * FRAME_MS, "max_length")
+            out = self._segment(audio, ended_at, speech, "max_length")
         self._head = np.zeros(0, dtype=np.float32)
         del self._frames[:split], self._probs[:split]
         return out

@@ -217,3 +217,38 @@ def test_reset_clears_buffers_and_vad_and_keeps_seq_within_a_session() -> None:
     run.seg.reset(session_id=8)
     (seg,) = segments(run.feed([S] * 10 + [Q] * 22))
     assert (seg.session_id, seg.seq) == (8, 1)
+
+
+# --- pause before an utterance (task 3.4) ----------------------------------------------------
+
+
+def test_pause_runs_from_the_last_speech_frame_to_the_next_first_one() -> None:
+    run = Run()
+    (first,) = segments(run.feed([Q] * 10 + [S] * 10 + [Q] * 22))  # speech ends with frame 19
+    (second,) = segments(run.feed([Q] * 5 + [S] * 10 + [Q] * 22))  # and starts again at 47
+    assert first.pause_before_s is None  # nothing before it in this session
+    assert second.pause_before_s == pytest.approx(27 * FRAME_S)
+
+
+def test_rest_of_a_split_has_no_pause() -> None:
+    run = Run(max_segment_s=3.2, split_search_s=1.6)
+    (seg,) = segments(run.feed([Q] * 10 + [S] * 91))
+    (rest,) = segments(run.feed([Q] * 22))
+    assert (seg.pause_before_s, rest.pause_before_s) == (None, 0.0)
+
+
+def test_pause_after_a_dropped_remainder_counts_from_the_emitted_part() -> None:
+    # A split whose rest is only silence: the next pause runs from the first part's speech
+    # (frame 79), not from an older segment.
+    run = Run(max_segment_s=3.2, split_search_s=1.6)
+    run.feed([Q] * 10 + [S] * 70 + [Q] * 22)
+    (nxt,) = segments(run.feed([S] * 10 + [Q] * 22))  # speech again from frame 102
+    assert nxt.pause_before_s == pytest.approx(22 * FRAME_S)
+
+
+def test_reset_forgets_the_previous_speech() -> None:
+    run = Run()
+    run.feed([Q] * 10 + [S] * 10 + [Q] * 22)
+    run.seg.reset(session_id=7)  # a reconnect
+    (seg,) = segments(run.feed([S] * 10 + [Q] * 22))
+    assert seg.pause_before_s is None

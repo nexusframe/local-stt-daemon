@@ -21,6 +21,7 @@ One entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), with sub
 | `local-stt record-corpus DIR [--long]` | stage 0 | records the benchmark corpus ([13](13-benchmark.md) §13.2) | no |
 | `local-stt bench [--quick] [--dataset DIR] …` | stage 0 | model matrix on temporary servers ([13](13-benchmark.md) §13.4) | no (the server service should be stopped) |
 | `local-stt bench --soak …` | v0.2 | 10-minute continuous-mode test through the real Segmenter | no |
+| `local-stt bench --context [--long F.wav] [--reference F.txt] [--context-chars 0,100,200,300] [--context-reset off]` | v0.3 | continuous-mode context policies on one long recording ([13](13-benchmark.md) §13.4) | no |
 | `local-stt bench report DIR` | stage 0 | Markdown results report | no |
 
 Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, `4` rejected by the daemon (for example `toggle` when the engine is DOWN), `78` configuration error.

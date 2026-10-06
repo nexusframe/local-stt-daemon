@@ -94,12 +94,32 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="continuous mode in a loop over long/ (13 §13.4 stage 3)",
     )
+    bench.add_argument(
+        "--context",
+        action="store_true",
+        help="continuous-mode context policies on a long recording (task 3.4)",
+    )
+    bench.add_argument(
+        "--context-chars",
+        default="0,100,200,300",
+        help="--context: prompt context lengths, comma-separated (0 = none)",
+    )
+    bench.add_argument(
+        "--context-reset",
+        default="off",
+        help="--context: pauses in s that start a new paragraph, comma-separated (off = never)",
+    )
+    bench.add_argument(
+        "--reference", type=Path, help="--context: the text read (default: the --long .txt)"
+    )
     bench.add_argument("--model", help="--soak: the model (default: stt.model)")
     bench.add_argument(
         "--duration", type=float, default=600.0, help="--soak: seconds (default 600)"
     )
     bench.add_argument(
-        "--long", type=Path, help="--soak: the recording (default: DATASET/long/001.wav)"
+        "--long",
+        type=Path,
+        help="--soak, --context: the recording (default: DATASET/long/001.wav)",
     )
     bench.add_argument(
         "--words",
@@ -282,6 +302,32 @@ def _run_soak(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 0
 
 
+def _run_context(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from local_stt.bench import context, runner
+
+    try:
+        chars = [int(c) for c in args.context_chars.split(",")]
+        resets = [None if r == "off" else float(r) for r in args.context_reset.split(",")]
+    except ValueError:
+        parser.error("--context-chars takes integers, --context-reset numbers or 'off'")
+    if any(c < 0 for c in chars) or any(r is not None and r <= 0 for r in resets):
+        parser.error("--context-chars must be >= 0 and --context-reset > 0")
+    long_wav = args.long or args.dataset.expanduser() / "long" / "001.wav"
+    try:
+        result = context.run_context(
+            long_wav,
+            args.reference or long_wav.with_suffix(".txt"),
+            args.resume or runner.default_out_dir(),
+            context.policies(chars, resets),
+            allow_concurrent=args.allow_concurrent,
+        )
+    except (OSError, RuntimeError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"results: {result['path']}")
+    return 0
+
+
 def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from local_stt.bench import report, runner
 
@@ -300,6 +346,8 @@ def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
 
     if args.soak:
         return _run_soak(args, parser)
+    if args.context:
+        return _run_context(args, parser)
     try:
         threads = [int(t) for t in (args.threads or "4,8").split(",")]
         audio_ctx = [int(v) for v in (args.audio_ctx or "0,1000").split(",")]

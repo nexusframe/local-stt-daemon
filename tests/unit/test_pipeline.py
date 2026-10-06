@@ -21,7 +21,7 @@ from local_stt.interfaces import (
     Transcript,
     TranscriptSegment,
 )
-from local_stt.pipeline import PipelineWorker, has_speech_rms
+from local_stt.pipeline import CONTEXT_RESET_S, PipelineWorker, has_speech_rms
 from local_stt.stt.whisper_server import (
     EngineConnectionError,
     EngineHttpError,
@@ -137,7 +137,7 @@ class FakeTrimmer:
 
 
 class Harness:
-    def __init__(self, config: Config, trimmer: FakeTrimmer | None = None) -> None:
+    def __init__(self, config: Config, trimmer: FakeTrimmer | None = None, **context: Any) -> None:
         self.events: queue.SimpleQueue[Event] = queue.SimpleQueue()
         self.engine = FakeEngine()
         self.processor = FakeProcessor()
@@ -151,6 +151,7 @@ class Harness:
             report_connection_failure=self._report,
             config=config,
             trimmer=trimmer,
+            **context,
         )
         self._next_id = 0
 
@@ -675,6 +676,47 @@ def test_language_switch_drops_the_session_context(h: Harness) -> None:
     )
     assert [c["language"] for c in h.engine.calls] == ["pl", "en", "en", "pl"]
     assert [c["prompt"] for c in h.engine.calls] == [None, None, "A cat.", None]
+
+
+def test_long_pause_keeps_the_context_by_default(h: Harness) -> None:
+    # task 3.4: the new-paragraph reset raised WER, so it is off (CONTEXT_RESET_S = None).
+    assert CONTEXT_RESET_S is None
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" Kot.")]
+    run_continuous(h, continuous_job(h, 1), pause(continuous_job(h, 2), 60.0))
+    assert [c["prompt"] for c in h.engine.calls] == [None, "Ala ma kota."]
+
+
+def test_pause_above_context_reset_s_starts_a_new_paragraph() -> None:
+    h = Harness(config(), context_reset_s=5.0)
+    h.worker.start()
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" Kot."), transcript(" Pies.")]
+    jobs = [
+        continuous_job(h, 1),
+        pause(continuous_job(h, 2), 5.0),
+        pause(continuous_job(h, 3), 5.1),
+    ]
+    run_continuous(h, *jobs)
+    assert [c["prompt"] for c in h.engine.calls] == [None, "Ala ma kota.", None]
+    h.worker.stop()
+
+
+def pause(job: Job, seconds: float) -> Job:
+    return dataclasses.replace(job, pause_before_s=seconds)
+
+
+def test_context_policy_is_a_constructor_parameter() -> None:
+    # bench --context compares policies through these parameters.
+    h = Harness(config(), context_chars=5, context_reset_s=None)
+    h.worker.start()
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" Kot.")]
+    jobs = [
+        continuous_job(h, 1),
+        pause(continuous_job(h, 2), 60.0),
+        continuous_job(h, 3),
+    ]
+    run_continuous(h, *jobs)
+    assert [c["prompt"] for c in h.engine.calls] == [None, "kota.", "Kot."]
+    h.worker.stop()
 
 
 def test_context_keeps_the_last_200_characters(h: Harness) -> None:

@@ -92,6 +92,9 @@ class AudioSegment:
     ended_at: float  # monotonic: silence detection / limit / flush request
     speech_ms: int  # speech duration without padding
     cut: SegmentCut
+    # Silence from the previous emitted segment's last speech frame to this utterance's first,
+    # in stream time; 0 for the rest of a max_length split, None for the first after reset().
+    pause_before_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,7 @@ class Job:
     seq: int | None
     cut: Cut
     language: str  # active when the recording (PTT) or segment (continuous) was taken
+    pause_before_s: float | None = None  # continuous: `AudioSegment.pause_before_s`
 
     @property
     def duration_s(self) -> float:
