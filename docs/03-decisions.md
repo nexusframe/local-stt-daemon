@@ -126,7 +126,7 @@ Legend:
 - **Objection:** in continuous mode, the user sees no result for a long time.
 - **Response:**
   - `min_silence_ms = 700` plus engine latency is usually 2–4 s from the end of a sentence,
-  - a partial preview, available only in an explicitly enabled `status --watch`, is planned for v0.3; it is never sent to applications or notifications,
+  - a partial preview, available only in an explicitly enabled `status --watch`, was planned for v0.3 and moved to the backlog on 2026-10-06 (a preview request in flight delays the final segment, [15](15-implementation-plan.md) backlog item 9); it would never be sent to applications or notifications,
   - injecting and undoing text in third-party applications is unreliable on X11.
 
 ## ADR-011 ✅ X11 only in v0.1–v0.3; Wayland through interfaces

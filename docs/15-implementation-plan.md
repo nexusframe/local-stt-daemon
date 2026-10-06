@@ -98,7 +98,7 @@ The preliminary design scope (“partial transcription, result stabilization, im
 | # | Task | Notes |
 |---|---|---|
 | 3.1 | **Model switching:** changing `stt.model` + `local-stt reload` already works in v0.1 (server restart, [04](04-state-machine.md) §4.6). v0.3 adds only `local-stt models list --bench`, a model list with the latest benchmark results (WER, p90 latency, RAM) for an informed choice. No runtime override—the config is the single source of truth (ADR-008) | 06 §6.5, 13 |
-| 3.2 | **Partial preview, without insertion:** in continuous mode, once an utterance lasts > 4 s, send the accumulated audio to the engine every 2 s (same `audio_ctx` policy as final jobs, 06 §6.7), **but only when the final-job queue is empty and the worker is idle**. The result goes only to `local-stt status --watch --preview`, when `continuous.preview = true` and at least one explicit preview subscriber exists. Never send it to a window or notification; ordinary `status`, `status --watch`, and `job` events still contain no text. Add the new `continuous.preview = false` key, CLI flag, and preview subscription to [09](09-configuration.md) and [10](10-cli-ipc-status.md) in v0.3 | ADR-010 |
+| 3.2 | **Moved to the backlog** (item 9, user decision 2026-10-06). ~~**Partial preview, without insertion:**~~ in continuous mode, once an utterance lasts > 4 s, send the accumulated audio to the engine every 2 s (same `audio_ctx` policy as final jobs, 06 §6.7), **but only when the final-job queue is empty and the worker is idle**. The result goes only to `local-stt status --watch --preview`, when `continuous.preview = true` and at least one explicit preview subscriber exists. Never send it to a window or notification; ordinary `status`, `status --watch`, and `job` events still contain no text. Add the new `continuous.preview = false` key, CLI flag, and preview subscription to [09](09-configuration.md) and [10](10-cli-ipc-status.md) in v0.3 | ADR-010 |
 | 3.3 | ~~**Segment-boundary stabilization:**~~ **rejected after measurement**, see the status below. `max_length` cuts with 1 s of audio overlap + removal of duplicate words at the join (longest common word suffix/prefix ≥ 2) | 05 §5.5 |
 | 3.4 | **Context:** tune `continuous_context` (tail length; reset after `min_silence` > 5 s = new paragraph) using the `long/` corpus | 06 §6.6 |
 | 3.5 | `stt.continuous_model` (second server)—**only if** required by the rule in 13 §13.5 | ADR-016 |
@@ -126,8 +126,7 @@ Status: 3.7 implemented 2026-10-05; specs updated in [04](04-state-machine.md) �
 **v0.3 acceptance:**
 
 - the 14.4 (v0.3) checklist,
-- continuous-mode WER on the `long/` corpus is no worse than in v0.2 (the duplicate-boundary-word criterion was dropped with task 3.3),
-- preview increases mean final-segment latency by no more than 10%.
+- continuous-mode WER on the `long/` corpus is no worse than in v0.2 (the duplicate-boundary-word criterion was dropped with task 3.3, the preview-latency one with task 3.2).
 
 ## After v0.3 — backlog (no commitments)
 
@@ -141,3 +140,8 @@ Ordered by user value:
 6. Polish + English (`language = "auto"` restricted to {pl, en}).
 7. Local LLM for punctuation/correction (a separate process like whisper-server).
 8. Wayland (ADR-011).
+9. Partial preview in `status --watch --preview` (former task 3.2, moved here 2026-10-06 before implementation). Its v0.3 criterion was that the preview raises mean final-segment latency by at most 10 %; a measurement says it cannot on the reference machine. Tested 2026-10-06 on a temporary `whisper-server` (`small-q8_0`, 4 threads, `audio_ctx` 1000, AC, `performance`, 77 °C at the start), fixtures `pl_short.wav` (4.2 s) and the three fixtures joined (13.2 s):
+   - a request costs about the same at any length, because the fixed `audio_ctx` gives the encoder a fixed cost: 4.2 s took 2.7–2.9 s (3.5–4.0 s once the CPU was hot), 13.2 s took 3.7–4.2 s. A preview every 2 s therefore runs back to back while the user speaks;
+   - closing the connection does not free the server: whisper-server sets an `abort_callback` on client disconnect, yet a 4.2 s request sent right after dropping a 13.2 s one 0.3–3 s into it took 5.2–7.9 s (7 tries), i.e. it waited for the dropped request. Transcripts were unchanged;
+   - so a final segment usually waits for a preview in flight: about +1.5 s on average and up to ~3.5 s on a ~3 s latency, roughly +50 %. Continuous mode already runs at RTF 0.54 in the soak (N3 passes only on `performance`), and back-to-back previews would keep the CPU busy for as long as the user speaks.
+   Revisit on a faster machine, after a whisper.cpp upgrade (check the abort again), or with a cheaper design (e.g. a second server with a small model, or at most one preview per utterance).

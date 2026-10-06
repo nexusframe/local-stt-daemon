@@ -7,7 +7,7 @@ One entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), with sub
 | Command | Version | Action | Requires a running daemon |
 |---|---|---|---|
 | `local-stt daemon [--config P] [--log-level L]` | v0.1 | runs the daemon in the foreground (as systemd starts it) | — |
-| `local-stt status [--json] [--watch [--preview]]` | v0.1 / `--watch` v0.2 / `--preview` v0.3 | daemon status (10.4) | yes (otherwise: `daemon not running`, code 3) |
+| `local-stt status [--json] [--watch [--preview]]` | v0.1 / `--watch` v0.2 / `--preview` backlog (15, item 9) | daemon status (10.4) | yes (otherwise: `daemon not running`, code 3) |
 | `local-stt ptt start\|stop` | v0.1 | equivalent to pressing/releasing the PTT key | yes |
 | `local-stt toggle` | v0.2 | enables/disables continuous mode | yes |
 | `local-stt language [toggle\|CODE]` | v0.3 (task 3.7) | without an argument prints the active language (`en (languages: pl, en)`, read from `status`); `toggle` moves to the next of `stt.languages` like the hotkey; `CODE` selects a language from the list (other codes → `bad_language`, code 4). The daemon never writes the config, so a restart returns to the first language of the list | yes |
@@ -65,7 +65,7 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 
 Response to `cancel`: `{"ok": true, "injection_in_flight": false}`, or `true` in the second field if injection began before cancellation. With `true`, the CLI prints “Remaining jobs cancelled; injection already in progress may finish.” This applies to a single paste sequence or the current `type` chunk, never subsequent chunks or jobs.
 
-In v0.3, `status --watch --preview` requires `continuous.preview=true` and explicitly subscribes to a separate `preview` stream containing partial text. Regular `subscribe`, `status --watch`, and `status --json` do not receive preview content; having no subscribers disables those STT requests. Preview text remains in daemon RAM and the subscriber's terminal; users may redirect CLI output to a file themselves. It is never sent to logs or notifications.
+Backlog (former task 3.2, not in v0.3; [15](15-implementation-plan.md) item 9): `status --watch --preview` would require `continuous.preview=true` and explicitly subscribes to a separate `preview` stream containing partial text. Regular `subscribe`, `status --watch`, and `status --json` do not receive preview content; having no subscribers disables those STT requests. Preview text remains in daemon RAM and the subscriber's terminal; users may redirect CLI output to a file themselves. It is never sent to logs or notifications.
 
 ## 10.3 Signals
 

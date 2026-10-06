@@ -94,4 +94,4 @@ v0.2 (additional):
 
 v0.3 (additional):
 
-- [ ] Preview requires `continuous.preview=true` and `status --watch --preview`; ordinary status, `job` events, logs, and notifications contain no preview text. After the final subscriber disconnects, no further preview requests are submitted.
+- *Backlog, not v0.3 (preview moved out of task 3.2, [15](15-implementation-plan.md) item 9):* Preview requires `continuous.preview=true` and `status --watch --preview`; ordinary status, `job` events, logs, and notifications contain no preview text. After the final subscriber disconnects, no further preview requests are submitted.

@@ -49,7 +49,7 @@ Principle: **audio and text never leave the computer and are written to disk onl
 | Other local users | cannot control the daemon | `0600` socket in a `0700` directory + `SO_PEERCRED` |
 | Server port | a web page can send a request to `127.0.0.1` without a CORS preflight (for example, a multipart `POST`), which could replace the model through `/load` or block the server with a long `/inference` request | all endpoints are placed under a random `--request-path` from the `secret` file (0600), which the page does not know; other processes owned by **the same user** can read it (accepted: they already have access to the microphone and screen) |
 | Clipboard | dictated text remains in CLIPBOARD for ~0.2–1 s (and deliberately stays there after an unconfirmed paste); clipboard-history managers may save it | documentation + `injection.backend = "type"` for sensitive use cases |
-| Preview (v0.3) | partial transcription only for an explicit `status --watch --preview` with `continuous.preview=true`; disabled by default | separate IPC subscription; no content in ordinary status, `job` events, logs, or notifications (10 §10.2) |
+| Preview (backlog, [15](15-implementation-plan.md) item 9) | partial transcription only for an explicit `status --watch --preview` with `continuous.preview=true`; disabled by default | separate IPC subscription; no content in ordinary status, `job` events, logs, or notifications (10 §10.2) |
 | Notifications | never contain content | [10](10-cli-ipc-status.md) §10.6 |
 
 ## 12.3 Error matrix

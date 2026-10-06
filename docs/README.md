@@ -59,7 +59,7 @@ The preliminary design is archived in [`archive/preliminary-design.md`](archive/
 | `threads: 8` | `threads: 4` for the benchmark | HT does not accelerate the encoder (whisper.cpp#89 data) |
 | YAML config | TOML | standard library, unambiguous types (ADR-008) |
 | “X11 / clipboard / ydotool” insertion | clipboard with confirmation + `xdotool type` fallback | Polish characters are unreliable in xdotool 2016 (ADR-009) |
-| v0.3 `partial transcript` inserted into the application | preview only in explicitly enabled `status --watch` | ADR-010 |
+| v0.3 `partial transcript` inserted into the application | preview only in explicitly enabled `status --watch` (moved to the backlog, 15 item 9) | ADR-010 |
 
 ## Conventions
 
