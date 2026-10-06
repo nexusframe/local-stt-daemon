@@ -99,13 +99,15 @@ The preliminary design scope (“partial transcription, result stabilization, im
 |---|---|---|
 | 3.1 | **Model switching:** changing `stt.model` + `local-stt reload` already works in v0.1 (server restart, [04](04-state-machine.md) §4.6). v0.3 adds only `local-stt models list --bench`, a model list with the latest benchmark results (WER, p90 latency, RAM) for an informed choice. No runtime override—the config is the single source of truth (ADR-008) | 06 §6.5, 13 |
 | 3.2 | **Partial preview, without insertion:** in continuous mode, once an utterance lasts > 4 s, send the accumulated audio to the engine every 2 s (same `audio_ctx` policy as final jobs, 06 §6.7), **but only when the final-job queue is empty and the worker is idle**. The result goes only to `local-stt status --watch --preview`, when `continuous.preview = true` and at least one explicit preview subscriber exists. Never send it to a window or notification; ordinary `status`, `status --watch`, and `job` events still contain no text. Add the new `continuous.preview = false` key, CLI flag, and preview subscription to [09](09-configuration.md) and [10](10-cli-ipc-status.md) in v0.3 | ADR-010 |
-| 3.3 | **Segment-boundary stabilization:** `max_length` cuts with 1 s of audio overlap + removal of duplicate words at the join (longest common word suffix/prefix ≥ 2) | 05 §5.5 |
+| 3.3 | ~~**Segment-boundary stabilization:**~~ **rejected after measurement**, see the status below. `max_length` cuts with 1 s of audio overlap + removal of duplicate words at the join (longest common word suffix/prefix ≥ 2) | 05 §5.5 |
 | 3.4 | **Context:** tune `continuous_context` (tail length; reset after `min_silence` > 5 s = new paragraph) using the `long/` corpus | 06 §6.6 |
 | 3.5 | `stt.continuous_model` (second server)—**only if** required by the rule in 13 §13.5 | ADR-016 |
 | 3.6 | Full benchmark report (`bench report`) with thermals; update `docs/benchmark-results.md` | 13 |
 | 3.7 | **Language switch hotkey (cycles `stt.languages`)**, design below (user decisions 2026-10-05) | 04, 06, 07, 09, 10 |
 
 Status: 3.1 done 2026-10-04 (`models list --bench`, details in [10](10-cli-ipc-status.md) §10.1); checked on the stored runs — the values match [benchmark-results](benchmark-results.md).
+
+Status: 3.3 implemented and measured 2026-10-06, then **rejected** (user decision 2026-10-06); the code was not kept. Variant tested: the remainder of a `max_length` split started with the last 1 s of the emitted part (clipped for tiny limits, not counted as speech for rule 7), and TextProcessor dropped the longest prefix of ≥ 2 words equal to a suffix of the session's text (case and punctuation ignored). Measurement: one pass of corpus A `long/001.wav` (497 s) through the soak chain (`small-q8_0`, 4 threads, `audio_ctx` 1000, `continuous_context` on), 59 segments, 9 `max_length` cuts, identical segmentation in both runs; WER against `long/001.txt`: **16.6 % (128/771) without the overlap, 17.6 % (136/771) with it**. The removal never fired: with the session text in the prompt, Whisper continued it and skipped the repeated audio instead of transcribing it again. 5 joins came out the same (cuts in silence), 3 got worse (a loop "…która poznała Bronisław…", "obra Zob | z o burczej" instead of "obrazob | burczej", "…ma… …Mendeliewa" instead of "mendelejeva"), 1 changed slightly. Small sample (one recording, 9 joins), but the direction is clear. Untested alternative, not pursued: no prompt tail for the segment after a `max_length` cut, so the overlap is transcribed and then removed.
 
 **Task 3.7 design — language switch hotkey** (user decisions 2026-10-05). Basis: whisper-server honours the per-request `language` and `stt.language` is already a live reload key (06 §6.5).
 
@@ -124,7 +126,7 @@ Status: 3.7 implemented 2026-10-05; specs updated in [04](04-state-machine.md) �
 **v0.3 acceptance:**
 
 - the 14.4 (v0.3) checklist,
-- continuous-mode WER on the `long/` corpus is no worse than in v0.2, and the number of duplicate boundary words is zero,
+- continuous-mode WER on the `long/` corpus is no worse than in v0.2 (the duplicate-boundary-word criterion was dropped with task 3.3),
 - preview increases mean final-segment latency by no more than 10%.
 
 ## After v0.3 — backlog (no commitments)
