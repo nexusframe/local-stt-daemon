@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, get_type_hints
 
 from local_stt.hotkeys.spec import parse_hotkey, validate_hotkeys
+from local_stt.stt import ENGINES
+from local_stt.stt.parakeet import PARAKEET_MODEL
 from local_stt.stt.whisper_server import FULL_AUDIO_CTX, HOST
 
 CONFIG_ENV_VAR = "LOCAL_STT_CONFIG"
@@ -64,6 +66,11 @@ class SttConfig:
     @property
     def model_path(self) -> Path:
         return self.models_dir / f"ggml-{self.model}.bin"
+
+    @property
+    def engine_model(self) -> str:
+        """The model the selected engine runs (stt.model is whisper-server's, task 4.3)."""
+        return PARAKEET_MODEL if self.engine == "parakeet" else self.model
 
     @property
     def startup_language(self) -> str:
@@ -364,7 +371,12 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
             errors.append(f"{key}: {problem} (got {_show(value)})")
 
     stt = config.stt
-    check(stt.engine == "whisper-server", "stt.engine", 'must be "whisper-server"', stt.engine)
+    check(
+        stt.engine in ENGINES,
+        "stt.engine",
+        "must be one of " + ", ".join(f'"{name}"' for name in ENGINES),
+        stt.engine,
+    )
     check(1 <= stt.port <= 65535, "stt.port", "must be in 1-65535", stt.port)
     check(
         re.fullmatch(r"[A-Za-z0-9._-]+", stt.model) is not None,
@@ -583,7 +595,13 @@ def check_model_files(config: Config) -> list[str]:
     """Errors for missing model files (09 §9.3). Separate from parse_config so that
     `models pull` and `transcribe --model` work before the configured model is downloaded."""
     errors = []
-    if not config.stt.model_path.is_file():
+    if config.stt.engine == "parakeet":
+        model_dir = config.stt.models_dir / PARAKEET_MODEL
+        if not model_dir.is_dir():
+            errors.append(
+                f"stt.engine: parakeet model not found: {model_dir} (run: scripts/install.sh)"
+            )
+    elif not config.stt.model_path.is_file():
         errors.append(
             f"stt.model: file not found: {config.stt.model_path} "
             f"(run: local-stt models pull {config.stt.model})"

@@ -37,6 +37,7 @@ from local_stt.interfaces import (
     PipelineControl,
     ReloadTarget,
 )
+from local_stt.stt import ENGINES
 
 log = logging.getLogger("local_stt.controller")
 
@@ -302,8 +303,8 @@ class Controller:
             "reconnecting": self._cont is not None and self._cont.reconnecting,
             "engine": {
                 "state": snap.engine.value,
-                "name": "whisper.cpp",
-                "model": cfg.stt.model,
+                "name": ENGINES[cfg.stt.engine].name,
+                "model": cfg.stt.engine_model,
                 "port": cfg.stt.port,
                 "threads": cfg.stt.threads,
             },
@@ -340,7 +341,9 @@ class Controller:
         }
 
     def _language_status(self) -> dict[str, Any]:
-        return {"active": self.language, "languages": list(self.config.stt.languages)}
+        # Parakeet detects the language itself and has no language input (task 4.3).
+        active = "auto" if self.config.stt.engine == "parakeet" else self.language
+        return {"active": active, "languages": list(self.config.stt.languages)}
 
     def _on_status_requested(self, event: ev.StatusRequested) -> None:
         self._respond(event.reply, _ok(status=self.status()))
@@ -606,6 +609,10 @@ class Controller:
         context when the language changes. The sound plays only while the microphone is
         closed, so it is never recorded; the notification always replaces the previous one.
         """
+        if self.config.stt.engine == "parakeet":  # task 4.3: no language input
+            self._feedback.notify("language", "Language: automatic (Parakeet)")
+            message = "Parakeet detects the language itself; stt.languages is for whisper-server"
+            return self._respond(event.reply, _error("language_unsupported", message))
         languages = self.config.stt.languages
         if event.target is None:
             current = languages.index(self.language) if self.language in languages else -1
@@ -827,9 +834,9 @@ class Controller:
             self._pipeline.resume()
             self._watch_restart = False
             if previous is not EngineHealth.READY:
-                log.info("engine ready: %s", self.config.stt.model)
+                log.info("engine ready: %s", self.config.stt.engine_model)
                 self._feedback.notify(
-                    "engine", "Engine ready", self.config.stt.model, informational=True
+                    "engine", "Engine ready", self.config.stt.engine_model, informational=True
                 )
         elif event.state is EngineHealth.DOWN:
             self._paused = True
@@ -988,7 +995,7 @@ class Controller:
             self.engine = EngineHealth.STARTING
             self._paused = True
             self._pipeline.pause()
-            log.info("reload: restarting whisper-server")
+            log.info("reload: restarting the %s engine", new.stt.engine)
             self._reload_target.restart_server(new)
 
     def _on_server_restart_done(self, event: ev.ServerRestartDone) -> None:

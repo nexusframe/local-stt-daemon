@@ -123,6 +123,7 @@ def running_daemon(
             pre,
             SdNotifier({}),
             capture=lambda frames, _device, _lost: FileAudioSource(frames, audio),
+            engine_units=None,  # the temporary server above, not the systemd units
         )
         receiver = Receiver(display)
         started = False

@@ -118,7 +118,7 @@ def test_all_errors_are_collected() -> None:
         ({"text": {"replacements": [{"pattern": "a", "replace": "\\q", "regex": True}]}}, 'text.replacements[0].replace: invalid replacement template: bad escape \\q at position 0 (got "\\\\q")'),
         ({"text": {"replacements": [{"pattern": "(?P<n>a)", "replace": "\\g<m>", "regex": True}]}}, """text.replacements[0].replace: invalid replacement template: unknown group name 'm' (got "\\\\g<m>")"""),
         ({"injection": {"paste_shortcut_overrides": {"emacs": "Ctrl+Nope"}}}, "injection.paste_shortcut_overrides.emacs: unknown keysym 'Nope' (got \"Ctrl+Nope\")"),
-        ({"stt": {"engine": "vosk"}}, 'stt.engine: must be "whisper-server" (got "vosk")'),
+        ({"stt": {"engine": "vosk"}}, 'stt.engine: must be one of "whisper-server", "parakeet" (got "vosk")'),
         ({"stt": {"languages": ["pl", "en", "pl"]}}, 'stt.languages: must not repeat a language (got ["pl", "en", "pl"])'),
         ({"stt": {"languages": []}}, "stt.languages: must name at least one language (got [])"),
         ({"stt": {"port": 70000}}, "stt.port: must be in 1-65535 (got 70000)"),
@@ -183,6 +183,17 @@ def test_check_model_files(tmp_path: Path) -> None:
     ]
     (tmp_path / "ggml-small-q8_0.bin").touch()
     (tmp_path / "silero_vad.onnx").touch()
+    assert cfg.check_model_files(config) == []
+
+
+def test_parakeet_needs_its_model_directory_not_the_whisper_model(tmp_path: Path) -> None:
+    (tmp_path / "silero_vad.onnx").touch()
+    config, _ = parse_config({"stt": {"models_dir": str(tmp_path), "engine": "parakeet"}})
+    assert cfg.check_model_files(config) == [
+        f"stt.engine: parakeet model not found: {tmp_path}/parakeet-tdt-0.6b-v3-int8 "
+        "(run: scripts/install.sh)"
+    ]
+    (tmp_path / "parakeet-tdt-0.6b-v3-int8").mkdir()
     assert cfg.check_model_files(config) == []
 
 

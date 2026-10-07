@@ -33,6 +33,7 @@ from local_stt import events as ev
 from local_stt.config import Config, ConfigError, check_model_files, config_dir, load_config
 from local_stt.interfaces import AudioCaptureControl, EngineHealth, SttEngine, Transcript
 from local_stt.logging_setup import resolve_level, set_level, setup_logging
+from local_stt.reload import switch_engine_unit
 
 if TYPE_CHECKING:
     from local_stt.audio.capture import DeviceLostCallback, FrameSink
@@ -163,9 +164,12 @@ class SwitchableEngine:
 
 
 def make_engine(config: Config, request_path: str) -> SttEngine:
+    from local_stt.stt.parakeet import ParakeetEngine
     from local_stt.stt.whisper_server import WhisperServerEngine
 
     stt = config.stt
+    if stt.engine == "parakeet":
+        return ParakeetEngine(port=stt.port, request_path=request_path)
     return WhisperServerEngine(
         port=stt.port,
         request_path=request_path,
@@ -240,6 +244,10 @@ def microphone(frames: "FrameSink", device: str, on_lost: "DeviceLostCallback") 
     return AudioCapture(frames, device, on_device_lost=on_lost)
 
 
+# (stt.engine, "start" | "restart") -> systemctl exit code (task 4.3)
+EngineUnits = Callable[[str, str], int]
+
+
 # --- the daemon ------------------------------------------------------------------------------
 
 
@@ -247,11 +255,19 @@ class Daemon:
     """Builds the components from a passed preflight and runs them until shutdown."""
 
     def __init__(
-        self, pre: Preflight, notifier: "SdNotifier", *, capture: CaptureFactory = microphone
+        self,
+        pre: Preflight,
+        notifier: "SdNotifier",
+        *,
+        capture: CaptureFactory = microphone,
+        engine_units: EngineUnits | None = switch_engine_unit,
     ):
+        """`engine_units=None` leaves the systemd engine units alone (E2E tests bring their
+        own temporary server)."""
         self._pre = pre
         self.notifier = notifier
         self._capture_factory = capture
+        self._engine_units = engine_units
         self._stack = contextlib.ExitStack()
         self._controller_thread: threading.Thread | None = None
         self.exit_code = EXIT_FAILURE  # replaced by the controller's own exit code
@@ -336,6 +352,7 @@ class Daemon:
             ],
             hotkeys=self.hotkeys,
             switch_server=switch_server,
+            restart=self._restart_engine_unit,
         )
         self.controller = Controller(
             config,
@@ -378,6 +395,14 @@ class Daemon:
                 ", ".join(f"{p.value}: {p.reason}" for p in problems),
             )
 
+        # Not waited for, like the engine itself (11 §11.5): EngineMonitor reports READY.
+        threading.Thread(
+            target=self._run_engine_unit,
+            args=(self._pre.config.stt.engine, "start"),
+            name="engine-unit",
+            daemon=True,
+        ).start()
+
         threading.excepthook = ThreadCrashHandler(
             {"engine-monitor": self.monitor.start, "ipc-server": self.ipc.restart_thread}
         )
@@ -386,6 +411,18 @@ class Daemon:
         )
         self._controller_thread.start()
         self.notifier.ready()
+
+    def _run_engine_unit(self, engine: str, action: str) -> int:
+        """Starts or restarts the selected engine's unit and stops the other (task 4.3)."""
+        if self._engine_units is None:
+            return 0
+        code = self._engine_units(engine, action)
+        if code != 0 and action == "start":
+            log.error("cannot start the %s engine service (systemctl exit code %d)", engine, code)
+        return code
+
+    def _restart_engine_unit(self, engine: str) -> int:
+        return self._run_engine_unit(engine, "restart")
 
     def _publish_status(self, text: str) -> None:
         self.notifier.status(text)  # STATUS= for systemctl --user status (11 §11.5)
@@ -431,15 +468,19 @@ class Daemon:
 def log_versions(config: Config) -> None:
     from local_stt.stt.whisper_server import DATA_DIR
 
-    try:
-        tag = (DATA_DIR / "bin/.whisper-tag").read_text(encoding="utf-8").strip()
-    except OSError:
-        tag = "unknown"
+    if config.stt.engine == "whisper-server":
+        try:
+            tag = (DATA_DIR / "bin/.whisper-tag").read_text(encoding="utf-8").strip()
+        except OSError:
+            tag = "unknown"
+        engine = f"whisper.cpp {tag}"
+    else:
+        engine = config.stt.engine
     log.info(
-        "local-stt %s starting (whisper.cpp %s, model %s, audio device %s)",
+        "local-stt %s starting (%s, model %s, audio device %s)",
         __version__,
-        tag,
-        config.stt.model,
+        engine,
+        config.stt.engine_model,
         config.audio.device,
     )
     if config.logging.log_text:

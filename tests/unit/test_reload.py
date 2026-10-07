@@ -9,12 +9,13 @@ from typing import Any
 import pytest
 
 from local_stt import reload
-from local_stt.config import Config, HotkeysConfig
+from local_stt.config import Config, HotkeysConfig, SttConfig
 from local_stt.events import Event, ServerRestartDone
 from local_stt.interfaces import HotkeyProblem
 from local_stt.reload import ComponentReloader
 
 SECRET = "ab" * 16
+WHISPER, PARAKEET = "local-stt-whisper.service", "local-stt-engine.service"
 
 
 class Hotkeys:
@@ -36,6 +37,7 @@ class Env:
         self.calls: list[tuple[str, Config]] = []
         self.hotkeys = Hotkeys()
         self.exit_code = exit_code
+        self.restarted: list[str] = []
         self.env_path = tmp_path / "cfg" / "whisper-server.env"
         self.secret = tmp_path / "secret"
         self.secret.write_text(SECRET + "\n")
@@ -50,8 +52,12 @@ class Env:
             switch_server=lambda c: self.calls.append(("switch", c)),
             env_path=self.env_path,
             secret_path=self.secret,
-            restart=lambda: self.exit_code,
+            restart=self._restart,
         )
+
+    def _restart(self, engine: str) -> int:
+        self.restarted.append(engine)
+        return self.exit_code
 
 
 def test_live_and_idle_callbacks(tmp_path: Path) -> None:
@@ -85,6 +91,16 @@ def test_restart_writes_env_then_reports_exit_code(tmp_path: Path, code: int) ->
     text = env.env_path.read_text()
     assert f"--request-path /{SECRET}" in text and "-t 4" in text
     assert stat.S_IMODE(env.env_path.stat().st_mode) == 0o600
+    assert env.restarted == ["whisper-server"]
+
+
+def test_parakeet_restart_needs_no_env_file(tmp_path: Path) -> None:
+    env = Env(tmp_path)
+    env.secret.write_text("short")  # not read: the engine server reads the secret itself
+    env.reloader.restart_server(Config(stt=SttConfig(engine="parakeet")))
+    assert env.events.get(timeout=2) == ServerRestartDone(0)
+    assert env.restarted == ["parakeet"]
+    assert not env.env_path.exists()
 
 
 def test_unreadable_secret_fails_without_restart(tmp_path: Path) -> None:
@@ -97,15 +113,22 @@ def test_unreadable_secret_fails_without_restart(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("outcome", "code"),
+    ("action", "outcome", "code"),
     [
-        (subprocess.CompletedProcess([], 0, "", ""), 0),
-        (subprocess.CompletedProcess([], 5, "", "Unit not found."), 5),
-        (FileNotFoundError(), reload.EXIT_NOT_FOUND),
-        (subprocess.TimeoutExpired("systemctl", 90), reload.EXIT_TIMEOUT),
+        ("restart", subprocess.CompletedProcess([], 0, "", ""), 0),
+        ("restart", subprocess.CompletedProcess([], 5, "", "Unit not found."), 5),
+        ("stop", subprocess.CompletedProcess([], 5, "", "Unit not loaded."), 5),
+        ("start", FileNotFoundError(), reload.EXIT_NOT_FOUND),
+        ("start", subprocess.TimeoutExpired("systemctl", 90), reload.EXIT_TIMEOUT),
     ],
 )
-def test_systemctl_restart(monkeypatch: pytest.MonkeyPatch, outcome: Any, code: int) -> None:
+def test_systemctl(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    action: str,
+    outcome: Any,
+    code: int,
+) -> None:
     calls: list[list[str]] = []
 
     def run(args: list[str], **kwargs: Any) -> Any:
@@ -115,5 +138,28 @@ def test_systemctl_restart(monkeypatch: pytest.MonkeyPatch, outcome: Any, code: 
         return outcome
 
     monkeypatch.setattr(subprocess, "run", run)
-    assert reload.systemctl_restart() == code
-    assert calls == [["systemctl", "--user", "restart", "local-stt-whisper.service"]]
+    assert reload.systemctl(action, "local-stt-whisper.service") == code
+    assert calls == [["systemctl", "--user", action, "local-stt-whisper.service"]]
+    # stopping a unit that is not installed is normal (the other engine), not an error
+    assert bool(caplog.records) == (code != 0 and action != "stop")
+
+
+@pytest.mark.parametrize(
+    ("engine", "expected"),
+    [
+        ("parakeet", [("stop", WHISPER), ("start", PARAKEET)]),
+        ("whisper-server", [("stop", PARAKEET), ("start", WHISPER)]),
+    ],
+)
+def test_switch_engine_unit_stops_the_other_first(
+    monkeypatch: pytest.MonkeyPatch, engine: str, expected: list[tuple[str, str]]
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def systemctl(action: str, unit: str) -> int:
+        calls.append((action, unit))
+        return 1 if action == "stop" else 0  # a failed stop does not decide the result
+
+    monkeypatch.setattr(reload, "systemctl", systemctl)
+    assert reload.switch_engine_unit(engine, "start") == 0
+    assert calls == expected

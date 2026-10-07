@@ -21,7 +21,9 @@ readonly VENV_DIR="$DATA_DIR/venv"
 readonly LOCAL_STT="$VENV_DIR/bin/local-stt"
 readonly BIN_LINK="$HOME/.local/bin/local-stt"
 readonly UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-readonly UNITS=(local-stt-whisper.service local-stt.service)  # start order
+readonly UNITS=(local-stt-whisper.service local-stt-engine.service local-stt.service)
+# Engine services are never enabled: the daemon starts the one stt.engine selects (task 4.3).
+readonly ENGINE_UNITS=(local-stt-whisper.service local-stt-engine.service)
 
 MODEL="small-q8_0"
 WHISPER_TAG="$DEFAULT_WHISPER_TAG"
@@ -238,12 +240,14 @@ install_units() {
         systemctl --user try-restart "${UNITS[@]}"
         return
     fi
-    systemctl --user enable "${UNITS[@]}"
-    # restart (start on first installation) so that the new code and env take effect;
-    # local-stt.service is Type=notify, so this returns once the daemon sent READY=1
-    for unit in "${UNITS[@]}"; do
-        systemctl --user restart "$unit" || warn "$unit failed to start: journalctl --user -u $unit"
-    done
+    # earlier versions enabled local-stt-whisper.service
+    systemctl --user disable --quiet "${ENGINE_UNITS[@]}" 2>/dev/null || true
+    systemctl --user enable local-stt.service
+    # the running engine picks up the new code and env; the daemon starts the selected engine
+    # if none runs. local-stt.service is Type=notify: restart returns once it sent READY=1
+    systemctl --user try-restart "${ENGINE_UNITS[@]}"
+    systemctl --user restart local-stt.service \
+        || warn "local-stt.service failed to start: journalctl --user -u local-stt.service"
 }
 
 # 9. Diagnostics

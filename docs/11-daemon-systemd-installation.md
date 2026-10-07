@@ -73,9 +73,10 @@ Default tag: v1.9.4.
  7. config: if ~/.config/local-stt/config.toml is absent → copy config.example.toml (with the model substituted).
     If ~/.config/local-stt/secret is absent → generate it (umask 077, 32 hex characters).
     Generate whisper-server.env.
- 8. systemd: copy both units, systemctl --user daemon-reload,
-    (without --no-enable) systemctl --user enable local-stt-whisper.service local-stt.service,
-    then restart both (on first installation: start) so that the new code and new env take effect
+ 8. systemd: copy the three units, systemctl --user daemon-reload,
+    (without --no-enable) disable both engine units, enable local-stt.service,
+    try-restart the engine units (the running one gets the new code and env),
+    then restart local-stt.service, which starts the engine stt.engine selects (task 4.3)
  9. local-stt doctor — result shown at the end of installation.
 ```
 
@@ -129,8 +130,7 @@ WantedBy=graphical-session.target
 Description=local-stt: offline Polish voice-to-text daemon
 Documentation=file://%h/projects/local-stt-daemon/docs/README.md
 PartOf=graphical-session.target
-After=graphical-session.target local-stt-whisper.service
-Wants=local-stt-whisper.service
+After=graphical-session.target
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -152,7 +152,7 @@ WantedBy=graphical-session.target
 ```
 
 - **`MemoryMax=1G`.** Added during the v0.2 acceptance (2026-10-04): a dead audio stream drove PortAudio into a leaking xrun loop that grew the daemon to 11.4 GB and triggered the kernel's global OOM killer, which may pick any process (05 §5.6). With the limit, the cgroup OOM killer ends only this unit and `Restart=on-failure` brings it back. Far above N1 (150 MB), so it never affects normal operation; the user manager delegates the `memory` controller on Ubuntu 24.04 (checked: `cpu memory pids`).
-- **`Wants=`, not `Requires=`.** A server restart or failure must not kill the daemon. The daemon handles `engine=DOWN` itself ([04](04-state-machine.md) §4.5).
+- **No dependency on an engine unit** (task 4.3, user decision 2026-10-07; until then `Wants=local-stt-whisper.service`). `local-stt-whisper.service` and `local-stt-engine.service` (Parakeet) share `stt.port`, so only one may run. At startup, in a helper thread, the daemon stops the unit of the other engine and starts the one `stt.engine` selects (`systemctl --user start` keeps a running server); a server-restart reload stops the other and restarts the selected one ([04](04-state-machine.md) §4.6). Neither engine unit is enabled. A server restart or failure still never kills the daemon, which handles `engine=DOWN` itself ([04](04-state-machine.md) §4.5).
 - **`Type=notify`.** The daemon sends `READY=1` through `$NOTIFY_SOCKET` (a few lines using a raw `AF_UNIX` socket, with no `systemd-python` dependency) when the config is loaded, the IPC socket is listening, and hotkeys have either been grabbed or reported as `degraded`. It does **not** wait for the engine because model loading may take time, and the status reflects this. It also sends `STOPPING=1` at shutdown and `STATUS=<state>` on state changes, so `systemctl --user status local-stt` shows, for example, `Status: "LISTENING (1 queued)"`. The daemon removes `NOTIFY_SOCKET` from its environment after reading it (like `sd_notify`'s `unset_environment`). Tested 2026-10-03: otherwise every `loginctl`/`systemctl` child sends `EXIT_STATUS=0` to the socket (systemd 255), and systemd logs a WARNING `Got notification message from PID …, but reception only permitted for main PID` for each one.
 - **`RestartPreventExitStatus=78`.** A configuration error or non-X11 session is not restarted in a loop.
 - **`DISPLAY` and `XAUTHORITY`.** On Ubuntu 24.04 with GNOME Xorg, these are imported into the user manager automatically. Verified: `systemctl --user show-environment` contains `DISPLAY=:1` and `XAUTHORITY=/run/user/1000/gdm/Xauthority`. The `DISPLAY` number may change between logins, so the unit does **not** hard-code it.

@@ -30,6 +30,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from local_stt.audio.wav import SAMPLE_RATE, wav_bytes_to_float32
+from local_stt.stt.parakeet import PARAKEET_MODEL
 from local_stt.stt.whisper_server import DEFAULT_SECRET_FILE, HOST, read_request_path
 
 if TYPE_CHECKING:
@@ -39,7 +40,6 @@ log = logging.getLogger("local_stt.engine_server")
 
 EXIT_CONFIG = 78  # EX_CONFIG, as cli.EXIT_CONFIG: systemd does not restart on it
 
-PARAKEET_MODEL = "parakeet-tdt-0.6b-v3-int8"  # directory under stt.models_dir
 ONNX_ASR_MODEL = "nemo-parakeet-tdt-0.6b-v3"  # onnx-asr model type for that directory
 # 64 MiB of s16 WAV is ~35 min of audio; the daemon sends segments of at most ~30 s.
 MAX_BODY_BYTES = 64 * 1024 * 1024

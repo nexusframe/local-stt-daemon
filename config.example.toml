@@ -5,7 +5,7 @@
 # restart local-stt-whisper.service once the daemon is idle (docs/04-state-machine.md §4.6).
 
 [stt]
-engine = "whisper-server"            # only implementation in v0.1–v0.3
+engine = "whisper-server"            # or "parakeet" (ADR-018; no language or prompt input)
 port = 8178                          # ⟳ loopback port; the host is always 127.0.0.1
 model = "small-q8_0"                 # ⟳ ggml-<model>.bin in models_dir (benchmark: docs/benchmark-results.md)
 models_dir = "~/.local/share/local-stt/models"   # ⟳ no whitespace, quotes, backslashes or $

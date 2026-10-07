@@ -195,7 +195,7 @@ def test_cancel_with_injection_in_flight(
         (
             {"ok": True, "applied": ["text.replacements"], "deferred": ["stt.threads"], "server_restart": True},
             0,
-            "applied:  text.replacements\ndeferred: stt.threads\nwhisper-server restarts with the new settings\n",
+            "applied:  text.replacements\ndeferred: stt.threads\nthe engine server restarts with the new settings\n",
         ),
         ({"ok": False, "errors": ["stt.port: must be in 1-65535 (got 0)"]}, 78, ""),
     ],

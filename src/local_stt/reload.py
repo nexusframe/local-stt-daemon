@@ -2,8 +2,8 @@
 
 `ComponentReloader` is the daemon's `ReloadTarget`. Components register their own update
 functions (wired in app.py, task 1.13); the server restart itself lives here: rewrite
-`whisper-server.env` (09 §9.4) and run `systemctl --user restart` in a helper thread, which
-posts `ServerRestartDone`.
+`whisper-server.env` (09 §9.4) for whisper-server, stop the other engine's unit and run
+`systemctl --user restart` in a helper thread, which posts `ServerRestartDone`.
 """
 
 import logging
@@ -15,24 +15,25 @@ from pathlib import Path
 from local_stt.config import Config, config_dir, render_whisper_env, write_whisper_env
 from local_stt.events import Event, ServerRestartDone
 from local_stt.interfaces import HotkeyBackend, HotkeyProblem
+from local_stt.stt import ENGINE_UNITS
 from local_stt.stt.whisper_server import read_request_path
 
 log = logging.getLogger("local_stt.controller")
 
-WHISPER_UNIT = "local-stt-whisper.service"
 SYSTEMCTL_TIMEOUT_S = 90.0
 EXIT_ENV_FAILED = 1  # reported like a failed systemctl: E16
 EXIT_TIMEOUT = 124
 EXIT_NOT_FOUND = 127
+EXIT_UNIT_NOT_LOADED = 5  # systemctl stop: the unit is not installed
 
 ConfigCallback = Callable[[Config], None]
 
 
-def systemctl_restart(unit: str = WHISPER_UNIT) -> int:
-    """`systemctl --user restart <unit>`; returns its exit code."""
+def systemctl(action: str, unit: str) -> int:
+    """`systemctl --user <action> <unit>`; returns its exit code."""
     try:
         done = subprocess.run(
-            ["systemctl", "--user", "restart", unit],
+            ["systemctl", "--user", action, unit],
             capture_output=True,
             text=True,
             timeout=SYSTEMCTL_TIMEOUT_S,
@@ -41,11 +42,23 @@ def systemctl_restart(unit: str = WHISPER_UNIT) -> int:
         log.error("systemctl not found")
         return EXIT_NOT_FOUND
     except subprocess.TimeoutExpired:
-        log.error("systemctl restart %s did not finish in %.0f s", unit, SYSTEMCTL_TIMEOUT_S)
+        log.error("systemctl %s %s did not finish in %.0f s", action, unit, SYSTEMCTL_TIMEOUT_S)
         return EXIT_TIMEOUT
-    if done.returncode != 0:
-        log.error("systemctl restart %s: %s", unit, done.stderr.strip())
+    if done.returncode != 0 and not (action == "stop" and done.returncode == EXIT_UNIT_NOT_LOADED):
+        log.error("systemctl %s %s: %s", action, unit, done.stderr.strip())
     return done.returncode
+
+
+def switch_engine_unit(engine: str, action: str = "restart") -> int:
+    """Stops the other engines' units, then `start`s or `restart`s the selected engine's unit
+    (task 4.3: only one runs, they share stt.port); returns the exit code of the last call.
+
+    A failed stop is only logged: the start then fails on the taken port and reports it.
+    """
+    for name, unit in ENGINE_UNITS.items():
+        if name != engine:
+            systemctl("stop", unit)
+    return systemctl(action, ENGINE_UNITS[engine])
 
 
 class ComponentReloader:
@@ -59,7 +72,7 @@ class ComponentReloader:
         switch_server: ConfigCallback,
         env_path: Path | None = None,
         secret_path: Path | None = None,
-        restart: Callable[[], int] = systemctl_restart,
+        restart: Callable[[str], int] = switch_engine_unit,
     ):
         self._post = post
         self._live = list(live)
@@ -81,7 +94,14 @@ class ComponentReloader:
 
     def restart_server(self, config: Config) -> None:
         """Writes the env file now (the controller decided the server may restart) and
-        restarts the unit in a helper thread; never blocks the controller."""
+        restarts the selected engine's unit in a helper thread; never blocks the controller.
+
+        Only whisper-server reads the env file; the Parakeet server reads the config itself.
+        """
+        engine = config.stt.engine
+        if engine != "whisper-server":
+            self._start_restart(engine)
+            return
         try:
             content = render_whisper_env(config.stt, read_request_path(self._secret_path))
             write_whisper_env(self._env_path, content)
@@ -89,11 +109,16 @@ class ComponentReloader:
             log.error("cannot write %s: %s", self._env_path, e)
             self._post(ServerRestartDone(EXIT_ENV_FAILED))
             return
-        threading.Thread(target=self._run_restart, name="server-restart", daemon=True).start()
+        self._start_restart(engine)
 
-    def _run_restart(self) -> None:
-        code = self._restart()
-        log.info("whisper-server restart finished with code %d", code)
+    def _start_restart(self, engine: str) -> None:
+        threading.Thread(
+            target=self._run_restart, args=(engine,), name="server-restart", daemon=True
+        ).start()
+
+    def _run_restart(self, engine: str) -> None:
+        code = self._restart(engine)
+        log.info("%s restart finished with code %d", ENGINE_UNITS[engine], code)
         self._post(ServerRestartDone(code))
 
     def use_server(self, config: Config) -> None:

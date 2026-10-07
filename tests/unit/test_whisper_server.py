@@ -11,8 +11,9 @@ import numpy as np
 import pytest
 
 from local_stt.interfaces import EngineHealth
-from local_stt.stt import ENGINES
+from local_stt.stt import ENGINE_UNITS, ENGINES
 from local_stt.stt import whisper_server as ws
+from local_stt.stt.parakeet import ParakeetEngine
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 VERBOSE_JSON = (FIXTURES / "whisper_v1.9.4_verbose_json.json").read_bytes()
@@ -88,7 +89,22 @@ def _audio(seconds: float = 1.0) -> np.ndarray:
 
 
 def test_registry() -> None:
-    assert ENGINES["whisper-server"] is ws.WhisperServerEngine
+    assert {"whisper-server": ws.WhisperServerEngine, "parakeet": ParakeetEngine} == ENGINES
+    assert set(ENGINE_UNITS) == set(ENGINES)
+
+
+def test_parakeet_client_sends_no_prompt_and_labels_its_transcripts(
+    stub: tuple[Stub, int],
+) -> None:
+    state, port = stub
+    engine = ParakeetEngine(port=port, request_path=REQUEST_PATH)
+    t = engine.transcribe(
+        _audio(3.0), sample_rate=16000, language="pl", prompt="Gdańsk", timeout_s=5
+    )
+    fields = _form_fields(state.requests[0][2], state.requests[0][3])
+    assert "prompt" not in fields and fields["audio_ctx"] == b"0"
+    assert (t.engine, t.model) == ("parakeet", "parakeet-tdt-0.6b-v3-int8")
+    assert engine.name == "parakeet"
 
 
 def test_transcribe_request_contract(stub: tuple[Stub, int]) -> None:

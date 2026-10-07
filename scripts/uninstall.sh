@@ -9,7 +9,7 @@ readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/local-stt"
 readonly VENV_DIR="$DATA_DIR/venv"
 readonly BIN_LINK="$HOME/.local/bin/local-stt"
 readonly UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-readonly UNITS=(local-stt.service local-stt-whisper.service)
+readonly UNITS=(local-stt.service local-stt-whisper.service local-stt-engine.service)
 
 PURGE=0
 

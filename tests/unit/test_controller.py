@@ -163,9 +163,11 @@ def w() -> World:
     return World()
 
 
-def make(w: World, *, engine: EngineHealth | None = EngineHealth.READY) -> Controller:
+def make(
+    w: World, *, engine: EngineHealth | None = EngineHealth.READY, config: Config | None = None
+) -> Controller:
     c = Controller(
-        Config(),
+        config or Config(),
         capture=w,
         consumer=Consumer(w),
         pipeline=Pipeline(w),
@@ -983,6 +985,27 @@ def test_language_set_to_a_code_and_rejects_others(c: Controller, w: World) -> N
         "message": "language must be one of stt.languages: pl, en",
     }
     assert c.language == "en" and w.calls == []
+
+
+def test_parakeet_rejects_language_switch(w: World) -> None:
+    """Task 4.3: Parakeet has no language input, so the hotkey and the CLI do nothing."""
+    c = make(w, config=with_changes(Config(), stt={"engine": "parakeet"}))
+    for target in (None, "en"):
+        r = reply()
+        c.handle(ev.LanguageSwitch(target, r))
+        assert r.result() == {
+            "ok": False,
+            "error": "language_unsupported",
+            "message": "Parakeet detects the language itself; stt.languages is for whisper-server",
+        }
+    assert c.language == "pl"
+    assert w.calls == [("notify", "language", "Language: automatic (Parakeet)", False)] * 2
+    status = c.status()
+    assert status["language"] == {"active": "auto", "languages": ["pl", "en"]}
+    assert (status["engine"]["name"], status["engine"]["model"]) == (
+        "parakeet",
+        "parakeet-tdt-0.6b-v3-int8",
+    )
 
 
 def test_language_is_published_to_subscribers(w: World) -> None:

@@ -453,9 +453,10 @@ def _run_watch(*, json_lines: bool) -> int:
                     language = message["status"]["language"]
                 else:
                     language = message["language"]
-                # The language is shown only while it differs from the startup one.
+                # The language is shown only while it differs from the startup one; "auto"
+                # (Parakeet, task 4.3) is the engine's normal state, so it is not shown.
                 line = state
-                if language["active"] != language["languages"][0]:
+                if language["active"] not in ("auto", language["languages"][0]):
                     line += f" [{language['active'].upper()}]"
                 if tty:
                     print(f"\r\033[K{line}", end="", flush=True)
@@ -483,7 +484,7 @@ def _format_reload(response: dict[str, Any]) -> str:
         return "no changes"
     lines = [f"applied:  {', '.join(applied) or '-'}", f"deferred: {', '.join(deferred) or '-'}"]
     if response.get("server_restart"):
-        lines.append("whisper-server restarts with the new settings")
+        lines.append("the engine server restarts with the new settings")
     return "\n".join(lines)
 
 

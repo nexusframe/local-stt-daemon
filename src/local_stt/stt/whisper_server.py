@@ -110,7 +110,12 @@ def build_multipart(
 
 
 def parse_verbose_json(
-    body: bytes, *, audio_duration_s: float, processing_s: float, model: str
+    body: bytes,
+    *,
+    audio_duration_s: float,
+    processing_s: float,
+    model: str,
+    engine: str = ENGINE_NAME,
 ) -> Transcript:
     try:
         data = json.loads(body)
@@ -131,7 +136,7 @@ def parse_verbose_json(
         segments=segments,
         audio_duration_s=audio_duration_s,
         processing_s=processing_s,
-        engine=ENGINE_NAME,
+        engine=engine,
         model=model,
     )
 
@@ -212,7 +217,11 @@ class WhisperServerEngine:
                 status, response[:_ERROR_BODY_LIMIT].decode("utf-8", errors="replace")
             )
         return parse_verbose_json(
-            response, audio_duration_s=duration_s, processing_s=processing_s, model=self.model
+            response,
+            audio_duration_s=duration_s,
+            processing_s=processing_s,
+            model=self.model,
+            engine=self.name,
         )
 
     def _request(
