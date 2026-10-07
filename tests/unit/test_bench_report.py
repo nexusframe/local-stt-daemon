@@ -144,6 +144,37 @@ def test_select_applies_n1_audio_ctx_rule_and_n2_filter() -> None:
     assert "> 5.0 s" in reasons[key(cfg("small"))]
 
 
+def test_select_applies_n1_per_engine() -> None:
+    stats = [
+        _stats(PARAKEET_MODEL, 0.056, 0.9, rss=1585),  # under 1.6 GB -> allowed
+        _stats(PARAKEET_MODEL, 0.056, 1.2, rss=2188, threads=8),
+        _stats("small-q8_0", 0.074, 2.8, rss=1100),
+    ]
+    selection = report.select({s.key: s for s in stats}, control="base-q5_1")
+    assert [(s.model, s.threads) for s in selection.provisional] == [(PARAKEET_MODEL, 4)]
+    reasons = selection.excluded
+    assert "> 1.6 GB (N1)" in reasons[key(cfg(PARAKEET_MODEL, threads=8))]
+    assert "> 1 GB (N1)" in reasons[key(cfg("small-q8_0"))]
+
+
+def test_render_names_the_engine_in_the_provisional_default() -> None:
+    lines = []
+    for c, rss, errors in ((cfg(PARAKEET_MODEL), 1585.0, 0), (cfg("small-q8_0"), 450.0, 2)):
+        lines += [config_line(c, stage=2, rss=rss), file_line(c, stage=2, word_errors=errors)]
+    text = report.render(lines, {"repeats": 1})
+    assert '`stt.engine = "parakeet"`, `stt.threads = 4`. ' in text
+
+    lines = [config_line(cfg("small-q8_0"), stage=2), file_line(cfg("small-q8_0"), stage=2)]
+    text = report.render(lines, {"repeats": 1})
+    assert '`stt.engine = "whisper-server"`, `stt.model = "small-q8_0"`' in text
+
+
+def test_render_says_when_no_configuration_is_left() -> None:
+    c = cfg("small-q8_0", ctx=1000)  # no audio_ctx=0 run -> excluded
+    text = report.render([config_line(c, stage=2), file_line(c, stage=2)], {"repeats": 1})
+    assert "- none: no configuration passes the production filter." in text
+
+
 def test_rank_tie_breaks_ram_then_latency_then_four_threads() -> None:
     a = _stats("small-q5_1", 0.120, 2.00, rss=300, threads=8)
     b = _stats("small-q5_1", 0.121, 2.05, rss=305, threads=4)  # ties with a on RAM and latency

@@ -24,7 +24,8 @@ from local_stt.stt.parakeet import PARAKEET_MODEL
 
 MEDIUM = "medium"
 ELIMINATION_P50_S = 6.0
-N1_SERVER_RSS_MB = 1024.0
+N1_SERVER_RSS_MB = 1024.0  # whisper-server (01 §1.5)
+N1_PARAKEET_RSS_MB = 1.6 * 1024  # Parakeet engine server (task 4.6)
 N2_P90_S = 5.0  # N2 target, raised from 2.5 s on 2026-09-17 (01 §1.5)
 AUDIO_CTX_MAX_WER_DELTA = 0.01  # 1.0 pp
 WER_TIE = 0.01
@@ -214,8 +215,11 @@ def select(full: dict[str, ConfigStats], control: str) -> Selection:
     for s in full.values():
         if s.model == control:
             excluded[s.key] = "control model (not a production candidate)"
-        elif s.peak_rss_mb is None or s.peak_rss_mb > N1_SERVER_RSS_MB:
-            excluded[s.key] = f"peak server RSS {_fmt(s.peak_rss_mb, '.0f')} MB > 1 GB (N1)"
+        elif s.peak_rss_mb is None or s.peak_rss_mb > n1_limit_mb(s.model):
+            excluded[s.key] = (
+                f"peak server RSS {_fmt(s.peak_rss_mb, '.0f')} MB"
+                f" > {n1_limit_mb(s.model) / 1024:g} GB (N1)"
+            )
         elif s.audio_ctx != 0 and not _audio_ctx_allowed(s, full):
             excluded[s.key] = (
                 "audio_ctx costs > 1.0 pp WER vs the full window (or no audio_ctx=0 run)"
@@ -229,6 +233,11 @@ def select(full: dict[str, ConfigStats], control: str) -> Selection:
         else:
             excluded[s.key] = f"p90 text_ready {_fmt(s.p90_text_ready_s, '.2f')} s > {N2_P90_S} s"
     return Selection(excluded, production, rank(provisional))
+
+
+def n1_limit_mb(model: str) -> float:
+    """N1 server RSS limit of the model's engine, in MB as `peak_rss_mb` (VmHWM kB / 1024)."""
+    return N1_PARAKEET_RSS_MB if model == PARAKEET_MODEL else N1_SERVER_RSS_MB
 
 
 def _audio_ctx_allowed(s: ConfigStats, full: dict[str, ConfigStats]) -> bool:
@@ -361,11 +370,15 @@ def _selection_section(selection: Selection) -> list[str]:
         out += [f"Ranked candidates with p90 text_ready ≤ {N2_P90_S} s (best first):", ""]
         out += [f"{i}. {_summary_line(s)}" for i, s in enumerate(selection.provisional, 1)]
         best = selection.provisional[0]
-        settings = [
-            f'`stt.model = "{best.model}"`',
-            f"`stt.threads = {best.threads}`",
-            f"`stt.audio_ctx = {best.audio_ctx}`",
-        ]
+        if best.model == PARAKEET_MODEL:  # one fixed model, no audio_ctx (06 §6.10)
+            settings = ['`stt.engine = "parakeet"`', f"`stt.threads = {best.threads}`"]
+        else:
+            settings = [
+                '`stt.engine = "whisper-server"`',
+                f'`stt.model = "{best.model}"`',
+                f"`stt.threads = {best.threads}`",
+                f"`stt.audio_ctx = {best.audio_ctx}`",
+            ]
         if best.beam_size >= 0:
             settings.append(f"`stt.beam_size = {best.beam_size}`")
         out += [
@@ -387,6 +400,8 @@ def _selection_section(selection: Selection) -> list[str]:
                 "Recommendation: N2 must not be changed silently; present these options and ask "
                 "for an explicit decision on the latency target (13 §13.5).",
             ]
+        else:
+            out.append("- none: no configuration passes the production filter.")
     if selection.excluded:
         out += ["", "Excluded configurations:", ""]
         out += [f"- `{key}`: {reason}" for key, reason in sorted(selection.excluded.items())]
