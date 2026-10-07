@@ -435,10 +435,10 @@ def _run_dirs(bench_dir: Path) -> list[tuple[str, Path, dict[str, Any]]]:
     """Runs with results, oldest first, as (timestamp, dir, system.json)."""
     runs = []
     for run_dir in sorted(bench_dir.iterdir()) if bench_dir.is_dir() else []:
-        if not (run_dir / "results.jsonl").is_file():
-            continue  # soak runs and empty directories
         info_path = run_dir / "system.json"
-        info = json.loads(info_path.read_text()) if info_path.is_file() else {}
+        if not (run_dir / "results.jsonl").is_file() or not info_path.is_file():
+            continue  # soak runs, empty directories, other scripts' output
+        info = json.loads(info_path.read_text())
         runs.append((str(info.get("timestamp", run_dir.name)), run_dir, info))
     return sorted(runs, key=lambda run: run[0])
 

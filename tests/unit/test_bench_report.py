@@ -262,6 +262,15 @@ def test_latest_results_newest_run_wins_but_stage1_never_replaces_whole_corpus(
     assert not results["medium-q5_0"].whole_corpus
 
 
+def test_latest_results_skip_directories_not_written_by_bench(tmp_path: Path) -> None:
+    c = cfg("small-q8_0", ctx=1000)
+    write_run(tmp_path, "run", "2026-10-03T09:10:49+00:00", whole_corpus_lines(c))
+    foreign = tmp_path / "parakeet-2026-10-07"  # an exploration script's output, no system.json
+    foreign.mkdir()
+    foreign.joinpath("results.jsonl").write_text(json.dumps({"type": "file", "wer": 0.1}) + "\n")
+    assert list(latest(tmp_path)) == ["small-q8_0"]
+
+
 def test_latest_results_without_runs(tmp_path: Path) -> None:
     assert latest(tmp_path / "missing") == {}
 
