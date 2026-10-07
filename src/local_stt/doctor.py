@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     from local_stt.config import Config, HotkeysConfig
     from local_stt.interfaces import HotkeyProblem
 
-WHISPER_UNIT = "local-stt-whisper"
 MIC_TEST_S = 1.0
 MIC_WARN_DBFS = -60.0
 HEALTH_POLL_S = 0.5
@@ -148,15 +147,19 @@ def check_config(
 
 
 def check_model(name: str, path: Path, pull_name: str) -> Result:
+    """A model file, or a model directory (Parakeet) with every pinned file in it."""
     from local_stt import models  # lazily: Internet code (module docstring)
 
     hint = f"local-stt models pull {pull_name}"
-    if not path.is_file():
-        return Result(name, Status.FAIL, f"{path}: missing", hint)
     known = {m.filename: m for m in models.load_registry().values()}.get(path.name)
     if known is None:
+        if not path.exists():
+            return Result(name, Status.FAIL, f"{path}: missing", hint)
         return Result(name, Status.OK, f"{path} (no pinned checksum)")
-    if models.file_sha256(path) != known.sha256:
+    status = models.model_status(known, path.parent)
+    if status is models.ModelStatus.MISSING:
+        return Result(name, Status.FAIL, f"{path}: missing", hint)
+    if status is models.ModelStatus.CORRUPT:
         return Result(name, Status.FAIL, f"{path}: checksum mismatch", hint)
     return Result(name, Status.OK, f"{path} (checksum OK)")
 
@@ -209,26 +212,31 @@ def check_secret(path: Path) -> Result:
     return result
 
 
-# --- whisper-server service --------------------------------------------------------------
+# --- engine service -----------------------------------------------------------------------
 
 
-def check_service(run: Runner) -> Result:
+def engine_unit(engine: str) -> str:
+    """The selected engine's unit without `.service`: local-stt-whisper or local-stt-engine."""
+    from local_stt.stt import ENGINE_UNITS
+
+    return ENGINE_UNITS[engine].removesuffix(".service")
+
+
+def check_service(run: Runner, unit: str) -> Result:
     try:
-        state = run(["systemctl", "--user", "is-active", WHISPER_UNIT]).stdout.strip()
+        state = run(["systemctl", "--user", "is-active", unit]).stdout.strip()
     except (OSError, subprocess.SubprocessError) as e:
         state = str(e)
     if state == "active":
-        return Result(WHISPER_UNIT, Status.OK, "active")
-    return Result(
-        WHISPER_UNIT, Status.FAIL, state or "unknown", f"systemctl --user status {WHISPER_UNIT}"
-    )
+        return Result(unit, Status.OK, "active")
+    return Result(unit, Status.FAIL, state or "unknown", f"systemctl --user status {unit}")
 
 
-def _active_for_s(run: Runner, clock: Callable[[], float]) -> float:
+def _active_for_s(run: Runner, unit: str, clock: Callable[[], float]) -> float:
     """Seconds since the unit became active (CLOCK_MONOTONIC, as time.monotonic()), else 0."""
     out = _output(
         run,
-        ["systemctl", "--user", "show", WHISPER_UNIT, "-p", "ActiveEnterTimestampMonotonic"],
+        ["systemctl", "--user", "show", unit, "-p", "ActiveEnterTimestampMonotonic"],
     )
     try:
         since_us = int((out or "").partition("=")[2])
@@ -247,12 +255,18 @@ def check_health(
 ) -> Result:
     """`GET /health`; a model still loading is waited for until `startup_timeout_s` since start."""
     from local_stt.interfaces import EngineHealth
+    from local_stt.stt.parakeet import ParakeetEngine
     from local_stt.stt.whisper_server import HOST, WhisperServerEngine
 
-    name, hint = "GET /health", f"journalctl --user -u {WHISPER_UNIT}"
     stt = config.stt
-    engine = WhisperServerEngine(port=stt.port, request_path=request_path, model=stt.model)
-    deadline = clock() + stt.startup_timeout_s - _active_for_s(run, clock)
+    unit = engine_unit(stt.engine)
+    name, hint = "GET /health", f"journalctl --user -u {unit}"
+    engine = (
+        ParakeetEngine(port=stt.port, request_path=request_path)
+        if stt.engine == "parakeet"
+        else WhisperServerEngine(port=stt.port, request_path=request_path, model=stt.model)
+    )
+    deadline = clock() + stt.startup_timeout_s - _active_for_s(run, unit, clock)
     while True:
         health = engine.health()
         if health is EngineHealth.READY:
@@ -304,7 +318,7 @@ def check_port(port: int, run: Runner) -> Result:
             name,
             Status.FAIL,
             f"listening on {', '.join(exposed)} (privacy: must be loopback only, N5)",
-            "stop the process listening there; whisper-server must use --host 127.0.0.1",
+            "stop the process listening there; the engine server must listen on 127.0.0.1",
         )
     if not addresses:
         return Result(name, Status.OK, "nothing listening")
@@ -607,7 +621,7 @@ class Probes:
 
 def run_checks(config_path: Path | None, probes: Probes | None = None) -> Iterator[Result]:
     """All §10.5 checks in table order, yielded as each one finishes."""
-    from local_stt.config import config_dir
+    from local_stt.config import Config, config_dir
     from local_stt.stt.whisper_server import read_request_path
 
     p = probes or Probes()
@@ -623,7 +637,11 @@ def run_checks(config_path: Path | None, probes: Probes | None = None) -> Iterat
         yield skipped("STT model")
         yield skipped("VAD model")
     else:
-        yield check_model("STT model", config.stt.model_path, config.stt.model)
+        stt = config.stt
+        if stt.engine == "parakeet":
+            yield check_model("STT model", stt.models_dir / stt.engine_model, stt.engine_model)
+        else:
+            yield check_model("STT model", stt.model_path, stt.model)
         if config.vad.enabled:
             yield check_model("VAD model", config.vad_model_path, "silero-vad")
         else:
@@ -633,13 +651,15 @@ def run_checks(config_path: Path | None, probes: Probes | None = None) -> Iterat
     secret = check_secret(cdir / "secret")
     yield secret
     yield check_private_file(cdir / "whisper-server.env")
-    service = check_service(p.run)
+    # an invalid config cannot select the engine: check the default one's unit
+    unit = engine_unit((config or Config()).stt.engine)
+    service = check_service(p.run, unit)
     yield service
 
     if config is None:
         yield skipped("GET /health")
     elif service.status is not Status.OK:
-        yield Result("GET /health", Status.SKIP, f"{WHISPER_UNIT} not active")
+        yield Result("GET /health", Status.SKIP, f"{unit} not active")
     elif secret.status is not Status.OK:
         yield Result("GET /health", Status.SKIP, "secret unusable")
     else:

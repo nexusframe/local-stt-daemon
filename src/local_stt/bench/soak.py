@@ -32,9 +32,9 @@ from local_stt.audio.file_source import FileAudioSource
 from local_stt.audio.wav import wav_bytes_to_float32
 from local_stt.bench.runner import (
     SystemSampler,
+    concurrency_error,
     process_cpu_seconds,
     process_peak_rss_mb,
-    service_active,
     system_info,
 )
 from local_stt.cancellation import CancellationToken
@@ -225,11 +225,9 @@ def run_soak(
     on_progress: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Runs the soak test; writes and returns the result document."""
-    if service_active() and not allow_concurrent:
-        raise RuntimeError(
-            "local-stt-whisper.service is running; stop it (systemctl --user stop "
-            "local-stt-whisper local-stt) or pass --allow-concurrent"
-        )
+    error = None if allow_concurrent else concurrency_error()
+    if error:
+        raise RuntimeError(error)
     audio, rate = wav_bytes_to_float32(long_wav.read_bytes())
     if rate != SAMPLE_RATE:
         raise ValueError(f"{long_wav}: {rate} Hz, expected {SAMPLE_RATE} Hz")

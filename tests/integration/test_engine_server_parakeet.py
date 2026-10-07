@@ -9,6 +9,7 @@ from local_stt.audio.wav import wav_bytes_to_float32
 from local_stt.engine_server import PARAKEET_MODEL, EngineServer, load_parakeet
 from local_stt.interfaces import EngineHealth
 from local_stt.stt import whisper_server as ws
+from local_stt.stt.parakeet import TemporaryParakeetServer
 
 from .test_whisper_server import FIXTURE
 
@@ -39,3 +40,17 @@ def test_transcribes_polish_speech(engine: ws.WhisperServerEngine) -> None:
     assert "spacer" in t.text.lower()
     assert t.processing_s < 5
     assert len(t.segments) == 1 and t.segments[0].end_s == pytest.approx(len(audio) / rate, 1e-3)
+
+
+def test_temporary_server_transcribes_in_its_own_process() -> None:
+    # task 4.5: the server bench and `transcribe --model` start
+    if not MODEL_DIR.is_dir():
+        pytest.skip(f"{MODEL_DIR} not installed")
+    audio, rate = wav_bytes_to_float32(FIXTURE.read_bytes())
+    server = TemporaryParakeetServer(MODEL_DIR, threads=4)
+    with server as engine:
+        assert server.pid is not None
+        t = engine.transcribe(audio, sample_rate=rate, language="pl", prompt=None, timeout_s=30)
+    assert "spacer" in t.text.lower()
+    assert t.model == PARAKEET_MODEL
+    assert server.pid is None

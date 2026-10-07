@@ -7,11 +7,20 @@ import numpy as np
 import pytest
 
 from local_stt import events as ev
-from local_stt.config import Config, ContinuousConfig, VadConfig
+from local_stt.config import ContinuousConfig, VadConfig
 from local_stt.controller import Controller, Mode
 from local_stt.interfaces import AudioSegment, EngineHealth, InjectResult, SegmentCut
 
-from .test_controller import Consumer, Pipeline, Reload, World, make, reply, status_of
+from .test_controller import (
+    WHISPER,
+    Consumer,
+    Pipeline,
+    Reload,
+    World,
+    make,
+    reply,
+    status_of,
+)
 
 
 @pytest.fixture
@@ -378,7 +387,7 @@ def test_stop_while_waiting_for_a_reopen(c: Controller, w: World) -> None:
 
 def test_vad_reload_waits_for_idle(c: Controller, w: World) -> None:
     rid, cid = start(c, w)
-    w.next_config = Config(vad=VadConfig(min_silence_ms=500))
+    w.next_config = dataclasses.replace(WHISPER, vad=VadConfig(min_silence_ms=500))
     r = reply()
     c.handle(ev.ReloadRequested(r))
     assert r.result()["deferred"] == ["vad.min_silence_ms"]
@@ -400,7 +409,7 @@ def test_stale_speech_and_reconnect_events_are_ignored(c: Controller, w: World) 
 
 def test_default_schedule_posts_the_event_after_the_delay(w: World) -> None:
     c = Controller(
-        Config(),
+        WHISPER,
         capture=w,
         consumer=Consumer(w),
         pipeline=Pipeline(w),

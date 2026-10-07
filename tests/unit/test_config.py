@@ -174,7 +174,7 @@ def test_warning_when_vad_disabled() -> None:
 
 
 def test_check_model_files(tmp_path: Path) -> None:
-    config, _ = parse_config({"stt": {"models_dir": str(tmp_path)}})
+    config, _ = parse_config({"stt": {"models_dir": str(tmp_path), "engine": "whisper-server"}})
     assert cfg.check_model_files(config) == [
         f"stt.model: file not found: {tmp_path}/ggml-small-q8_0.bin "
         "(run: local-stt models pull small-q8_0)",
@@ -191,14 +191,14 @@ def test_parakeet_needs_its_model_directory_not_the_whisper_model(tmp_path: Path
     config, _ = parse_config({"stt": {"models_dir": str(tmp_path), "engine": "parakeet"}})
     assert cfg.check_model_files(config) == [
         f"stt.engine: parakeet model not found: {tmp_path}/parakeet-tdt-0.6b-v3-int8 "
-        "(run: scripts/install.sh)"
+        "(run: local-stt models pull parakeet-tdt-0.6b-v3-int8)"
     ]
     (tmp_path / "parakeet-tdt-0.6b-v3-int8").mkdir()
     assert cfg.check_model_files(config) == []
 
 
 def test_vad_model_not_required_when_vad_disabled(tmp_path: Path) -> None:
-    (tmp_path / "ggml-small-q8_0.bin").touch()
+    (tmp_path / "parakeet-tdt-0.6b-v3-int8").mkdir()
     config, _ = parse_config({"stt": {"models_dir": str(tmp_path)}, "vad": {"enabled": False}})
     assert cfg.check_model_files(config) == []
 

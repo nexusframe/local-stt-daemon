@@ -1,5 +1,6 @@
 """`local-stt doctor` checks (docs/10-cli-ipc-status.md §10.5) with a faked environment."""
 
+import hashlib
 import io
 import os
 import re
@@ -12,7 +13,7 @@ import numpy as np
 import pytest
 
 from local_stt import cli, doctor, ipc, models
-from local_stt.config import Config, HotkeysConfig
+from local_stt.config import Config, HotkeysConfig, SttConfig
 from local_stt.doctor import Probes, Result, Status
 from local_stt.hotkeys.x11 import HotkeyConnectError
 from local_stt.interfaces import AudioOpenError, EngineHealth, HotkeyProblem
@@ -126,10 +127,33 @@ def test_check_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path.write_bytes(b"not a model")
     assert doctor.check_model("STT model", path, "small-q8_0").status is Status.FAIL
 
-    registry = {"small-q8_0": models.Model("small-q8_0", path.name, "", models.file_sha256(path))}
+    part = models.ModelFile(path.name, "", models.file_sha256(path))
+    registry = {"small-q8_0": models.Model("small-q8_0", path.name, (part,))}
     monkeypatch.setattr(models, "load_registry", lambda: registry)
     ok = doctor.check_model("STT model", path, "small-q8_0")
     assert (ok.status, ok.detail) == (Status.OK, f"{path} (checksum OK)")
+
+
+def test_check_model_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = tmp_path / "parakeet"
+    pull = "local-stt models pull parakeet"
+    parts = (
+        models.ModelFile("parakeet/a.onnx", "", hashlib.sha256(b"a").hexdigest()),
+        models.ModelFile("parakeet/vocab.txt", "", hashlib.sha256(b"v").hexdigest()),
+    )
+    registry = {"parakeet": models.Model("parakeet", "parakeet", parts)}
+    monkeypatch.setattr(models, "load_registry", lambda: registry)
+
+    path.mkdir()  # an empty or partial directory is not the model
+    (path / "a.onnx").write_bytes(b"a")
+    missing = doctor.check_model("STT model", path, "parakeet")
+    assert (missing.status, missing.detail, missing.hint) == (
+        Status.FAIL, f"{path}: missing", pull
+    )  # fmt: skip
+    (path / "vocab.txt").write_bytes(b"other")
+    assert doctor.check_model("STT model", path, "parakeet").detail == f"{path}: checksum mismatch"
+    (path / "vocab.txt").write_bytes(b"v")
+    assert doctor.check_model("STT model", path, "parakeet").status is Status.OK
 
 
 def test_check_model_without_pinned_checksum(tmp_path: Path) -> None:
@@ -201,11 +225,17 @@ def test_check_secret_validates_content(tmp_path: Path) -> None:
 
 
 def test_check_service() -> None:
-    args = ("systemctl", "--user", "is-active", "local-stt-whisper")
-    assert doctor.check_service(Run({args: (0, "active\n")})).status is Status.OK
-    inactive = doctor.check_service(Run({args: (3, "inactive\n")}))
+    args = ("systemctl", "--user", "is-active", "local-stt-engine")
+    active = doctor.check_service(Run({args: (0, "active\n")}), "local-stt-engine")
+    assert active.status is Status.OK
+    inactive = doctor.check_service(Run({args: (3, "inactive\n")}), "local-stt-engine")
     assert (inactive.status, inactive.detail) == (Status.FAIL, "inactive")
-    assert inactive.hint == "systemctl --user status local-stt-whisper"
+    assert inactive.hint == "systemctl --user status local-stt-engine"
+
+
+def test_engine_unit_follows_stt_engine() -> None:
+    assert doctor.engine_unit("parakeet") == "local-stt-engine"
+    assert doctor.engine_unit("whisper-server") == "local-stt-whisper"
 
 
 class Clock:
@@ -219,13 +249,13 @@ class Clock:
         self.now += seconds
 
 
-def active_since(seconds_ago: float, clock: Clock) -> Run:
+def active_since(seconds_ago: float, clock: Clock, unit: str = "local-stt-engine") -> Run:
     us = int((clock.now - seconds_ago) * 1e6)
     args = (
         "systemctl",
         "--user",
         "show",
-        "local-stt-whisper",
+        unit,
         "-p",
         "ActiveEnterTimestampMonotonic",
     )
@@ -266,7 +296,19 @@ def test_check_health_down(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_health(monkeypatch, [EngineHealth.DOWN])
     result = doctor.check_health(Config(), "/x", Run(), clock=clock, sleep=clock.sleep)
     assert result.status is Status.FAIL
+    assert result.hint == "journalctl --user -u local-stt-engine"
+
+
+def test_check_health_of_whisper_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = Clock()
+    fake_health(monkeypatch, [EngineHealth.STARTING])
+    whisper = Config(stt=SttConfig(engine="whisper-server"))
+    # the whisper unit's start time counts: 58 of its 60 s are gone
+    result = doctor.check_health(
+        whisper, "/x", active_since(58, clock, "local-stt-whisper"), clock=clock, sleep=clock.sleep
+    )
     assert result.hint == "journalctl --user -u local-stt-whisper"
+    assert 1002.0 <= clock.now <= 1002.5
 
 
 SS = """\
@@ -562,11 +604,20 @@ def test_run_checks_order_and_health_skip(tmp_path: Path) -> None:
     results = list(doctor.run_checks(config, probes(tmp_path, Run())))
     assert [r.name for r in results] == [
         "session", "systemd DISPLAY", "config", "STT model", "VAD model", "whisper-server",
-        "secret", "whisper-server.env", "local-stt-whisper", "GET /health", "port 8178",
+        "secret", "whisper-server.env", "local-stt-engine", "GET /health", "port 8178",
         "hotkeys", "microphone", "xdotool", "pw-play/paplay", "notify-send", "CPU / power",
     ]  # fmt: skip
     health = results[9]
-    assert (health.status, health.detail) == (Status.SKIP, "local-stt-whisper not active")
+    assert (health.status, health.detail) == (Status.SKIP, "local-stt-engine not active")
+    assert results[3].detail == f"{tmp_path / 'models/parakeet-tdt-0.6b-v3-int8'}: missing"
+
+
+def test_run_checks_follow_the_whisper_engine(tmp_path: Path) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(f'[stt]\nengine = "whisper-server"\nmodels_dir = "{tmp_path}"\n')
+    results = {r.name: r for r in doctor.run_checks(config, probes(tmp_path, Run()))}
+    assert results["STT model"].detail == f"{tmp_path / 'ggml-small-q8_0.bin'}: missing"
+    assert results["local-stt-whisper"].status is Status.FAIL
 
 
 def test_cmd_doctor_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:

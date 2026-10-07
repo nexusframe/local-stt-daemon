@@ -7,11 +7,15 @@ in one fixed interleaved order (results depend on request history, 06 §6.7), pl
 (-bs 5) for the two best models by stage-1 WER in the same order.
 Sanity: `whisper-bench -t 4` per model (raw encoder time).
 
+Parakeet (task 4.5) runs on a temporary `local-stt engine-server` once per thread count: it has
+no audio_ctx, beam search or whisper-bench, so its configurations keep ctx 0 and greedy.
+
 Every measurement is appended to <out>/results.jsonl as soon as it is taken, so an interrupted run
 continues with `--resume <out>`. Hypotheses are stored: the corpus is user-provided test content
 (12 §12.2).
 """
 
+import importlib.metadata
 import itertools
 import json
 import math
@@ -31,9 +35,11 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from local_stt import stt
 from local_stt.audio.wav import SAMPLE_RATE, wav_bytes_to_float32
 from local_stt.bench import report, wer
 from local_stt.stt import whisper_server as ws
+from local_stt.stt.parakeet import PARAKEET_MODEL, TemporaryParakeetServer
 
 GROUPS = ("short", "medium", "long_utt", "difficult")
 DEFAULT_MODELS = (
@@ -43,7 +49,9 @@ DEFAULT_MODELS = (
     "small",
     "medium-q5_0",
     "large-v3-turbo-q5_0",
+    PARAKEET_MODEL,
 )
+ENGINE_UNITS = tuple(stt.ENGINE_UNITS.values())
 CONTROL_MODEL = "base-q5_1"  # measured as a control, never a production candidate
 BEAM_TOP_N = 2
 BEAM_SIZE = 5
@@ -168,6 +176,13 @@ class SystemSampler:
         }
 
 
+def _version(distribution: str) -> str | None:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
 def system_info(dataset: Path) -> dict[str, Any]:
     def read(path: str) -> str | None:
         try:
@@ -185,6 +200,7 @@ def system_info(dataset: Path) -> dict[str, Any]:
         "power_source": ("AC" if "1" in ac else "battery") if ac else None,
         "kernel": platform.release(),
         "whisper_cpp": read(str(ws.DATA_DIR / "bin/.whisper-tag")),
+        "onnx_asr": _version("onnx-asr"),
         "dataset": str(dataset),
         "dataset_is_public_interim": (dataset / "SOURCE.md").is_file(),
         "decoding": {
@@ -255,13 +271,7 @@ def run_config(
     if not todo:
         return
     audio = {it.path: wav_bytes_to_float32(it.path.read_bytes())[0] for it in items}
-    server = ws.TemporaryWhisperServer(
-        models_dir / f"ggml-{cfg.model}.bin",
-        model=cfg.model,
-        threads=cfg.threads,
-        beam_size=cfg.beam_size,
-        audio_ctx=cfg.audio_ctx,
-    )
+    server = _server(cfg, models_dir)
     started = time.monotonic()
     engine = server.start()
     try:
@@ -295,6 +305,24 @@ def run_config(
         )
     finally:
         server.stop()
+
+
+def model_path(model: str, models_dir: Path) -> Path:
+    if model == PARAKEET_MODEL:
+        return models_dir / PARAKEET_MODEL
+    return models_dir / f"ggml-{model}.bin"
+
+
+def _server(cfg: BenchConfig, models_dir: Path) -> ws.TemporaryWhisperServer:
+    if cfg.model == PARAKEET_MODEL:
+        return TemporaryParakeetServer(model_path(cfg.model, models_dir), threads=cfg.threads)
+    return ws.TemporaryWhisperServer(
+        model_path(cfg.model, models_dir),
+        model=cfg.model,
+        threads=cfg.threads,
+        beam_size=cfg.beam_size,
+        audio_ctx=cfg.audio_ctx,
+    )
 
 
 def _measure(
@@ -383,21 +411,36 @@ def run_whisper_bench(model: str, models_dir: Path, results: Results) -> None:
     )
 
 
-def service_active() -> bool:
+def active_engine_units() -> list[str]:
     proc = subprocess.run(
-        ["systemctl", "--user", "is-active", "local-stt-whisper.service"],
+        ["systemctl", "--user", "is-active", *ENGINE_UNITS],
         capture_output=True,
         text=True,
         check=False,
     )
-    return proc.stdout.strip() == "active"
+    states = proc.stdout.split()
+    return [unit for unit, state in zip(ENGINE_UNITS, states, strict=False) if state == "active"]
+
+
+def concurrency_error() -> str | None:
+    """Why a benchmark must not run now: an engine service would distort CPU/RAM results."""
+    active = active_engine_units()
+    if not active:
+        return None
+    stop = " ".join(unit.removesuffix(".service") for unit in active)
+    return (
+        f"{', '.join(active)} running and would distort CPU/RAM results; stop it "
+        f"(systemctl --user stop local-stt {stop}) or pass --allow-concurrent"
+    )
 
 
 def _configs(
     models: Iterable[str], threads: Iterable[int], audio_ctx: Iterable[int]
 ) -> Iterator[BenchConfig]:
-    for model, t, a in itertools.product(models, threads, audio_ctx):
-        yield BenchConfig(model, t, a)
+    audio_ctx = list(audio_ctx)
+    for model, t in itertools.product(models, threads):
+        for a in [0] if model == PARAKEET_MODEL else audio_ctx:
+            yield BenchConfig(model, t, a)
 
 
 def run(
@@ -414,20 +457,16 @@ def run(
     allow_concurrent: bool = False,
     models_dir: Path = ws.DATA_DIR / "models",
 ) -> int:
-    if not allow_concurrent and service_active():
-        print(
-            "error: local-stt-whisper.service is running and would distort CPU/RAM results; run\n"
-            "  systemctl --user stop local-stt-whisper local-stt\n"
-            "or pass --allow-concurrent",
-            file=sys.stderr,
-        )
+    error = None if allow_concurrent else concurrency_error()
+    if error:
+        print(f"error: {error}", file=sys.stderr)
         return 1
     items = load_dataset(dataset)
     medium = [it for it in items if it.group == "medium"]
     if not medium:
         print(f"error: no medium/*.wav with .txt in {dataset}", file=sys.stderr)
         return 1
-    missing = [m for m in models if not (models_dir / f"ggml-{m}.bin").is_file()]
+    missing = [m for m in models if not model_path(m, models_dir).exists()]
     if missing:
         print(f"error: models not downloaded: {', '.join(missing)}", file=sys.stderr)
         return 1
@@ -459,13 +498,14 @@ def run(
         run_config(2, cfg, corpus, repeats, results, models_dir)
     if beam:
         for model in report.top_models_by_wer(
-            stage1, survivors, BEAM_TOP_N, exclude={CONTROL_MODEL}
+            stage1, survivors, BEAM_TOP_N, exclude={CONTROL_MODEL, PARAKEET_MODEL}
         ):
             cfg = BenchConfig(model, min(threads), 0, BEAM_SIZE)
             run_config(2, cfg, corpus, repeats, results, models_dir)
     if sanity:
         for model in models:
-            run_whisper_bench(model, models_dir, results)
+            if model != PARAKEET_MODEL:  # whisper-bench is whisper.cpp's own tool
+                run_whisper_bench(model, models_dir, results)
     _log("done")
     return 0
 

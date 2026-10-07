@@ -31,7 +31,7 @@ from local_stt.audio.capture import FRAME_SAMPLES, SAMPLE_RATE, AudioFrame
 from local_stt.audio.segmenter import Segmenter
 from local_stt.audio.vad import SileroVad
 from local_stt.audio.wav import wav_bytes_to_float32
-from local_stt.bench.runner import service_active, system_info
+from local_stt.bench.runner import concurrency_error, system_info
 from local_stt.bench.wer import edit_distance, error_counts
 from local_stt.cancellation import CancellationToken
 from local_stt.config import Config
@@ -172,11 +172,9 @@ def run_context(
     allow_concurrent: bool = False,
     on_progress: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    if service_active() and not allow_concurrent:
-        raise RuntimeError(
-            "local-stt-whisper.service is running; stop it (systemctl --user stop "
-            "local-stt-whisper local-stt) or pass --allow-concurrent"
-        )
+    error = None if allow_concurrent else concurrency_error()
+    if error:
+        raise RuntimeError(error)
     audio, rate = wav_bytes_to_float32(long_wav.read_bytes())
     if rate != SAMPLE_RATE:
         raise ValueError(f"{long_wav}: {rate} Hz, expected {SAMPLE_RATE} Hz")

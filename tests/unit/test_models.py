@@ -1,16 +1,19 @@
 import hashlib
+import io
 import subprocess
 import sys
 import threading
 from collections.abc import Iterator
 from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 from local_stt import models
 from local_stt.cli import main
+from local_stt.stt.parakeet import PARAKEET_MODEL
 
 
 class _CountingHandler(SimpleHTTPRequestHandler):
@@ -40,8 +43,26 @@ def server(tmp_path: Path) -> Iterator[tuple[str, Path]]:
         httpd.server_close()
 
 
+def _part(url: str, path: str, content: bytes) -> models.ModelFile:
+    return models.ModelFile(path, url + path, hashlib.sha256(content).hexdigest())
+
+
 def _model(url: str, content: bytes, filename: str = "ggml-test.bin") -> models.Model:
-    return models.Model("test", filename, url + filename, hashlib.sha256(content).hexdigest())
+    return models.Model("test", filename, (_part(url, filename, content),))
+
+
+DIR_FILES = {"enc.onnx": b"encoder" * 100, "vocab.txt": b"a\nb\n"}
+
+
+def _dir_model(url: str) -> models.Model:
+    parts = tuple(_part(url, f"m/{name}", content) for name, content in DIR_FILES.items())
+    return models.Model("dir", "m", parts)
+
+
+def _serve_dir(root: Path) -> None:
+    (root / "m").mkdir()
+    for name, content in DIR_FILES.items():
+        (root / "m" / name).write_bytes(content)
 
 
 def test_registry_covers_all_spec_models() -> None:
@@ -54,16 +75,34 @@ def test_registry_covers_all_spec_models() -> None:
         "medium-q5_0",
         "large-v3-turbo-q5_0",
         "silero-vad",
+        "parakeet-tdt-0.6b-v3-int8",
     }
-    assert registry["small-q5_1"].filename == "ggml-small-q5_1.bin"
-    assert registry["small-q5_1"].url == (
+    (small,) = registry["small-q5_1"].files
+    assert registry["small-q5_1"].filename == small.path == "ggml-small-q5_1.bin"
+    assert small.url == (
         "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
     )
     assert registry["silero-vad"].filename == "silero_vad.onnx"
-    assert "/v6.2.1/" in registry["silero-vad"].url
+    assert "/v6.2.1/" in registry["silero-vad"].files[0].url
     for model in registry.values():
-        assert len(model.sha256) == 64
-        int(model.sha256, 16)
+        for part in model.files:
+            assert len(part.sha256) == 64
+            int(part.sha256, 16)
+
+
+def test_parakeet_is_a_directory_of_files_from_one_pinned_revision() -> None:
+    parakeet = models.load_registry()[PARAKEET_MODEL]
+    assert parakeet.filename == PARAKEET_MODEL  # the directory the engine server loads
+    names = sorted(part.path.removeprefix(PARAKEET_MODEL + "/") for part in parakeet.files)
+    assert names == [
+        "config.json", "decoder_joint-model.int8.onnx", "encoder-model.int8.onnx", "vocab.txt",
+    ]  # fmt: skip
+    revision = (
+        "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/"
+        "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/"
+    )
+    for part in parakeet.files:
+        assert part.url == revision + part.path.removeprefix(PARAKEET_MODEL + "/")
 
 
 @pytest.mark.parametrize("line", ["abc  file.bin", "a" * 64 + " file.bin", "a" * 64 + "  "])
@@ -125,6 +164,44 @@ def test_pull_replaces_corrupt_existing_file(server: tuple[str, Path], tmp_path:
     assert (dest / "ggml-test.bin").read_bytes() == content
 
 
+def test_pull_directory_model(server: tuple[str, Path], tmp_path: Path) -> None:
+    url, root = server
+    _serve_dir(root)
+    dest = tmp_path / "models"
+
+    assert models.pull(_dir_model(url), dest) is True
+    assert {p.name: p.read_bytes() for p in (dest / "m").iterdir()} == DIR_FILES
+    assert models.model_status(_dir_model(url), dest) is models.ModelStatus.OK
+
+
+def test_pull_directory_model_fetches_only_bad_files(
+    server: tuple[str, Path], tmp_path: Path
+) -> None:
+    url, root = server
+    _serve_dir(root)
+    dest = tmp_path / "models"
+    (dest / "m").mkdir(parents=True)
+    (dest / "m" / "enc.onnx").write_bytes(DIR_FILES["enc.onnx"])
+    (dest / "m" / "vocab.txt").write_bytes(b"corrupt")
+
+    assert models.pull(_dir_model(url), dest) is True
+    assert _CountingHandler.hits == 1
+    assert (dest / "m" / "vocab.txt").read_bytes() == DIR_FILES["vocab.txt"]
+
+
+def test_pull_directory_model_failure_installs_no_file(
+    server: tuple[str, Path], tmp_path: Path
+) -> None:
+    url, root = server
+    _serve_dir(root)
+    (root / "m" / "vocab.txt").write_bytes(b"tampered")  # the second file fails
+    dest = tmp_path / "models"
+
+    with pytest.raises(models.ModelError, match=r"m/vocab\.txt: checksum mismatch"):
+        models.pull(_dir_model(url), dest)
+    assert list((dest / "m").iterdir()) == []  # the verified first file was not installed
+
+
 def test_model_status(tmp_path: Path) -> None:
     model = _model("http://unused/", b"content")
     assert models.model_status(model, tmp_path) is models.ModelStatus.MISSING
@@ -132,6 +209,13 @@ def test_model_status(tmp_path: Path) -> None:
     assert models.model_status(model, tmp_path) is models.ModelStatus.OK
     (tmp_path / model.filename).write_bytes(b"other")
     assert models.model_status(model, tmp_path) is models.ModelStatus.CORRUPT
+
+    directory = _dir_model("http://unused/")
+    (tmp_path / "m").mkdir()
+    (tmp_path / "m" / "enc.onnx").write_bytes(DIR_FILES["enc.onnx"])
+    assert models.model_status(directory, tmp_path) is models.ModelStatus.MISSING  # one missing
+    (tmp_path / "m" / "vocab.txt").write_bytes(b"other")
+    assert models.model_status(directory, tmp_path) is models.ModelStatus.CORRUPT
 
 
 def test_verify_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -197,3 +281,67 @@ def test_list_bench_without_runs(tmp_path: Path, capsys: pytest.CaptureFixture[s
         tmp_path, {}, current="small-q8_0", config_label="t=4", bench_dir=tmp_path / "bench"
     )
     assert "no benchmark results in" in capsys.readouterr().out
+
+
+class _FlakyHandler(BaseHTTPRequestHandler):
+    """Serves CONTENT, dropping the connection halfway through the first `drops` responses."""
+
+    content = b"0123456789" * 10_000
+    drops = 1
+    honor_range = True
+    requests: ClassVar[list[str | None]] = []
+
+    def do_GET(self) -> None:
+        cls = type(self)
+        cls.requests.append(self.headers.get("Range"))
+        start = 0
+        if cls.honor_range and (rng := self.headers.get("Range")):
+            start = int(rng.removeprefix("bytes=").rstrip("-"))
+        body = cls.content[start:]
+        self.send_response(206 if start else 200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if len(cls.requests) <= cls.drops:
+            self.wfile.write(body[: len(body) // 2])  # Content-Length promised more
+            self.close_connection = True
+            return
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def flaky() -> Iterator[str]:
+    _FlakyHandler.requests = []
+    _FlakyHandler.drops, _FlakyHandler.honor_range = 1, True
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _FlakyHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}/"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_pull_resumes_a_dropped_download(flaky: str, tmp_path: Path) -> None:
+    # task 4.5: the CDN dropped 1 of 3 downloads of the Parakeet encoder; read(n) does not raise
+    progress = io.StringIO()
+    assert models.pull(_model(flaky, _FlakyHandler.content), tmp_path, progress=progress)
+    assert (tmp_path / "ggml-test.bin").read_bytes() == _FlakyHandler.content
+    assert _FlakyHandler.requests == [None, "bytes=50000-"]
+    assert "connection dropped after 50000 bytes, resuming" in progress.getvalue()
+
+
+def test_pull_starts_over_when_the_server_ignores_range(flaky: str, tmp_path: Path) -> None:
+    _FlakyHandler.honor_range = False
+    assert models.pull(_model(flaky, _FlakyHandler.content), tmp_path)
+    assert (tmp_path / "ggml-test.bin").read_bytes() == _FlakyHandler.content
+
+
+def test_pull_gives_up_on_a_download_that_keeps_dropping(flaky: str, tmp_path: Path) -> None:
+    _FlakyHandler.drops = 99
+    with pytest.raises(models.ModelError, match=r"incomplete download .* after 3 attempts"):
+        models.pull(_model(flaky, _FlakyHandler.content), tmp_path)
+    assert len(_FlakyHandler.requests) == 3
+    assert list(tmp_path.iterdir()) == []

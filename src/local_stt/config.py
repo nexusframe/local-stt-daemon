@@ -45,7 +45,7 @@ _UNSAFE_ARG = re.compile(r"[\s\"'\\$]")
 
 @dataclass(frozen=True)
 class SttConfig:
-    engine: str = "whisper-server"
+    engine: str = "parakeet"  # default since task 4.5 (ADR-018)
     port: int = 8178
     model: str = "small-q8_0"
     models_dir: Path = DEFAULT_MODELS_DIR
@@ -599,7 +599,8 @@ def check_model_files(config: Config) -> list[str]:
         model_dir = config.stt.models_dir / PARAKEET_MODEL
         if not model_dir.is_dir():
             errors.append(
-                f"stt.engine: parakeet model not found: {model_dir} (run: scripts/install.sh)"
+                f"stt.engine: parakeet model not found: {model_dir} "
+                f"(run: local-stt models pull {PARAKEET_MODEL})"
             )
     elif not config.stt.model_path.is_file():
         errors.append(

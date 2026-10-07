@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from local_stt.bench import report
+from local_stt.stt.parakeet import PARAKEET_MODEL
 
 
 def cfg(model: str, threads: int = 4, ctx: int = 0, beam: int = -1) -> dict[str, Any]:
@@ -286,10 +287,43 @@ def test_cli_models_list_bench_uses_the_config_file(
     monkeypatch.setattr(runner, "BENCH_DIR", tmp_path / "bench")
     config = tmp_path / "config.toml"
     config.write_text(
-        f'[stt]\nmodel = "small-q5_1"\nthreads = 8\naudio_ctx = 0\nmodels_dir = "{tmp_path}"\n'
+        f'[stt]\nengine = "whisper-server"\nmodel = "small-q5_1"\nthreads = 8\naudio_ctx = 0\n'
+        f'models_dir = "{tmp_path}"\n'
     )
     assert main(["models", "list", "--bench", "--config", str(config)]) == 0
     out = capsys.readouterr().out
     row = next(line for line in out.splitlines() if line.startswith("* small-q5_1"))
     assert row.endswith("t=8 ctx=full greedy    2026-10-03 A")
     assert "config file (t=8 ctx=full greedy)" in out
+
+
+def test_parakeet_result_matches_any_audio_ctx_and_beam(tmp_path: Path) -> None:
+    # task 4.5: Parakeet runs with ctx 0 and greedy only; that is no mismatch with the config file
+    p = cfg(PARAKEET_MODEL, ctx=0)
+    write_run(tmp_path, "r1", "2026-10-08T09:00:00+00:00", whole_corpus_lines(p))
+    r = report.latest_results(tmp_path, threads=4, audio_ctx=1000, beam_size=5)[PARAKEET_MODEL]
+    assert r.exact
+    assert report.config_label(r.stats) == "t=4"
+    other_threads = report.latest_results(tmp_path, threads=8, audio_ctx=1000, beam_size=-1)
+    assert not other_threads[PARAKEET_MODEL].exact
+
+
+def test_cli_models_list_bench_marks_parakeet_when_selected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from local_stt.bench import runner
+    from local_stt.cli import main
+
+    write_run(
+        tmp_path / "bench", "r1", "2026-10-08T09:00:00+00:00",
+        whole_corpus_lines(cfg(PARAKEET_MODEL)),
+    )  # fmt: skip
+    monkeypatch.setattr(runner, "BENCH_DIR", tmp_path / "bench")
+    config = tmp_path / "config.toml"
+    config.write_text(f'[stt]\nmodels_dir = "{tmp_path}"\n')  # engine: parakeet (default)
+    assert main(["models", "list", "--bench", "--config", str(config)]) == 0
+    out = capsys.readouterr().out
+    row = next(line for line in out.splitlines() if PARAKEET_MODEL in line)
+    assert row.startswith(f"* {PARAKEET_MODEL}")
+    assert "missing" in row and row.endswith("t=4                    2026-10-08 A")
+    assert any(line.startswith("  small-q8_0") for line in out.splitlines())

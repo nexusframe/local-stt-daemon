@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from local_stt import events as ev
-from local_stt.config import Config, ConfigError
+from local_stt.config import Config, ConfigError, SttConfig
 from local_stt.controller import Controller, Mode, config_diff, reload_group
 from local_stt.interfaces import (
     AudioClip,
@@ -22,6 +22,9 @@ from local_stt.interfaces import (
     Sound,
 )
 
+# These tests were written for whisper-server, the default engine before task 4.5; the engine is
+# pinned so that they keep testing its language switch and status.
+WHISPER = Config(stt=SttConfig(engine="whisper-server"))
 SOUND_S = 0.13
 NOTHING = CancelResult((), in_flight_cancelled=False, injection_in_flight=False)
 
@@ -37,7 +40,7 @@ class World:
         self.generation = 7
         self.cancel_result = NOTHING
         self.jobs: list[Job] = []
-        self.next_config: Config | Exception = Config()
+        self.next_config: Config | Exception = WHISPER
         self.statuses: list[str] = []
         self.hotkey_problems: list[HotkeyProblem] = []
         self.vad_available = True
@@ -167,7 +170,7 @@ def make(
     w: World, *, engine: EngineHealth | None = EngineHealth.READY, config: Config | None = None
 ) -> Controller:
     c = Controller(
-        config or Config(),
+        config or WHISPER,
         capture=w,
         consumer=Consumer(w),
         pipeline=Pipeline(w),
@@ -633,12 +636,12 @@ def with_changes(base: Config, **sections: dict[str, Any]) -> Config:
 
 def test_config_diff_and_groups() -> None:
     new = with_changes(
-        Config(),
+        WHISPER,
         stt={"model": "small-q5_1", "vocabulary_prompt": "Gdańsk"},
         vad={"min_silence_ms": 500},
         logging={"level": "DEBUG"},
     )
-    keys = config_diff(Config(), new)
+    keys = config_diff(WHISPER, new)
     assert keys == ["stt.model", "stt.vocabulary_prompt", "vad.min_silence_ms", "logging.level"]
     assert [reload_group(k) for k in keys] == ["server", "live", "idle", "live"]
 
@@ -649,7 +652,7 @@ def test_reload_invalid_config_keeps_the_old_one(c: Controller, w: World) -> Non
     c.handle(ev.ReloadRequested(r))
     assert r.result() == {"ok": False, "errors": ["stt.port: must be in 1-65535 (got 0)"]}
     assert w.calls == []
-    assert c.config == Config()
+    assert c.config == WHISPER
 
 
 def test_reload_without_changes(c: Controller, w: World) -> None:
@@ -662,7 +665,7 @@ def test_reload_without_changes(c: Controller, w: World) -> None:
 def test_reload_live_keys_apply_immediately_even_during_ptt(c: Controller, w: World) -> None:
     press(c, w)
     w.next_config = with_changes(
-        Config(), ptt={"min_duration_ms": 500}, stt={"vocabulary_prompt": "x"}
+        WHISPER, ptt={"min_duration_ms": 500}, stt={"vocabulary_prompt": "x"}
     )
     r = reply()
     c.handle(ev.ReloadRequested(r))
@@ -675,7 +678,7 @@ def test_reload_live_keys_apply_immediately_even_during_ptt(c: Controller, w: Wo
 def test_reload_language_is_live_without_server_restart(c: Controller, w: World) -> None:
     # whisper-server v1.9.4 honours the per-request `language` (06 §6.5, tested 2026-10-05).
     press(c, w)
-    w.next_config = with_changes(Config(), stt={"languages": ("en", "pl")})
+    w.next_config = with_changes(WHISPER, stt={"languages": ("en", "pl")})
     r = reply()
     c.handle(ev.ReloadRequested(r))
     assert w.names() == ["reload.live"]
@@ -689,7 +692,7 @@ def test_reload_language_is_live_without_server_restart(c: Controller, w: World)
 
 
 def test_reload_idle_keys_in_idle_apply_immediately(c: Controller, w: World) -> None:
-    w.next_config = with_changes(Config(), hotkeys={"push_to_talk": "Pause"})
+    w.next_config = with_changes(WHISPER, hotkeys={"push_to_talk": "Pause"})
     r = reply()
     c.handle(ev.ReloadRequested(r))
     assert w.names() == ["reload.idle"]
@@ -699,7 +702,7 @@ def test_reload_idle_keys_in_idle_apply_immediately(c: Controller, w: World) -> 
 
 def test_reload_idle_keys_during_ptt_wait_for_idle(c: Controller, w: World) -> None:
     rid, cid, op = record_and_release(c, w)
-    w.next_config = with_changes(Config(), audio={"device": "usb-mic"})
+    w.next_config = with_changes(WHISPER, audio={"device": "usb-mic"})
     r = reply()
     c.handle(ev.ReloadRequested(r))
     assert r.result() == {
@@ -716,7 +719,7 @@ def test_reload_idle_keys_during_ptt_wait_for_idle(c: Controller, w: World) -> N
 
 
 def test_reload_server_keys_restart_when_idle_and_empty(c: Controller, w: World) -> None:
-    new = with_changes(Config(), stt={"threads": 2})
+    new = with_changes(WHISPER, stt={"threads": 2})
     w.next_config = new
     r = reply()
     c.handle(ev.ReloadRequested(r))
@@ -740,13 +743,13 @@ def test_reload_server_keys_restart_when_idle_and_empty(c: Controller, w: World)
 def test_restarted_server_gets_the_effective_config(c: Controller, w: World) -> None:
     # R3: use_server re-applies the live components, so it gets the server keys of the
     # restart and the live keys reloaded while it was running.
-    w.next_config = with_changes(Config(), stt={"threads": 2})
+    w.next_config = with_changes(WHISPER, stt={"threads": 2})
     c.handle(ev.ReloadRequested())
-    w.next_config = with_changes(Config(), stt={"threads": 2, "vocabulary_prompt": "x"})
+    w.next_config = with_changes(WHISPER, stt={"threads": 2, "vocabulary_prompt": "x"})
     c.handle(ev.ReloadRequested())
     w.calls.clear()
     c.handle(ev.ServerRestartDone(0))
-    expected = with_changes(Config(), stt={"threads": 2, "vocabulary_prompt": "x"})
+    expected = with_changes(WHISPER, stt={"threads": 2, "vocabulary_prompt": "x"})
     assert w.calls == [("reload.use_server", expected)]
     assert c.config == expected
 
@@ -754,7 +757,7 @@ def test_restarted_server_gets_the_effective_config(c: Controller, w: World) -> 
 def test_reload_server_restart_waits_for_queue_and_recording(c: Controller, w: World) -> None:
     job = finish_job(c, w)
     press(c, w, at=110.0)
-    w.next_config = with_changes(Config(), stt={"model": "small-q5_1"})
+    w.next_config = with_changes(WHISPER, stt={"model": "small-q5_1"})
     r = reply()
     c.handle(ev.ReloadRequested(r))
     assert r.result()["deferred"] == ["stt.model"]
@@ -768,26 +771,26 @@ def test_reload_server_restart_does_not_wait_when_engine_down(c: Controller, w: 
     finish_job(c, w)
     c.handle(ev.EngineStateChanged(EngineHealth.DOWN))
     w.calls.clear()
-    w.next_config = with_changes(Config(), stt={"port": 8179})
+    w.next_config = with_changes(WHISPER, stt={"port": 8179})
     c.handle(ev.ReloadRequested())
     assert w.names() == ["pipeline.pause", "reload.restart"]
 
 
 def test_reload_models_dir_restarts_server_and_reloads_vad(c: Controller, w: World) -> None:
-    w.next_config = with_changes(Config(), stt={"models_dir": Config().stt.models_dir / "x"})
+    w.next_config = with_changes(WHISPER, stt={"models_dir": WHISPER.stt.models_dir / "x"})
     c.handle(ev.ReloadRequested())
     assert w.names() == ["reload.idle", "pipeline.pause", "reload.restart"]
 
 
 def test_restart_failure_is_reported(c: Controller, w: World) -> None:
-    w.next_config = with_changes(Config(), stt={"threads": 2})
+    w.next_config = with_changes(WHISPER, stt={"threads": 2})
     c.handle(ev.ReloadRequested())
     c.handle(ev.ServerRestartDone(1))
     assert w.notifications() == ["Failed to start engine with new config"]
 
 
 def test_restarted_server_going_down_before_ready_is_reported(c: Controller, w: World) -> None:
-    w.next_config = with_changes(Config(), stt={"threads": 2})
+    w.next_config = with_changes(WHISPER, stt={"threads": 2})
     c.handle(ev.ReloadRequested())
     c.handle(ev.ServerRestartDone(0))
     c.handle(ev.EngineStateChanged(EngineHealth.DOWN))
@@ -801,8 +804,8 @@ def test_stray_server_restart_done_is_ignored(c: Controller, w: World) -> None:
 
 
 def test_reload_during_restart_waits_for_it(c: Controller, w: World) -> None:
-    first = with_changes(Config(), stt={"threads": 2})
-    second = with_changes(Config(), stt={"threads": 3})
+    first = with_changes(WHISPER, stt={"threads": 2})
+    second = with_changes(WHISPER, stt={"threads": 3})
     w.next_config = first
     c.handle(ev.ReloadRequested())
     w.next_config = second
@@ -917,7 +920,7 @@ def test_status_counts_jobs_and_averages_last_ten(c: Controller, w: World) -> No
 def test_status_hotkey_problems_from_startup_and_regrab(w: World) -> None:
     problem = HotkeyProblem("push_to_talk", "Control_R", "already grabbed by another client")
     c = Controller(
-        Config(),
+        WHISPER,
         capture=w,
         consumer=Consumer(w),
         pipeline=Pipeline(w),
@@ -932,11 +935,11 @@ def test_status_hotkey_problems_from_startup_and_regrab(w: World) -> None:
         "degraded",
         [{"hotkey": "push_to_talk", "value": "Control_R", "reason": problem.reason}],
     )
-    w.next_config = with_changes(Config(), hotkeys={"push_to_talk": "F9"})
+    w.next_config = with_changes(WHISPER, hotkeys={"push_to_talk": "F9"})
     c.handle(ev.ReloadRequested())  # applied at once in IDLE; the fake regrab succeeds
     hotkeys = status_of(c)["hotkeys"]
     assert (hotkeys["state"], hotkeys["push_to_talk"], hotkeys["problems"]) == ("OK", "F9", [])
-    w.next_config = with_changes(Config(), hotkeys={"enabled": False})
+    w.next_config = with_changes(WHISPER, hotkeys={"enabled": False})
     c.handle(ev.ReloadRequested())
     assert status_of(c)["hotkeys"]["state"] == "disabled"
 
@@ -962,7 +965,7 @@ def test_language_cycles_through_the_list(c: Controller, w: World) -> None:
 
 def test_language_cycle_of_three(w: World) -> None:
     c = make(w)
-    w.next_config = with_changes(Config(), stt={"languages": ("pl", "en", "de")})
+    w.next_config = with_changes(WHISPER, stt={"languages": ("pl", "en", "de")})
     c.handle(ev.ReloadRequested())
     w.calls.clear()
     seen = []
@@ -991,7 +994,7 @@ def test_language_set_to_a_code_and_rejects_others(c: Controller, w: World) -> N
 
 def test_parakeet_rejects_language_switch(w: World) -> None:
     """Task 4.3: Parakeet has no language input, so the hotkey and the CLI do nothing."""
-    c = make(w, config=with_changes(Config(), stt={"engine": "parakeet"}))
+    c = make(w, config=with_changes(WHISPER, stt={"engine": "parakeet"}))
     for target in (None, "en"):
         r = reply()
         c.handle(ev.LanguageSwitch(target, r))
@@ -1013,7 +1016,7 @@ def test_parakeet_rejects_language_switch(w: World) -> None:
 def test_language_is_published_to_subscribers(w: World) -> None:
     published: list[dict[str, Any]] = []
     c = Controller(
-        Config(),
+        WHISPER,
         capture=w,
         consumer=Consumer(w),
         pipeline=Pipeline(w),
@@ -1047,11 +1050,11 @@ def test_language_sound_is_skipped_while_the_microphone_records(c: Controller, w
 
 def test_reload_of_the_languages_resets_the_active_language(c: Controller, w: World) -> None:
     c.handle(ev.LanguageSwitch())
-    w.next_config = with_changes(Config(), stt={"vocabulary_prompt": "x"})
+    w.next_config = with_changes(WHISPER, stt={"vocabulary_prompt": "x"})
     c.handle(ev.ReloadRequested())
     assert c.language == "en"  # an unrelated reload keeps the switch
     w.next_config = with_changes(
-        Config(), stt={"vocabulary_prompt": "x", "languages": ("pl", "en", "de")}
+        WHISPER, stt={"vocabulary_prompt": "x", "languages": ("pl", "en", "de")}
     )
     c.handle(ev.ReloadRequested())
     assert c.language == "pl"

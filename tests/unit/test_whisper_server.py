@@ -1,6 +1,7 @@
 import email.parser
 import email.policy
 import json
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -13,7 +14,12 @@ import pytest
 from local_stt.interfaces import EngineHealth
 from local_stt.stt import ENGINE_UNITS, ENGINES
 from local_stt.stt import whisper_server as ws
-from local_stt.stt.parakeet import ParakeetEngine
+from local_stt.stt.parakeet import (
+    PARAKEET_MODEL,
+    REQUEST_PATH_ENV,
+    ParakeetEngine,
+    TemporaryParakeetServer,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 VERBOSE_JSON = (FIXTURES / "whisper_v1.9.4_verbose_json.json").read_bytes()
@@ -261,3 +267,24 @@ def test_read_request_path(tmp_path: Path) -> None:
     secret.write_text("too-short")
     with pytest.raises(ValueError):
         ws.read_request_path(secret)
+
+
+def test_temporary_parakeet_server_keeps_the_request_path_off_the_command_line(
+    tmp_path: Path,
+) -> None:
+    server = TemporaryParakeetServer(tmp_path, threads=2)
+    args, env = server._command(40123, REQUEST_PATH)
+    assert args[:4] == ["nice", "-n", "5", sys.executable]
+    assert args[4:] == [
+        "-m", "local_stt", "engine-server",
+        "--port", "40123", "--threads", "2", "--model-dir", str(tmp_path),
+    ]  # fmt: skip
+    assert REQUEST_PATH not in " ".join(args)
+    assert env is not None and env[REQUEST_PATH_ENV] == REQUEST_PATH
+    client = server._client(40123, REQUEST_PATH)
+    assert isinstance(client, ParakeetEngine) and client.model == PARAKEET_MODEL
+
+
+def test_temporary_parakeet_server_needs_the_model_directory(tmp_path: Path) -> None:
+    with pytest.raises(ws.EngineError, match=r"models pull parakeet-tdt-0\.6b-v3-int8"):
+        TemporaryParakeetServer(tmp_path / "missing").start()

@@ -9,12 +9,14 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 import pytest
 
-from local_stt import cli, engine_server
+from local_stt import cli, engine_server, logging_setup
 from local_stt.audio.wav import float32_to_wav_bytes
+from local_stt.config import Config
 from local_stt.engine_server import EngineServer, parse_wav_upload, verbose_json
 from local_stt.interfaces import EngineHealth
 from local_stt.stt import whisper_server as ws
@@ -201,3 +203,77 @@ def test_missing_secret_exits_78(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     config = tmp_path / "config.toml"
     config.write_text(f'[stt]\nmodels_dir = "{tmp_path}"\n')
     assert cli.main(["engine-server", "--config", str(config)]) == 78
+
+
+class _RecordingServer:
+    """Stands in for EngineServer in run_engine_server: records its arguments, serves nothing."""
+
+    created: ClassVar[list[tuple[int, str]]] = []
+
+    def __init__(self, port: int, request_path: str, recognize: object):
+        self.created.append((port, request_path))
+
+    def serve_forever(self) -> None:
+        pass
+
+    def server_close(self) -> None:
+        pass
+
+
+def test_temporary_server_overrides_take_the_request_path_from_the_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # task 4.5: TemporaryParakeetServer passes port, threads and model directory as options and
+    # the request path in the environment; the secret is not needed.
+    monkeypatch.setattr(engine_server, "DEFAULT_SECRET_FILE", tmp_path / "no-secret")
+    loaded: list[tuple[Path, int]] = []
+    monkeypatch.setattr(
+        engine_server, "load_parakeet", lambda d, t: loaded.append((d, t)) or FakeRecognizer()
+    )
+    _RecordingServer.created = []
+    monkeypatch.setattr(engine_server, "EngineServer", _RecordingServer)
+    monkeypatch.setattr(logging_setup, "setup_logging", lambda level: None)
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+
+    code = engine_server.run_engine_server(
+        Config(),
+        port=40123,
+        threads=2,
+        model_dir=model_dir,
+        environ={engine_server.REQUEST_PATH_ENV: REQUEST_PATH},
+    )
+    assert code == 0
+    assert loaded == [(model_dir, 2)]
+    assert _RecordingServer.created == [(40123, REQUEST_PATH)]
+
+
+def test_port_taken_exits_1_with_the_bind_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(logging_setup, "setup_logging", lambda level: None)  # keeps caplog
+    monkeypatch.setattr(engine_server, "load_parakeet", lambda d, t: FakeRecognizer())
+    taken = EngineServer(0, REQUEST_PATH, FakeRecognizer())
+    try:
+        code = engine_server.run_engine_server(
+            Config(),
+            port=taken.server_address[1],
+            model_dir=tmp_path,
+            environ={engine_server.REQUEST_PATH_ENV: REQUEST_PATH},
+        )
+    finally:
+        taken.server_close()
+    assert code == 1
+    assert "couldn't bind" in caplog.text  # TemporaryParakeetServer retries on this message
+
+
+def test_cli_engine_server_passes_the_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        engine_server, "run_engine_server", lambda config, **kw: seen.append(kw) or 0
+    )
+    args = ["engine-server", "--port", "4000", "--threads", "3", "--model-dir", str(tmp_path)]
+    assert cli.main(args) == 0
+    assert seen == [{"port": 4000, "threads": 3, "model_dir": tmp_path}]

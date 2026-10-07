@@ -28,6 +28,7 @@ def env(tmp_path: Path) -> dict[str, str]:
     models = tmp_path / "models"
     models.mkdir()
     (models / "ggml-small-q8_0.bin").write_bytes(b"x")
+    (models / "parakeet-tdt-0.6b-v3-int8").mkdir()
     (models / "silero_vad.onnx").write_bytes(b"x")
     (config_dir / "config.toml").write_text(f'[stt]\nmodels_dir = "{models}"\n')
     return {"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "DISPLAY": ":1"}
@@ -60,7 +61,7 @@ def test_missing_model_exits_78(env: dict[str, str], caplog: pytest.LogCaptureFi
     path = Path(env["XDG_CONFIG_HOME"]) / "local-stt/config.toml"
     path.write_text('[stt]\nmodels_dir = "/nonexistent"\n')
     assert startup_code(env) == EXIT_CONFIG
-    assert "local-stt models pull small-q8_0" in caplog.text
+    assert "local-stt models pull parakeet-tdt-0.6b-v3-int8" in caplog.text
 
 
 def test_invalid_log_level_from_environment_exits_78(env: dict[str, str]) -> None:

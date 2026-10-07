@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 
 from local_stt.bench import wer
+from local_stt.stt.parakeet import PARAKEET_MODEL
 
 MEDIUM = "medium"
 ELIMINATION_P50_S = 6.0
@@ -274,6 +275,8 @@ def _pct(value: float) -> str:
 
 
 def _config_label(s: ConfigStats) -> str:
+    if s.model == PARAKEET_MODEL:  # no audio_ctx or beam search (task 4.5)
+        return f"`{s.model}` t={s.threads}"
     beam = "greedy" if s.beam_size < 0 else f"beam {s.beam_size}"
     ctx = {0: "full", LEGACY_PER_REQUEST: "per-request"}.get(s.audio_ctx, str(s.audio_ctx))
     return f"`{s.model}` t={s.threads} ctx={ctx} {beam}"
@@ -337,7 +340,8 @@ def _header(info: dict[str, Any]) -> list[str]:
         "",
         f"- Run: {get('timestamp')}; CPU: {get('cpu')}; governor: {get('governor')}; "
         f"power: {get('power_source')}; kernel: {get('kernel')}",
-        f"- whisper.cpp: {get('whisper_cpp')}; dataset: `{get('dataset')}`; "
+        f"- whisper.cpp: {get('whisper_cpp')}; onnx-asr: {get('onnx_asr')}; "
+        f"dataset: `{get('dataset')}`; "
         f"repeats: {get('repeats')}; decoding: `{decoding}`",
         "- text_ready_s = RMS gate + HTTP transcription + text normalization (excludes injection, "
         "capture finalization and queueing). **N2 is not confirmed by this report**: it requires "
@@ -449,6 +453,8 @@ def _closest(
     """The exact configuration, else the closest: audio_ctx first, then beam, then threads."""
 
     def distance(s: ConfigStats) -> tuple[bool, bool, bool, int]:
+        if s.model == PARAKEET_MODEL:  # has neither: only the thread count can differ
+            return (False, False, s.threads != threads, s.threads)
         return (s.audio_ctx != audio_ctx, s.beam_size != beam_size, s.threads != threads, s.threads)
 
     best = min(candidates, key=distance)

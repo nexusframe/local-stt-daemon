@@ -5,9 +5,9 @@
 # restart local-stt-whisper.service once the daemon is idle (docs/04-state-machine.md §4.6).
 
 [stt]
-engine = "whisper-server"            # or "parakeet" (ADR-018; no language or prompt input)
+engine = "parakeet"                  # no language or prompt input (ADR-018); or "whisper-server"
 port = 8178                          # ⟳ loopback port; the host is always 127.0.0.1
-model = "small-q8_0"                 # ⟳ ggml-<model>.bin in models_dir (benchmark: docs/benchmark-results.md)
+model = "small-q8_0"                 # ⟳ whisper-server: ggml-<model>.bin in models_dir (docs/benchmark-results.md)
 models_dir = "~/.local/share/local-stt/models"   # ⟳ no whitespace, quotes, backslashes or $
 languages = ["pl", "en"]             # first = startup; the language hotkey cycles them; sent with every request
 threads = 4                          # ⟳ -t for whisper-server

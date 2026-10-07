@@ -308,10 +308,7 @@ class TemporaryWhisperServer:
     ) -> WhisperServerEngine:
         """Starts on a random free port, or on `port` in one attempt (to bring a stopped
         server back where its clients expect it); the request path is random if not given."""
-        if not self.binary.is_file():
-            raise EngineError(f"{self.binary} not found (run scripts/install.sh)")
-        if not self.model_path.is_file():
-            raise EngineError(f"{self.model_path} not found (run: local-stt models pull ...)")
+        self._check_installed()
         if port is not None:
             engine = self._start_once(port, request_path or "/" + secrets.token_hex(16))
             if engine is None:
@@ -325,28 +322,45 @@ class TemporaryWhisperServer:
                 return engine
         raise EngineError(f"could not bind a free port in {self._BIND_ATTEMPTS} attempts")
 
-    def _start_once(self, port: int, request_path: str) -> WhisperServerEngine | None:
-        """Returns None if the port was taken in the meantime (caller retries)."""
-        self._stderr.clear()
+    # --- hooks overridden by TemporaryParakeetServer ---
+
+    server_name = "whisper-server"
+
+    def _check_installed(self) -> None:
+        if not self.binary.is_file():
+            raise EngineError(f"{self.binary} not found (run scripts/install.sh)")
+        if not self.model_path.is_file():
+            raise EngineError(f"{self.model_path} not found (run: local-stt models pull ...)")
+
+    def _command(self, port: int, request_path: str) -> tuple[list[str], dict[str, str] | None]:
+        """The server's argv and environment (None = inherited)."""
         # fmt: off
-        args = [
+        return [
             "nice", "-n", "5", str(self.binary),
             "--host", HOST, "--port", str(port), "--request-path", request_path,
             "-m", str(self.model_path), "-l", self.language, "-t", str(self.threads),
             "-bs", str(self.beam_size), "-sns",
-        ]
+        ], None
         # fmt: on
-        process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        self._process = process
-        threading.Thread(target=self._drain_stderr, args=(process,), daemon=True).start()
 
-        engine = WhisperServerEngine(
+    def _client(self, port: int, request_path: str) -> WhisperServerEngine:
+        return WhisperServerEngine(
             port=port,
             request_path=request_path,
             model=self.model,
             audio_ctx=self.audio_ctx,
             audio_ctx_margin=self.audio_ctx_margin,
         )
+
+    def _start_once(self, port: int, request_path: str) -> WhisperServerEngine | None:
+        """Returns None if the port was taken in the meantime (caller retries)."""
+        self._stderr.clear()
+        args, env = self._command(port, request_path)
+        process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
+        self._process = process
+        threading.Thread(target=self._drain_stderr, args=(process,), daemon=True).start()
+
+        engine = self._client(port, request_path)
         deadline = time.monotonic() + self.startup_timeout_s
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -354,14 +368,14 @@ class TemporaryWhisperServer:
                 if any("couldn't bind" in line for line in self._stderr):
                     return None
                 raise EngineError(
-                    f"whisper-server exited with code {process.returncode}: "
+                    f"{self.server_name} exited with code {process.returncode}: "
                     + " | ".join(self._stderr)
                 )
             if engine.health() is EngineHealth.READY:
                 return engine
             time.sleep(0.1)
         self.stop()
-        raise EngineError(f"whisper-server not ready within {self.startup_timeout_s:.0f} s")
+        raise EngineError(f"{self.server_name} not ready within {self.startup_timeout_s:.0f} s")
 
     def _drain_stderr(self, process: "subprocess.Popen[bytes]") -> None:
         assert process.stderr is not None

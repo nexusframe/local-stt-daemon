@@ -86,7 +86,7 @@ def test_without_hotkeys_backend(tmp_path: Path) -> None:
 @pytest.mark.parametrize("code", [0, 1])
 def test_restart_writes_env_then_reports_exit_code(tmp_path: Path, code: int) -> None:
     env = Env(tmp_path, exit_code=code)
-    env.reloader.restart_server(Config())
+    env.reloader.restart_server(Config(stt=SttConfig(engine="whisper-server")))
     assert env.events.get(timeout=2) == ServerRestartDone(code)
     text = env.env_path.read_text()
     assert f"--request-path /{SECRET}" in text and "-t 4" in text
@@ -107,7 +107,7 @@ def test_unreadable_secret_fails_without_restart(tmp_path: Path) -> None:
     env = Env(tmp_path)
     env.secret.write_text("short")
     env.exit_code = 99  # must not be reached
-    env.reloader.restart_server(Config())
+    env.reloader.restart_server(Config(stt=SttConfig(engine="whisper-server")))
     assert env.events.get(timeout=2) == ServerRestartDone(reload.EXIT_ENV_FAILED)
     assert not env.env_path.exists()
 

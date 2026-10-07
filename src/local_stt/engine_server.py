@@ -18,9 +18,10 @@ import email.parser
 import email.policy
 import json
 import logging
+import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,7 +31,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from local_stt.audio.wav import SAMPLE_RATE, wav_bytes_to_float32
-from local_stt.stt.parakeet import PARAKEET_MODEL
+from local_stt.stt.parakeet import PARAKEET_MODEL, REQUEST_PATH_ENV
 from local_stt.stt.whisper_server import DEFAULT_SECRET_FILE, HOST, read_request_path
 
 if TYPE_CHECKING:
@@ -174,29 +175,50 @@ class _Handler(BaseHTTPRequestHandler):
         log.debug("%s " + format, self.address_string(), *args)
 
 
-def run_engine_server(config: "Config") -> int:
-    """Entry point of `local-stt engine-server` (the systemd unit's ExecStart)."""
+def run_engine_server(
+    config: "Config",
+    *,
+    port: int | None = None,
+    threads: int | None = None,
+    model_dir: Path | None = None,
+    environ: Mapping[str, str] = os.environ,
+) -> int:
+    """Entry point of `local-stt engine-server` (the systemd unit's ExecStart).
+
+    `port`, `threads` and `model_dir` override the config for a temporary server
+    (`TemporaryParakeetServer`: `bench`, `transcribe --model`), which also passes its random
+    request path in `LOCAL_STT_REQUEST_PATH` instead of the secret (not on the command line,
+    where other users could read it).
+    """
     from local_stt.logging_setup import setup_logging
     from local_stt.sdnotify import SdNotifier
 
     setup_logging(logging.INFO)
     stt = config.stt
-    model_dir = stt.models_dir / PARAKEET_MODEL
-    try:
-        request_path = read_request_path(DEFAULT_SECRET_FILE)
-    except (OSError, ValueError) as e:
-        log.error("secret: %s", e)
-        return EXIT_CONFIG
+    port = stt.port if port is None else port
+    threads = stt.threads if threads is None else threads
+    model_dir = stt.models_dir / PARAKEET_MODEL if model_dir is None else model_dir
+    request_path = environ.get(REQUEST_PATH_ENV)
+    if request_path is None:
+        try:
+            request_path = read_request_path(DEFAULT_SECRET_FILE)
+        except (OSError, ValueError) as e:
+            log.error("secret: %s", e)
+            return EXIT_CONFIG
     if not model_dir.is_dir():
         log.error("%s not found (run scripts/install.sh)", model_dir)
         return EXIT_CONFIG
 
     started = time.monotonic()
-    recognize = load_parakeet(model_dir, stt.threads)
-    log.info("loaded %s in %.1f s (%d threads)", PARAKEET_MODEL, time.monotonic() - started,
-             stt.threads)  # fmt: skip
-    server = EngineServer(stt.port, request_path, recognize)
-    log.info("listening on %s:%d", HOST, stt.port)
+    recognize = load_parakeet(model_dir, threads)
+    log.info("loaded %s in %.1f s (%d threads)", model_dir.name, time.monotonic() - started,
+             threads)  # fmt: skip
+    try:
+        server = EngineServer(port, request_path, recognize)
+    except OSError as e:  # TemporaryParakeetServer retries another port on this message
+        log.error("couldn't bind %s:%d: %s", HOST, port, e)
+        return 1
+    log.info("listening on %s:%d", HOST, port)
     notifier = SdNotifier()
     notifier.ready()
     try:

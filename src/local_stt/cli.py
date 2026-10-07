@@ -35,11 +35,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--log-level", choices=["INFO", "DEBUG", "TRACE"], help="overrides logging.level"
     )
 
-    _add_config_option(
-        commands.add_parser(
-            "engine-server", help="run the Parakeet inference server in the foreground (systemd)"
-        )
+    engine_server = commands.add_parser(
+        "engine-server", help="run the Parakeet inference server in the foreground (systemd)"
     )
+    _add_config_option(engine_server)
+    # Overrides for a temporary server (bench, transcribe --model); the unit uses the config.
+    engine_server.add_argument("--port", type=int, help="overrides stt.port")
+    engine_server.add_argument("--threads", type=int, help="overrides stt.threads")
+    engine_server.add_argument("--model-dir", type=Path, help="the Parakeet model directory")
 
     status = commands.add_parser("status", help="daemon status")
     status.add_argument("--json", action="store_true", help="machine-readable status")
@@ -82,13 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("file", type=Path, metavar="FILE.wav")
     transcribe.add_argument(
         "--model",
-        help="use a temporary server with this model instead of the running service",
+        help="use a temporary server with this model (a Whisper model or "
+        "parakeet-tdt-0.6b-v3-int8) instead of the running engine service",
     )
 
     bench = commands.add_parser("bench", help="benchmark models on temporary servers (docs/13)")
     bench.add_argument("--quick", action="store_true", help="stage 1 only (medium group)")
     bench.add_argument("--dataset", type=Path, default=Path.home() / "stt-corpus")
-    bench.add_argument("--models", help="comma-separated (default: all six benchmark models)")
+    bench.add_argument(
+        "--models", help="comma-separated (default: the six Whisper models and Parakeet)"
+    )
     bench.add_argument("--threads", help="comma-separated (default: 4,8; --soak: stt.threads)")
     bench.add_argument(
         "--audio-ctx",
@@ -194,7 +200,7 @@ def _run_models(args: argparse.Namespace) -> int:
         return models.cmd_list_bench(
             models_dir,
             results,
-            current=stt.model,
+            current=stt.engine_model,
             config_label=f"t={stt.threads} ctx={stt.audio_ctx or 'full'} {beam}",
             bench_dir=BENCH_DIR,
         )
@@ -209,6 +215,7 @@ def _run_transcribe(args: argparse.Namespace) -> int:
     from local_stt.audio.wav import SAMPLE_RATE, wav_bytes_to_float32
     from local_stt.config import config_dir
     from local_stt.stt import whisper_server as ws
+    from local_stt.stt.parakeet import PARAKEET_MODEL, ParakeetEngine, TemporaryParakeetServer
 
     config = _load_config(args)
     if config is None:
@@ -224,7 +231,14 @@ def _run_transcribe(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        if args.model:
+        if args.model == PARAKEET_MODEL:
+            with TemporaryParakeetServer(
+                stt.models_dir / PARAKEET_MODEL,
+                threads=stt.threads,
+                startup_timeout_s=stt.startup_timeout_s,
+            ) as engine:
+                transcript = _transcribe(engine, audio, stt)
+        elif args.model:
             server = ws.TemporaryWhisperServer(
                 stt.models_dir / f"ggml-{args.model}.bin",
                 model=args.model,
@@ -238,16 +252,22 @@ def _run_transcribe(args: argparse.Namespace) -> int:
             with server as engine:
                 transcript = _transcribe(engine, audio, stt)
         else:
-            engine = ws.WhisperServerEngine(
-                port=stt.port,
-                request_path=ws.read_request_path(config_dir() / "secret"),
-                model=stt.model,
-                audio_ctx=stt.audio_ctx,
-                audio_ctx_margin=stt.audio_ctx_margin,
-            )
+            request_path = ws.read_request_path(config_dir() / "secret")
+            if stt.engine == "parakeet":
+                engine = ParakeetEngine(port=stt.port, request_path=request_path)
+            else:
+                engine = ws.WhisperServerEngine(
+                    port=stt.port,
+                    request_path=request_path,
+                    model=stt.model,
+                    audio_ctx=stt.audio_ctx,
+                    audio_ctx_margin=stt.audio_ctx_margin,
+                )
             transcript = _transcribe(engine, audio, stt)
     except ws.EngineConnectionError as e:
-        print(f"error: whisper-server is not running ({e}); use --model M", file=sys.stderr)
+        print(
+            f"error: the {stt.engine} engine is not running ({e}); use --model M", file=sys.stderr
+        )
         return 1
     except (ws.EngineError, OSError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -280,7 +300,11 @@ def _transcribe(
 def _run_soak(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from local_stt.bench import runner, soak
     from local_stt.config import Config
+    from local_stt.stt.parakeet import PARAKEET_MODEL
 
+    if args.model == PARAKEET_MODEL:  # task 4.5: --soak and --context stay Whisper-only
+        print("error: --soak runs Whisper models only", file=sys.stderr)
+        return 2
     stt = Config().stt
     try:
         threads = int(args.threads) if args.threads else stt.threads
@@ -574,7 +598,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from local_stt.engine_server import run_engine_server
 
         config = _load_config(args)
-        return EXIT_CONFIG if config is None else run_engine_server(config)
+        if config is None:
+            return EXIT_CONFIG
+        return run_engine_server(
+            config, port=args.port, threads=args.threads, model_dir=args.model_dir
+        )
     if args.command == "doctor":
         from local_stt.doctor import cmd_doctor
 

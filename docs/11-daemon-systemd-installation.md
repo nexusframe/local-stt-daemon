@@ -69,7 +69,8 @@ Default tag: v1.9.4.
     Skipped when bin/.whisper-tag contains the same tag and --rebuild-whisper was not specified (the server has no --version flag).
  4. venv: python3 -m venv; pip install --require-hashes -r requirements.lock; pip install --no-deps . (--dev: -e .[dev])
  5. symlink ~/.local/bin/local-stt
- 6. models: local-stt models pull $MODEL (default: small-q8_0) and silero-vad; verify SHA256.
+ 6. models: local-stt models pull parakeet-tdt-0.6b-v3-int8 (the default engine, task 4.5), $MODEL
+    (the whisper-server model; default: small-q8_0) and silero-vad; verify SHA256.
  7. config: if ~/.config/local-stt/config.toml is absent → copy config.example.toml (with the model substituted).
     If ~/.config/local-stt/secret is absent → generate it (umask 077, 32 hex characters).
     Generate whisper-server.env.

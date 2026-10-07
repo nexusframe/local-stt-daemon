@@ -24,6 +24,8 @@ readonly UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 readonly UNITS=(local-stt-whisper.service local-stt-engine.service local-stt.service)
 # Engine services are never enabled: the daemon starts the one stt.engine selects (task 4.3).
 readonly ENGINE_UNITS=(local-stt-whisper.service local-stt-engine.service)
+# The default engine's model (stt.engine = "parakeet"); --model is the whisper-server fallback.
+readonly PARAKEET_MODEL="parakeet-tdt-0.6b-v3-int8"
 
 MODEL="small-q8_0"
 WHISPER_TAG="$DEFAULT_WHISPER_TAG"
@@ -40,7 +42,8 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [--model NAME] [--rebuild-whisper] [--whisper-tag TAG] [--dev] [--no-apt] [--no-enable]
 
-  --model NAME       STT model to download (default: $MODEL)
+  --model NAME       whisper-server model to download (default: $MODEL); the Parakeet
+                     model ($PARAKEET_MODEL) is always downloaded
   --rebuild-whisper  rebuild whisper.cpp even if bin/.whisper-tag matches
   --whisper-tag TAG  whisper.cpp tag to build (default: $DEFAULT_WHISPER_TAG)
   --dev              also install xvfb and the package in editable mode with [dev] extras
@@ -176,7 +179,8 @@ link_command() {
 
 # 6. Models (verified against the pinned SHA256 by `models pull`)
 pull_models() {
-    log "6/9 Downloading models: $MODEL, silero-vad"
+    log "6/9 Downloading models: $PARAKEET_MODEL, $MODEL, silero-vad"
+    "$LOCAL_STT" models pull "$PARAKEET_MODEL"
     "$LOCAL_STT" models pull "$MODEL"
     "$LOCAL_STT" models pull silero-vad
 }
