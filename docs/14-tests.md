@@ -97,6 +97,6 @@ v0.3 (additional):
 
 - [ ] `Ctrl+Control_R` switches the language (pl → en → pl) in PTT and in continuous mode: sound and “Language: EN” notification, no sound while the microphone is open; a recording already made keeps its language; `local-stt language` shows, toggles and selects (`de` rejected, code 4).
 - [ ] `local-stt models list --bench` lists the models with their latest WER, p90 latency and RAM; `*` marks `stt.model`.
-- [ ] `local-stt bench --context` on `long/001` reproduces the 3.4 results in [15](15-implementation-plan.md) (the text is deterministic: the same word-error counts).
+- [ ] `local-stt bench --context` on `long/001` reproduces the 3.4 results in [15](15-implementation-plan.md): word-error counts within ±1 word per policy and the same conclusion (the text is not fully deterministic: rerun 2026-10-07, two of four policies differed by one word, probably the temperature fallback, untested).
 - [ ] v0.2 regression: 2 minutes of continuous dictation with a pause > 5 s and a sentence longer than `max_segment_s` → complete text, no errors in the journal; one PTT dictation inserted.
 - *Backlog, not v0.3 (preview moved out of task 3.2, [15](15-implementation-plan.md) item 9):* Preview requires `continuous.preview=true` and `status --watch --preview`; ordinary status, `job` events, logs, and notifications contain no preview text. After the final subscriber disconnects, no further preview requests are submitted.

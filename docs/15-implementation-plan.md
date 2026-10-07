@@ -145,6 +145,8 @@ Status: 3.7 implemented 2026-10-05; specs updated in [04](04-state-machine.md) Â
 - the 14.4 (v0.3) checklist,
 - continuous-mode WER on the `long/` corpus is no worse than in v0.2 (the duplicate-boundary-word criterion was dropped with task 3.3, the preview-latency one with task 3.2).
 
+Status: checklist completed 2026-10-07, results in [acceptance-v0.3.md](acceptance-v0.3.md); `long/001` WER 16.60 %, equal to v0.2.
+
 ## v0.4 â€” Faster engine (Parakeet)
 
 Basis: ADR-018 (user decisions 2026-10-07). Goal: text appears sooner after the end of speech; ADR-010 (inject only final segments) stays.
