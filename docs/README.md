@@ -25,7 +25,7 @@ Everything runs locally: whisper.cpp (`whisper-server` on `127.0.0.1`) plus a Py
 | 12 | [Logging, privacy, and error handling](12-logging-privacy-errors.md) | what is logged, privacy guarantees, E1–E16 error matrix |
 | 13 | [Benchmarking and model selection](13-benchmark.md) | corpus, metrics (WER/RTF/latency/thermals), matrix, model-selection rule |
 | 14 | [Test strategy](14-tests.md) | test pyramid, required unit tests, Xvfb/E2E, acceptance checklist |
-| 15 | [Implementation plan](15-implementation-plan.md) | stage 0 (measurement) → v0.1 PTT → v0.2 continuous → v0.3 quality; acceptance criteria |
+| 15 | [Implementation plan](15-implementation-plan.md) | stage 0 (measurement) → v0.1 PTT → v0.2 continuous → v0.3 quality → v0.4 faster engine; acceptance criteria |
 
 Suggested reading order:
 

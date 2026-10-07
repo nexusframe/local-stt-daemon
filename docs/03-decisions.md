@@ -181,3 +181,26 @@ Rationale in [02](02-architecture.md) §2.2. All key libraries are blocking.
   Details: [06](06-stt-engine.md) §6.8.
 - **Objection:** a pattern may remove a genuine utterance.
 - **Response:** unconfirmed patterns match only the **entire** segment (`^…$`), and every rejection is logged (DEBUG).
+
+## ADR-018 🧪 Default engine Parakeet TDT 0.6B v3 in a separate process; whisper-server stays as an alternative (v0.4)
+
+- **Context:** Goal (user, 2026-10-07): text should appear sooner; word-by-word output is not required.
+- **Measured 2026-10-07** (scratch scripts outside the repo, AC, `performance`, extra cooling, 4 threads; results and scripts in `~/.local/share/local-stt/bench/parakeet-2026-10-07*/` and `canary-2026-10-07/`):
+
+  | Corpus A (40 utterances) | `small-q8_0` @1000 (2026-10-03) | Parakeet TDT 0.6B v3 int8 (sherpa-onnx 1.13.8) | Canary 1B v2 int8 (onnx-asr 0.12, `pl` forced) |
+  | --- | --- | --- | --- |
+  | WER all / short / medium / long_utt / difficult | 7.4 / 19.6 / 7.1 / 3.9 / 18.0 % | 5.7 / 8.7 / 6.2 / 2.6 / 18.0 % | 4.3 / 0.0 / 2.4 / 2.6 / 23.0 % |
+  | medium p50 / p90 | 3.55 / 3.68 s | 1.18 / 1.41 s | 2.08 / 2.26 s |
+  | 20–24 s utterances | — | 2.4–4.2 s | 7.6–9.3 s |
+  | peak RSS | 467 MB (server) | 1081 MB (Python process) | 1926 MB (Python process) |
+
+  Same WER normalization as `bench` (`local_stt.bench.wer`). Parakeet is deterministic (same file → same text at 1, 4 and 8 threads).
+- **Decision:** `stt.engine = "parakeet"` by default, served by its own systemd service like `whisper-server` (ADR-002: crash isolation, the daemon stays within its RSS budget). `stt.engine = "whisper-server"` stays as a supported alternative. No fallback engine in v0.4 (user decision 2026-10-07); see [15](15-implementation-plan.md) backlog item 10.
+- **Objection:** Parakeet has no language parameter. On the user's own recordings it wrote a code-switched sentence ("Po code review zrób rebase i force push.") in Cyrillic in 3 of 5 takes, and it has no prompt, so `stt.vocabulary_prompt` and the continuous context do nothing.
+- **Response:**
+  - all 40 Polish corpus-A utterances and 5 of the user's English sentences came out in the right language (English 0 % WER with no switch, Whisper needs `en`),
+  - code-switched speech is weak in every engine tested (5 sentences: Whisper 24 %, Parakeet 37 %, Canary 39 % WER); Whisper never changes script but garbles the fast takes as well,
+  - the context tail moved WER by under 1 point (task 3.4), so losing it costs little; vocabulary biasing (sherpa-onnx hotwords) is untested — it crashed without a `bpe.vocab` file,
+  - whisper-server remains one config key away.
+- **Further costs:** ~1.1 GB RSS (N1 must be revised); on non-speech it outputs short English fillers ("Yeah.", "Mm-mm.") in 6 of 10 clips, where Whisper hallucinated in 10 of 10; the sherpa-onnx export fails on a 6-minute input (irrelevant with `vad.max_segment_s ≤ 28`).
+- **Revisit:** if Cyrillic or wrong-language output bothers the user in daily use (backlog item 10), or if the v0.4 acceptance fails.

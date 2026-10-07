@@ -143,7 +143,27 @@ Status: 3.7 implemented 2026-10-05; specs updated in [04](04-state-machine.md) �
 - the 14.4 (v0.3) checklist,
 - continuous-mode WER on the `long/` corpus is no worse than in v0.2 (the duplicate-boundary-word criterion was dropped with task 3.3, the preview-latency one with task 3.2).
 
-## After v0.3 — backlog (no commitments)
+## v0.4 — Faster engine (Parakeet)
+
+Basis: ADR-018 (user decisions 2026-10-07). Goal: text appears sooner after the end of speech; ADR-010 (inject only final segments) stays.
+
+| # | Task | Notes |
+|---|---|---|
+| 4.1 | **Library choice:** run Parakeet TDT 0.6B v3 int8 through both `sherpa-onnx` and `onnx-asr` on corpus A (WER, p50/p90, RSS). Take `onnx-asr` if it is within 0.5 pp WER and 10 % latency of `sherpa-onnx` (it also runs Canary, the candidate fallback), otherwise `sherpa-onnx` | measured with sherpa-onnx only so far (ADR-018) |
+| 4.2 | **Engine service** `local-stt-engine.service`: a small Python server holding the model, loopback-only with the random request path from the `secret` (as ADR-002), `health` + `inference` mirroring the subset of 06 §6.5 the daemon uses; systemd restart policy (N9) | ADR-002, 06 |
+| 4.3 | **`ParakeetEngine`** in `local_stt/stt/` behind `SttEngine` (N7); `stt.engine = "parakeet"` (default) or `"whisper-server"`; switching engines on `reload` stops one service and starts the other. `language` and `prompt` are ignored by Parakeet: document it, and decide whether the language hotkey is disabled or kept for whisper-server only | 06 §6.9, 09 |
+| 4.4 | **Text filtering:** add Parakeet's non-speech fillers ("Yeah.", "Mm.", "Mm-mm.") as whole-utterance patterns; count outputs with non-Latin letters (Cyrillic) in the log and `status`, but inject them unchanged — the count is the evidence for backlog item 10 | ADR-017, 06 §6.8 |
+| 4.5 | **Install, models, doctor:** `install.sh` downloads the model with a pinned sha256 (`models.sha256`), installs the service; `doctor` checks the service and model; `models list --bench` and `bench` accept the new engine | 06, 11, 13 |
+| 4.6 | **Spec updates:** N1 (RAM per engine), N5 (the new listener), 02 architecture, 06 (new engine section), 09 (`stt.engine`, model keys), 13, 14 | 01, 02, 06, 09, 13, 14 |
+
+**v0.4 acceptance** (thresholds approved by the user 2026-10-07):
+
+- corpus A WER with the default engine ≤ 7.4 % (the `small-q8_0` result),
+- N2: p90 `total` from ≥ 20 PTT dictations of 4–10 s, target ≤ 2.0 s (v0.1: 3.70 s),
+- N3: soak RTF ≤ 0.5 on AC `performance`, and a `power-saver` run recorded (it fails with Whisper),
+- `stt.engine = "whisper-server"` still passes the v0.2 soak (no regression of the alternative).
+
+## Backlog (no commitments)
 
 Ordered by user value:
 
@@ -160,3 +180,4 @@ Ordered by user value:
    - closing the connection does not free the server: whisper-server sets an `abort_callback` on client disconnect, yet a 4.2 s request sent right after dropping a 13.2 s one 0.3–3 s into it took 5.2–7.9 s (7 tries), i.e. it waited for the dropped request. Transcripts were unchanged;
    - so a final segment usually waits for a preview in flight: about +1.5 s on average and up to ~3.5 s on a ~3 s latency, roughly +50 %. Continuous mode already runs at RTF 0.54 in the soak (N3 passes only on `performance`), and back-to-back previews would keep the CPU busy for as long as the user speaks.
    Revisit on a faster machine, after a whisper.cpp upgrade (check the abort again), or with a cheaper design (e.g. a second server with a small model, or at most one preview per utterance).
+10. **Fallback engine for wrong-script output** (from ADR-018; only if Cyrillic output bothers the user in practice — the v0.4 counter, task 4.4, provides the evidence). When the default engine's text contains non-Latin letters, re-run the same audio through an engine with a forced language (candidate: Canary 1B v2, `pl` forced: corpus A WER 4.3 %, ~1.9 GB RSS, no Cyrillic in the 5 takes of the failing sentence). Configurable memory mode (user decision 2026-10-07): `resident` (both models loaded, ~3 GB), `on_demand` (load the fallback only when needed, ~2.3 s load + ~1 s decode, unload after idle), `off` (single model); plus the existing `stt.engine = "whisper-server"` as the lowest-RAM option (~0.5 GB). `on_demand` when memory is short: check `MemAvailable` before loading and cap the service with systemd `MemoryMax`; if the load is skipped or fails, inject the default engine's text unchanged and notify once.

@@ -88,7 +88,7 @@ Pressing `Esc` while holding PTT cancels the recording. Taps shorter than `ptt.m
 - Wayland, KDE, and other distributions (they may work, but are not tested).
 - GPU, CUDA, OpenVINO.
 - Partial “live” transcription that corrects already injected text (an explicitly enabled preview in `status --watch`, never injected or sent in a notification, was planned for v0.3 as task 3.2 and moved to the backlog after a measurement — see [03](03-decisions.md) ADR-010 and [15](15-implementation-plan.md) backlog item 9).
-- Voice commands, GUI, tray, and LLM post-processing — only as extension points ([15](15-implementation-plan.md), “After v0.3” section).
+- Voice commands, GUI, tray, and LLM post-processing — only as extension points ([15](15-implementation-plan.md), “Backlog” section).
 - `PAUSE`/`RESUME` actions from the preliminary design (§9): deferred. Continuous mode is toggled with a single shortcut and queue state is preserved, so a separate pause adds nothing. We will revisit this if preserving prompt context between sessions becomes necessary.
 - Configurable `sample_rate`/`channels` (preliminary design §5.1): rejected; see [05](05-audio-and-vad.md) §5.2.
 - Running as root or as any system service (except apt packages during installation).
