@@ -11,7 +11,8 @@
 ├── bin/whisper-bench
 ├── bin/.whisper-tag              # tag from which the binaries were built
 └── models/
-    ├── ggml-small-q8_0.bin
+    ├── parakeet-tdt-0.6b-v3-int8/   # default engine (v0.4): 4 files, 639 MiB
+    ├── ggml-small-q8_0.bin          # whisper-server model (--model)
     └── silero_vad.onnx
 ~/.local/bin/local-stt  →  ~/.local/share/local-stt/venv/bin/local-stt   (symlink)
 ~/.config/local-stt/
@@ -20,7 +21,8 @@
 └── whisper-server.env            # 0600, generated from config.toml
 ~/.config/systemd/user/
 ├── local-stt.service
-└── local-stt-whisper.service
+├── local-stt-whisper.service
+└── local-stt-engine.service      # Parakeet engine server (v0.4)
 $XDG_RUNTIME_DIR/local-stt/       # created at runtime: control.sock, sounds/
 ```
 
@@ -47,7 +49,8 @@ Nothing is installed outside `$HOME` except apt packages.
 |---|---|---|
 | `numpy` | audio buffers | |
 | `sounddevice` | capture | requires `libportaudio2` |
-| `onnxruntime` | Silero VAD | CPU wheel, no torch |
+| `onnxruntime` | Silero VAD, Parakeet | CPU wheel, no torch |
+| `onnx-asr` | Parakeet engine server (v0.4, task 4.2) | pinned 0.12.0 in `requirements.lock` |
 | `python-xlib` | hotkeys, clipboard, XTest | pure Python |
 | `soxr` | fallback resampling | wheel |
 
@@ -81,16 +84,20 @@ Default tag: v1.9.4.
  9. local-stt doctor — result shown at the end of installation.
 ```
 
-*Implementation (task 1.14; user decision 2026-10-03 for `--no-enable`).* The default `--model` is `small-q8_0` (the script had `small-q5_1`, contradicting this list and the config default). `--model` must match `[A-Za-z0-9._-]+`. Step 7 substitutes the model into the first `model = "…"` line of `config.example.toml` (that line is `stt.model`; the VAD model comes later), keeps an existing `config.toml` unchanged, and generates `whisper-server.env` with the venv's Python through `local_stt.config` (an invalid config stops the installation with the validator messages). Step 8 installs the units from `systemd/` and replaces `%h/projects/local-stt-daemon` in `Documentation=` with the actual checkout. With `--no-enable`, nothing is enabled and only units that are already running are restarted (`systemctl --user try-restart`); otherwise both are enabled and restarted in order (whisper first). A failed start is a WARNING, so step 9 still runs `doctor`, which shows the cause; a `doctor` FAIL is also only a WARNING. `uninstall.sh` removes `~/.local/bin/local-stt` only if it is our symlink to the venv, and also removes `$XDG_RUNTIME_DIR/local-stt`. **Tested on the reference machine 2026-10-03:** a full install ends with `doctor` 0 FAIL / 0 WARN; a rerun is idempotent (config kept); `reload` with `stt.threads` 4 → 8 → 4 rewrites the env file and restarts the server through `systemctl` (the restart was previously untested); `systemctl --user reload local-stt` reloads; `kill -9` on the daemon → restarted (`NRestarts=1`); an invalid config → `status=78/CONFIG`, not restarted; `uninstall.sh` without `--purge` keeps models, the whisper.cpp build and the config, and a reinstall works.
+*Implementation (task 1.14; user decision 2026-10-03 for `--no-enable`).* The default `--model` is `small-q8_0` (the script had `small-q5_1`, contradicting this list and the config default). `--model` must match `[A-Za-z0-9._-]+`. Step 7 substitutes the model into the first `model = "…"` line of `config.example.toml` (that line is `stt.model`; the VAD model comes later), keeps an existing `config.toml` unchanged, and generates `whisper-server.env` with the venv's Python through `local_stt.config` (an invalid config stops the installation with the validator messages). Step 8 installs the units from `systemd/` and replaces `%h/projects/local-stt-daemon` in `Documentation=` with the actual checkout. With `--no-enable`, nothing is enabled, and only units that are already running are restarted (`systemctl --user try-restart`). Otherwise step 8 runs as listed above. Since task 4.3, it enables only `local-stt.service`, and the daemon starts the engine unit. A failed start is a WARNING, so step 9 still runs `doctor`, which shows the cause; a `doctor` FAIL is also only a WARNING. `uninstall.sh` removes `~/.local/bin/local-stt` only if it is our symlink to the venv, and also removes `$XDG_RUNTIME_DIR/local-stt`. **Tested on the reference machine 2026-10-03:** a full install ends with `doctor` 0 FAIL / 0 WARN; a rerun is idempotent (config kept); `reload` with `stt.threads` 4 → 8 → 4 rewrites the env file and restarts the server through `systemctl` (the restart was previously untested); `systemctl --user reload local-stt` reloads; `kill -9` on the daemon → restarted (`NRestarts=1`); an invalid config → `status=78/CONFIG`, not restarted; `uninstall.sh` without `--purge` keeps models, the whisper.cpp build and the config, and a reinstall works.
 
 `scripts/uninstall.sh [--purge]`:
 
-- always: `disable --now` both services and remove the units, symlink, and venv,
+- always: `disable --now` the three units (`local-stt`, `local-stt-whisper`, `local-stt-engine`) and remove the units, symlink, and venv,
 - `--purge`: also remove `~/.local/share/local-stt` (models, whisper.cpp) and `~/.config/local-stt`.
 
 Without `--purge`, models and config are retained because downloading or recreating them is costly.
 
-## 11.4 `local-stt-whisper.service`
+## 11.4 Engine units
+
+Two units serve the two engines. They share `stt.port`, so only one runs at a time. Neither unit is enabled: the daemon starts the unit that `stt.engine` selects (§11.5).
+
+### `local-stt-whisper.service`
 
 ```ini
 [Unit]
@@ -123,6 +130,45 @@ WantedBy=graphical-session.target
 - **`MemoryMax=2G`.** Protects the system from a config mistake (for example, `large-v3` f16). The limit will be exceeded and the server will terminate with a clear log instead of forcing the system into swap. We do not set `MemoryHigh`, because memory throttling would distort latency rather than cap it.
 - **`$LOCAL_STT_WHISPER_ARGS` without braces.** systemd splits the value on whitespace into separate arguments. Paths under `$HOME` therefore cannot contain spaces; `install.sh` checks this.
 - `whisper-server` listens on TCP, so `PrivateNetwork=` cannot be used: the daemon would be unable to access it. Loopback-only access is enforced by hard-coding host `127.0.0.1` in the `whisper-server.env` generator and verifying it in `doctor`.
+
+### `local-stt-engine.service` (v0.4, tasks 4.2–4.5)
+
+```ini
+[Unit]
+Description=local-stt: Parakeet inference server (loopback only)
+Documentation=file://%h/projects/local-stt-daemon/docs/06-stt-engine.md
+PartOf=graphical-session.target
+After=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+# READY=1 is sent once the model is loaded and the socket listens (~3 s).
+Type=notify
+ExecStart=%h/.local/share/local-stt/venv/bin/local-stt engine-server
+Restart=on-failure
+RestartSec=2
+# 78 = config error, missing secret or model: a restart cannot fix it.
+RestartPreventExitStatus=78
+Environment=PYTHONUNBUFFERED=1
+Nice=5
+# Parakeet int8 via onnx-asr peaks at ~1.55 GB RSS on corpus A (task 4.1).
+MemoryMax=2500M
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+LimitCORE=0
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+- **Same package and venv as the daemon** (user decision 2026-10-07). The server reads `config.toml` and `secret` itself, so it needs no env file. Details: [06](06-stt-engine.md) §6.10.
+- **`Type=notify`.** The server sends `READY=1` after the model loads and the socket listens. Thus `systemctl --user start` returns when the server can answer.
+- **`RestartPreventExitStatus=78`.** A missing secret or model directory stops the restarts. `doctor` shows the cause.
+- **`MemoryMax=2500M`.** This is above the measured peak (1.55 GB) and N1 (1.6 GB). It stops a leak before the system uses swap.
+- **`Nice=5`** and the other settings are the same as for whisper-server.
+- **Loopback only (N5).** The host `127.0.0.1` is hard-coded in `engine_server.py`. `doctor` checks the port.
 
 ## 11.5 `local-stt.service`
 
@@ -164,17 +210,17 @@ WantedBy=graphical-session.target
 ## 11.6 Operations
 
 ```bash
-systemctl --user status local-stt local-stt-whisper
+systemctl --user status local-stt local-stt-engine   # or local-stt-whisper
 journalctl --user -u local-stt -f                   # daemon logs
 journalctl --user -u local-stt -p warning           # warnings and errors only (sd-daemon priorities)
 systemctl --user reload local-stt                   # = local-stt reload
-systemctl --user restart local-stt-whisper          # manually (reload does this for ⟳ changes)
+systemctl --user restart local-stt-engine           # manually (reload does this for ⟳ changes)
 systemctl --user stop local-stt                     # disable for this session
-systemctl --user disable --now local-stt local-stt-whisper   # disable autostart
+systemctl --user disable --now local-stt            # disable autostart (the engine units are not enabled)
 local-stt daemon --log-level DEBUG                  # manually, in foreground (first: systemctl --user stop local-stt)
 ```
 
 ## 11.7 Updating
 
-- Code: `git pull && scripts/install.sh` — rebuilds the venv. Both services are restarted as specified in installation step 8 to apply the generated env; only the whisper.cpp build is skipped if the tag has not changed and `--rebuild-whisper` was not specified.
+- Code: `git pull && scripts/install.sh` — rebuilds the venv. Installation step 8 restarts the services, so they use the new code and the generated env; only the whisper.cpp build is skipped if the tag has not changed and `--rebuild-whisper` was not specified.
 - whisper.cpp: `scripts/install.sh --whisper-tag vX.Y.Z --rebuild-whisper`, followed by `local-stt bench --quick` to compare with the previous result stored in `~/.local/share/local-stt/bench/`.

@@ -1,16 +1,16 @@
 # local-stt configuration (docs/09-configuration.md).
 # Location: ~/.config/local-stt/config.toml (or --config PATH / $LOCAL_STT_CONFIG).
 # Every value below is the default; delete a key to keep the default. Unknown keys are errors.
-# Apply changes with `local-stt reload`. Keys marked ⟳ regenerate whisper-server.env and
-# restart local-stt-whisper.service once the daemon is idle (docs/04-state-machine.md §4.6).
+# Apply changes with `local-stt reload`. Keys marked ⟳ restart the engine server once the
+# daemon is idle (docs/04-state-machine.md §4.6). Keys per engine: docs/09-configuration.md §9.2a.
 
 [stt]
-engine = "parakeet"                  # no language or prompt input (ADR-018); or "whisper-server"
+engine = "parakeet"                  # ⟳ no language or prompt input (ADR-018); or "whisper-server"
 port = 8178                          # ⟳ loopback port; the host is always 127.0.0.1
 model = "small-q8_0"                 # ⟳ whisper-server: ggml-<model>.bin in models_dir (docs/benchmark-results.md)
 models_dir = "~/.local/share/local-stt/models"   # ⟳ no whitespace, quotes, backslashes or $
 languages = ["pl", "en"]             # first = startup; the language hotkey cycles them; sent with every request
-threads = 4                          # ⟳ -t for whisper-server
+threads = 4                          # ⟳ inference threads of the engine server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk." (max 300 characters)
 continuous_context = true            # append the end of the previous segment to the prompt

@@ -1,4 +1,6 @@
-# 06. STT engine — whisper.cpp
+# 06. STT engines — whisper.cpp and Parakeet
+
+The daemon uses one engine server at a time. `stt.engine` selects it ([03](03-decisions.md) ADR-018). Since v0.4 the default is Parakeet (§6.10). Sections 6.1–6.7 describe `whisper-server`. Sections 6.8 and 6.9 apply to both engines.
 
 Knowledge baseline: whisper.cpp **v1.9.4** (2026-09-11). The facts below were verified against `examples/server/server.cpp` from that tag, which differs from the outdated server README in several places.
 
@@ -37,11 +39,18 @@ Binaries: `whisper-server`, `whisper-cli`, `whisper-bench` (plus `quantize` if i
 
 Download: `local-stt models pull <name>` downloads `ggml-<name>.bin` from `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/` (the same source as `models/download-ggml-model.sh`) and verifies its SHA256 checksum against `src/local_stt/models.sha256`. The checksum file is package data (read through `importlib.resources`), so the command works identically from the repository and from the installed venv, which does not contain `scripts/`. A file with an invalid checksum is deleted.
 
+*Parakeet model and download rules (task 4.5).* `local-stt models pull parakeet-tdt-0.6b-v3-int8` downloads a **directory** model: four files from `istupakov/parakeet-tdt-0.6b-v3-onnx` on Hugging Face. The URLs name a fixed revision (`8f23f0c0`), so all four files come from one commit. `models.sha256` pins each file as `parakeet-tdt-0.6b-v3-int8/<file>`. The directory holds `encoder-model.int8.onnx` (652 MB), `decoder_joint-model.int8.onnx`, `vocab.txt` and `config.json` (639 MiB in total).
+
+- Each file downloads to `<file>.part`. The files get their final names only after **all** checksums are correct. Thus a failed download never leaves a mix of old, new and missing files.
+- Only missing or incorrect files are downloaded again.
+- `list` and `verify` show the directory as one model. It is `missing` when one file is missing.
+- **Resume (task 4.5).** The Hugging Face CDN can close a long transfer early. On 2026-10-08 it dropped one of three downloads of the 652 MB encoder. `urllib` does not report this as an error, so the download compares the received bytes with `Content-Length`. After a short transfer or a connection error, it continues with an HTTP `Range` request. It makes 3 attempts per file. If the server ignores `Range` (status 200, not 206), the download starts again from byte 0. An HTTP error status (for example 404) stops the download at once. This applies to all models.
+
 | Model (`ggml-<name>.bin` file) | Size | Polish WER FLEURS / CV9 (Whisper paper) | Role |
 |---|---:|---|---|
 | `base-q5_1` | 57 MiB | 30.8 / 32.8 (base) | test/fallback only — **too weak for Polish** |
 | `small-q5_1` | 181 MiB | 14.7 / 16.9 (small) | initial default; benchmark runner-up |
-| `small-q8_0` | 252 MiB | same | **default** (stage-0 benchmark, with `audio_ctx = 1000`) |
+| `small-q8_0` | 252 MiB | same | **default `stt.model`** for whisper-server (stage-0 benchmark, with `audio_ctx = 1000`) |
 | `small` (f16) | 465 MiB | same | small quality baseline |
 | `medium-q5_0` | 514 MiB | 8.0 / 10.1 (medium) | PTT candidate if latency permits |
 | `large-v3-turbo-q5_0` | 547 MiB | no figures in the paper; better than medium in OpenAI charts | PTT candidate with a fixed `audio_ctx` |
@@ -248,7 +257,65 @@ class SttEngine(Protocol):
 
 Implementations:
 
-- `WhisperServerEngine` (v0.1)
+- `ParakeetEngine` (v0.4, default; §6.10) — `stt.engine = "parakeet"`
+- `WhisperServerEngine` (v0.1) — `stt.engine = "whisper-server"`
 - `FakeEngine` (tests: returns predefined text after a delay)
 
-Implementation selection: `stt.engine = "whisper-server"`. A new engine (such as faster-whisper in a separate process) is added as a new class plus an entry in the `local_stt/stt/__init__.py` registry, without changing the rest of the code.
+The registry in `local_stt/stt/__init__.py` has two maps. `ENGINES` maps `stt.engine` to the client class. `ENGINE_UNITS` maps it to the systemd unit that serves the engine. A new engine (such as faster-whisper in a separate process) is a new class plus an entry in both maps. The rest of the code does not change (N7).
+
+Other code also knows the engine (tasks 4.3–4.5):
+
+- the startup model check ([09](09-configuration.md) §9.3),
+- the language switch ([04](04-state-machine.md) §4.6),
+- the Parakeet filler rule (6.8 rule 5),
+- `doctor`, `transcribe` and `bench` ([10](10-cli-ipc-status.md), [13](13-benchmark.md)).
+
+## 6.10 Parakeet engine server (v0.4)
+
+Model: Parakeet TDT 0.6B v3, int8 ONNX export (`istupakov/parakeet-tdt-0.6b-v3-onnx`), in `stt.models_dir/parakeet-tdt-0.6b-v3-int8/` (6.3). Library: `onnx-asr` 0.12.0 with onnxruntime ([15](15-implementation-plan.md) task 4.1). The model has no language input and no prompt: it detects the language itself ([03](03-decisions.md) ADR-018).
+
+### Process
+
+`local-stt-engine.service` runs `local-stt engine-server` ([11](11-daemon-systemd-installation.md) §11.4). The server is in our package and uses the daemon's venv (`src/local_stt/engine_server.py`, task 4.2):
+
+1. It reads the config and the request path from `~/.config/local-stt/secret`.
+2. It loads the model with `stt.threads` threads (2.4–5.1 s; 7.3 s on the first, cold read of the files).
+3. It listens on `127.0.0.1:stt.port` (N5) and sends `READY=1` to systemd.
+
+The model loads before the socket listens, as in whisper-server v1.9.4. Thus a client sees connection errors and then 200, never 503 (6.5).
+
+Exit codes: `78` when the secret or the model directory is missing (systemd does not restart, `RestartPreventExitStatus=78`); `1` when the port is taken. systemd stops the server with `SIGTERM`.
+
+### HTTP contract
+
+The server implements the subset of 6.5 that the daemon uses. Thus the client is `WhisperServerEngine` with small changes (`ParakeetEngine`):
+
+| Request | Response |
+|---|---|
+| `GET <request-path>/health` | `200 {"status": "ok"}`, also while an inference runs |
+| `POST <request-path>/inference`, multipart, field `file` = 16 kHz mono s16 WAV | `200` `verbose_json`: `text`, `duration`, and one segment from 0 to the audio duration; an empty result has no segments |
+| a wrong path | `404` |
+| no `multipart/form-data`, no `file` field, not WAV, another sample rate | `400` |
+| no `Content-Length` / an empty body or a body > 64 MiB | `411` / `413` |
+| an exception in the model | `500`; the server continues |
+
+- The server decodes one request at a time.
+- It ignores the other form fields (`language`, `prompt`, `audio_ctx`, temperatures).
+- `ParakeetEngine` never sends a prompt and always sends `audio_ctx = 0`. Thus `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.audio_ctx` and `stt.beam_size` have no effect under Parakeet.
+- `avg_logprob` and `no_speech_prob` are `null`. Thus rule 1 of 6.8 never rejects a Parakeet segment. The VAD gate and rule 5 handle non-speech.
+- The server logs durations and processing times, never the text ([12](12-logging-privacy-errors.md)).
+
+### Differences for the user
+
+- The language hotkey and `local-stt language` are rejected with `language_unsupported` (exit code 4). `status` shows the language `auto` ([04](04-state-machine.md) §4.6, [10](10-cli-ipc-status.md)).
+- Code-switched speech (Polish with English terms) can come out in Cyrillic. Such output is injected unchanged and counted (6.8, `stats.jobs_non_latin`).
+- RAM: 1.13–1.19 GB RSS after load, peak 1.55 GB on corpus A (N1: ≤ 1.6 GB). The unit has `MemoryMax=2500M`.
+- Latency (task 4.4, live, 11 PTT jobs of 1.5–5.1 s): 0.47–0.82 s from key release to injected text. Whisper `small-q8_0` had p90 3.70 s in v0.1.
+
+### Temporary server
+
+`TemporaryParakeetServer` (`stt/parakeet.py`) starts a private engine server for `transcribe --model parakeet-tdt-0.6b-v3-int8` and `bench`, like `TemporaryWhisperServer` (task 4.5):
+
+- `nice -n 5 python -m local_stt engine-server --port P --threads T --model-dir D` on a random free loopback port.
+- The random request path goes in the environment variable `LOCAL_STT_REQUEST_PATH`, not on the command line, because other users can read command lines (`ps`).
+- When the port is taken, the server logs `couldn't bind` and exits 1. The caller then tries another port (at most 3 attempts).

@@ -4,12 +4,15 @@
 
 `local-stt` is a background program (daemon) for Ubuntu. It converts Polish speech to text **entirely offline** and types that text into the currently active window.
 
-It consists of two processes:
+It consists of two processes: the daemon and one engine server. `stt.engine` selects the engine server (v0.4, [03](03-decisions.md) ADR-018):
 
 | Process | Language | Role |
 |---|---|---|
-| `local-stt-whisper.service` | C++ (the ready-made `whisper-server` from whisper.cpp) | keeps the Whisper model in memory and transcribes audio sent over `127.0.0.1` |
+| `local-stt-engine.service` (default) | Python 3.12 (our code, `onnx-asr`) | keeps the Parakeet TDT 0.6B v3 model in memory and transcribes audio sent over `127.0.0.1` |
+| `local-stt-whisper.service` (alternative) | C++ (the ready-made `whisper-server` from whisper.cpp) | keeps the Whisper model in memory and transcribes audio sent over `127.0.0.1` |
 | `local-stt.service` | Python 3.12 (our code) | hotkeys, microphone, VAD, state machine, text post-processing, text injection, CLI/status |
+
+Only one engine server runs at a time. The daemon starts the selected one ([11](11-daemon-systemd-installation.md) §11.5).
 
 There is also the `local-stt` CLI tool (full list: [10](10-cli-ipc-status.md) §10.1).
 
@@ -73,12 +76,12 @@ Pressing `Esc` while holding PTT cancels the recording. Taps shorter than `ptt.m
 
 | ID | Target | How it is measured |
 |---|---|---|
-| N1 | RAM: Python daemon ≤ 150 MB RSS; `whisper-server` with the selected model ≤ 1 GB RSS | `local-stt bench`, `ps -o rss` |
+| N1 | RAM: Python daemon ≤ 150 MB RSS; `whisper-server` with the selected model ≤ 1 GB RSS; Parakeet engine server ≤ 1.6 GB RSS (task 4.6, user decision 2026-10-08; measured peak 1.55 GB on corpus A, 15 task 4.1) | `local-stt bench` (peak server RSS), `ps -o rss` |
 | N2 | PTT: p90 latency from key release to injector completion, including clipboard handling (`total` in logs), ≤ 5 s for 4–10 s utterances (default model). Raised from 2.5 s on 2026-09-17 after stage-0 measurements (13 §13.5) | `bench` measures the stage up to ready text; acceptance: p90 `total` from at least 20 complete dictations with successful injection, including audio finalization and clipboard handling (13 §13.5) |
 | N3 | Continuous: average RTF ≤ 0.5 in a 10-minute test; the queue does not grow monotonically | `bench --soak` |
 | N4 | Continuous in silence: daemon CPU ≤ 5% of one core | `pidstat` |
-| N5 | no audio or text byte leaves the host; `whisper-server` listens only on `127.0.0.1` | `ss -ltnp`, `doctor` |
-| N6 | model replacement without rebuilding: change `stt.model` + `local-stt reload` | [06](06-stt-engine.md) |
+| N5 | no audio or text byte leaves the host; the engine server (`whisper-server` or the Parakeet server) listens only on `127.0.0.1` | `ss -ltnp`, `doctor` |
+| N6 | model or engine replacement without rebuilding: change `stt.model` or `stt.engine` + `local-stt reload` | [06](06-stt-engine.md) |
 | N7 | STT engine replacement without changes outside the `stt/` module | `SttEngine` interface |
 | N8 | all configuration in `~/.config/local-stt/config.toml` | [09](09-configuration.md) |
 | N9 | restart within ≤ 5 s after a process failure (systemd) | manual `kill -9` test |

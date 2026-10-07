@@ -195,12 +195,16 @@ Rationale in [02](02-architecture.md) §2.2. All key libraries are blocking.
   | peak RSS | 467 MB (server) | 1081 MB (Python process) | 1926 MB (Python process) |
 
   Same WER normalization as `bench` (`local_stt.bench.wer`). Parakeet is deterministic (same file → same text at 1, 4 and 8 threads).
-- **Decision:** `stt.engine = "parakeet"` by default, served by its own systemd service like `whisper-server` (ADR-002: crash isolation, the daemon stays within its RSS budget). `stt.engine = "whisper-server"` stays as a supported alternative. No fallback engine in v0.4 (user decision 2026-10-07); see [15](15-implementation-plan.md) backlog item 10.
+  *Library (task 4.1, 2026-10-07):* the engine server uses `onnx-asr` 0.12.0, not `sherpa-onnx`. On corpus A it gave WER 5.57 %, medium p50 / p90 1.01 / 1.24 s, and peak RSS 1.55 GB. Details: [15](15-implementation-plan.md) task 4.1.
+- **Decision:** `stt.engine = "parakeet"` by default, served by its own systemd service `local-stt-engine.service` like `whisper-server` (ADR-002: crash isolation, the daemon stays within its RSS budget). Details: [06](06-stt-engine.md) §6.10. `stt.engine = "whisper-server"` stays as a supported alternative. No fallback engine in v0.4 (user decision 2026-10-07); see [15](15-implementation-plan.md) backlog item 10.
 - **Objection:** Parakeet has no language parameter. On the user's own recordings it wrote a code-switched sentence ("Po code review zrób rebase i force push.") in Cyrillic in 3 of 5 takes, and it has no prompt, so `stt.vocabulary_prompt` and the continuous context do nothing.
 - **Response:**
   - all 40 Polish corpus-A utterances and 5 of the user's English sentences came out in the right language (English 0 % WER with no switch, Whisper needs `en`),
   - code-switched speech is weak in every engine tested (5 sentences: Whisper 24 %, Parakeet 37 %, Canary 39 % WER); Whisper never changes script but garbles the fast takes as well,
   - the context tail moved WER by under 1 point (task 3.4), so losing it costs little; vocabulary biasing (sherpa-onnx hotwords) is untested — it crashed without a `bpe.vocab` file,
   - whisper-server remains one config key away.
-- **Further costs:** ~1.1 GB RSS (N1 must be revised); on non-speech it outputs short English fillers ("Yeah.", "Mm-mm.") in 6 of 10 clips, where Whisper hallucinated in 10 of 10; the sherpa-onnx export fails on a 6-minute input (irrelevant with `vad.max_segment_s ≤ 28`).
+- **Further costs:**
+  - RAM: 1.13 GB RSS after load and a 1.55 GB peak with `onnx-asr`. N1 now has a separate limit of 1.6 GB for this server (task 4.6, user decision 2026-10-08).
+  - Non-speech: Parakeet can output short English fillers. **Correction (task 4.4, 2026-10-07):** the first claim was "fillers in 6 of 10 non-speech clips, Whisper hallucinated in 10 of 10". Those clips were the quietest windows of the continuous reading, and 19 of the 20 quietest windows contain speech. Thus that comparison is not evidence about non-speech. On 8 real non-speech takes, the VAD gate dropped 6. The cough gave "Cool." and the humming gave "Hm", "Mm.", "Um". Rule 5 of [06](06-stt-engine.md) §6.8 drops these results.
+  - The sherpa-onnx export fails on a 6-minute input. Continuous segments are short (`vad.max_segment_s ≤ 28`). A PTT recording can be as long as `ptt.max_duration_s` (120 s). Inputs longer than 24 s were not tested with `onnx-asr`.
 - **Revisit:** if Cyrillic or wrong-language output bothers the user in daily use (backlog item 10), or if the v0.4 acceptance fails.

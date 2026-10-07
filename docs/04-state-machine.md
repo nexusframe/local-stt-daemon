@@ -214,9 +214,9 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
 | **server restart** ⟳ | `stt.engine`, `stt.model`, `stt.models_dir`, `stt.threads`, `stt.beam_size`, `stt.port`, `stt.extra_server_args`, `stt.audio_ctx`, `stt.audio_ctx_margin` (a server only ever sees one fixed `audio_ctx` plus the full window, 06 §6.7) | see below |
 
 3. **Server restart** (⟳):
-   - the daemon generates a new `whisper-server.env` ([09](09-configuration.md) §9.4); *implementation (task 1.10):* the file is written when the restart actually starts (`ReloadTarget.restart_server`), not when the reload arrives, so a second reload during the wait simply wins and, until then, the env file still matches the running server; a write failure (e.g. unreadable `secret`) is reported as `ServerRestartDone(1)` → E16,
+   - under whisper-server, the daemon generates a new `whisper-server.env` ([09](09-configuration.md) §9.4). The Parakeet server reads the config itself, so it needs no env file (task 4.3); *implementation (task 1.10):* the file is written when the restart actually starts (`ReloadTarget.restart_server`), not when the reload arrives, so a second reload during the wait simply wins and, until then, the env file still matches the running server; a write failure (e.g. unreadable `secret`) is reported as `ServerRestartDone(1)` → E16,
    - waits until `mode == IDLE` and the queue is empty (or `engine == DOWN`, in which case a restart is needed anyway),
-   - pauses the pipeline and runs `systemctl --user restart local-stt-whisper.service` in a helper thread (the Controller does not block), which reports `ServerRestartDone`,
+   - pauses the pipeline and starts a helper thread, so the Controller does not block. The thread stops the unit of the other engine. Then it runs `systemctl --user restart` on the unit of `stt.engine`: `local-stt-engine.service` for Parakeet, `local-stt-whisper.service` for whisper-server. It reports `ServerRestartDone` with the exit code of the restart. Thus a change of `stt.engine` switches the engine server (task 4.3),
    - switches the client to the new `port` and re-applies the live components with the effective config (the restart's server keys + live keys reloaded in the meantime, so no component keeps an older config), sets `engine = STARTING`, and resumes the pipeline after `READY`; exit code ≠ 0 or no `READY` within `startup_timeout_s` → error E16 ([12](12-logging-privacy-errors.md)).
    - `stt.models_dir` also affects the VAD model path, which is applied like the “at IDLE” group.
 
@@ -227,6 +227,7 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
 
 `LanguageSwitch` is handled in every mode; it changes only the active `language`, never the config file (ADR-008):
 
+- Under Parakeet, every `LanguageSwitch` is rejected with `language_unsupported`, and the notification is “Language: automatic (Parakeet)”. Parakeet has no language input (task 4.3, user decision 2026-10-07). The rules below apply to whisper-server.
 - `target` None moves to the next language of `stt.languages`, after the last back to the first; a `target` in the list selects it; any other code → `bad_language`, nothing changes.
 - A job takes the language active when its recording started (PTT: at `PttPressed`) or when its segment arrived (continuous: at `SegmentReady`), so jobs already recorded or queued keep theirs. The pipeline sends the job's language and drops the continuous prompt context when it differs from the previous segment's (06 §6.6).
 - Feedback: the `language` / `language_alt` sound only while the microphone is closed (in continuous mode or during PTT the tone would be recorded), and the notification “Language: XX” with key `language` (10 §10.6). Subscribers receive `{"event": "language", ...}`.

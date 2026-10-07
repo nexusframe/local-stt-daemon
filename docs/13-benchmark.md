@@ -73,13 +73,15 @@ The `long/NNN.words.json` reference contains the words actually spoken and manua
 
 For each configuration, `local-stt bench` starts a **temporary** `whisper-server` on a random free port (the OS picks it: bind a socket to `127.0.0.1:0`, read the port, close the socket, pass it to `--port`; if the server fails to bind in the meantime, retry with a new port, at most 3 attempts), so `bench` and `transcribe --model` never collide: `nice -n 5` (matching `Nice=5` in the unit), random `--request-path`, start → `/health` → warm-up (one discarded request) → measurements → stop.
 
-Before starting, it checks whether `local-stt-whisper.service` is active. If so, it refuses to proceed and displays `systemctl --user stop local-stt-whisper local-stt` (the `--allow-concurrent` flag skips this check), because two servers would distort CPU and RAM results.
+Before starting, it checks whether an engine unit (`local-stt-whisper.service` or `local-stt-engine.service`) is active. If so, it does not start, because two servers would distort CPU and RAM results. It shows the `systemctl --user stop local-stt <unit>` command for the active units. The `--allow-concurrent` flag skips this check. `bench --soak` and `bench --context` make the same check (task 4.5).
+
+*Parakeet (task 4.5).* For `parakeet-tdt-0.6b-v3-int8`, `bench` starts a temporary Parakeet server (`TemporaryParakeetServer`, [06](06-stt-engine.md) §6.10) with the same steps. Parakeet has no `audio_ctx`, beam search or `whisper-bench`. Thus it runs once per thread count, recorded as `audio_ctx = 0` and greedy, and it is left out of the beam-search step and the sanity check. `--soak` and `--context` stay Whisper-only. `system.json` also records the `onnx-asr` version.
 
 | Dimension | Values |
 |---|---|
-| model | `base-q5_1`, `small-q5_1`, `small-q8_0`, `small`, `medium-q5_0`, `large-v3-turbo-q5_0` |
+| model | `base-q5_1`, `small-q5_1`, `small-q8_0`, `small`, `medium-q5_0`, `large-v3-turbo-q5_0`; since v0.4 also `parakeet-tdt-0.6b-v3-int8` |
 | threads | 4, 8 |
-| audio_ctx | 0 (full window), 1000 (fixed, full window beyond coverage) |
+| audio_ctx | 0 (full window), 1000 (fixed, full window beyond coverage); Parakeet: none |
 | beam | greedy (all); `-bs 5` only for the top two after stage 1 |
 
 The sequence is economical because the full matrix would take hours on this CPU:
@@ -99,7 +101,8 @@ Measure each configuration three times. Report the WER for every run plus its me
 ## 13.5 Decision rule
 
 ```text
-production = configurations excluding base-q5_1, with peak server RSS ≤ 1 GB (N1),
+production = configurations excluding base-q5_1, with peak server RSS ≤ the N1 limit of their engine
+             (whisper-server 1 GB, Parakeet 1.6 GB; task 4.6),
              and with audio_ctx > 0 only when
              WER(audio_ctx) − WER(0) ≤ 1.0 pp for the same model, threads, and beam
 
@@ -131,7 +134,7 @@ History: N2 was originally 2.5 s. The first stage-0 run (`docs/benchmark-results
 
 ## 13.6 Results
 
-- Raw data: `~/.local/share/local-stt/bench/<ISO-timestamp>/results.jsonl` (one line = one file × configuration) plus `system.json` (CPU, governor, power source, whisper.cpp version, kernel).
+- Raw data: `~/.local/share/local-stt/bench/<ISO-timestamp>/results.jsonl` (one line = one file × configuration) plus `system.json` (CPU, governor, power source, whisper.cpp version, `onnx-asr` version, kernel).
 - Report: `local-stt bench report DIR` generates Markdown tables. Copy the result that establishes the defaults to `docs/benchmark-results.md` in the repository, together with the date and selection rationale.
 - Corpus transcripts stored in the results are content recorded by the user for testing, under the rule in [12](12-logging-privacy-errors.md) §12.2.
 

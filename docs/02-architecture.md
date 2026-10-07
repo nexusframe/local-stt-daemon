@@ -5,11 +5,11 @@
 ```text
 ┌──────────────────────── user session (systemd --user, graphical-session.target) ──────────────────────────────┐
 │                                                                                                             │
-│  ┌──────────── local-stt.service (Python) ────────────┐        HTTP 127.0.0.1:8178     ┌─ local-stt-whisper ─┐ │
-│  │                                                    │  POST /inference (WAV)       │   .service          │ │
-│  │  HotkeyListener ─┐                                 │ ───────────────────────────► │  whisper-server     │ │
-│  │  IpcServer ──────┼──► Controller ──► PipelineWorker│ ◄─────────────────────────── │  (whisper.cpp,      │ │
-│  │  AudioCapture ───┘      ▲   │          │           │     verbose_json             │   model in RAM)     │ │
+│  ┌──────────── local-stt.service (Python) ────────────┐        HTTP 127.0.0.1:8178     ┌─ engine server ─────┐ │
+│  │                                                    │  POST /inference (WAV)       │ local-stt-engine    │ │
+│  │  HotkeyListener ─┐                                 │ ───────────────────────────► │  (Parakeet, default)│ │
+│  │  IpcServer ──────┼──► Controller ──► PipelineWorker│ ◄─────────────────────────── │ or local-stt-whisper│ │
+│  │  AudioCapture ───┘      ▲   │          │           │     verbose_json             │  (whisper-server)   │ │
 │  │   └► Recorder/Segmenter─┘   │          ├► TextProcessor                           └─────────────────────┘ │
 │  │        (Silero VAD, ONNX)   │          └► Injector ──► X11: CLIPBOARD + XTest / xdotool                  │
 │  │  EngineMonitor ─────────────┘                                                                            │
@@ -33,7 +33,8 @@
 | `clipboard-owner` | X11 connection #3 (1×1 window, selections) | requests from `pipeline` through a queue + `Future` | yes |
 | `engine-monitor` | — | → `events` (`EngineStateChanged`) | no |
 | `timers` (`threading.Timer`) | — | → `events` (`ReconnectTick`, `CaptureOpenDue`) | no |
-| `server-restart` (short-lived, only during reload ⟳) | — | `systemctl --user restart local-stt-whisper` → `events` (`ServerRestartDone`) | no |
+| `server-restart` (short-lived, only during reload ⟳) | — | stops the other engine unit, then `systemctl --user restart` of the selected one → `events` (`ServerRestartDone`) | no |
+| `engine-unit` (short-lived, once at startup; task 4.3) | — | stops the other engine unit, then `systemctl --user start` of the selected one; the daemon does not wait for it (11 §11.5) | no |
 | `ipc-server` (+ per-connection threads) | — | → `events` with a response `Future`; subscriptions receive status copies | no |
 
 \* An exception in a critical thread terminates the process with exit code 1, and systemd restarts it ([12](12-logging-privacy-errors.md), E14).
@@ -45,7 +46,7 @@ Rules:
 - Components do not import one another except through interfaces in `local_stt/interfaces.py`. `local_stt/app.py` wires everything together.
 - Threads were chosen over `asyncio`: sounddevice, python-xlib, and `http.client` are blocking, while the number of threads is small and fixed. `asyncio` would only add a `run_in_executor` layer.
 
-*Implementation (task 1.13, `app.py`; user decisions 2026-10-03).* `local-stt daemon [--config P] [--log-level INFO|DEBUG|TRACE]`. Startup order: logging at INFO → config (errors → exit 78), configured log level, model files (`check_model_files` → exit 78) → session type (`doctor.session_type()`, ≠ `x11` → 78; `DISPLAY` unset → 1) → `secret` (missing or invalid → 78, like a missing model: a restart loop cannot fix it) → INFO line with versions, model and audio device (+ the `log_text` WARNING) → cheap `doctor` checks logged at INFO when not OK (manager `DISPLAY`, whisper-server binary/tag, `secret` and `whisper-server.env` modes, loopback-only port; no checksums, microphone or test grab) → components built (an X11 connection failure → 1) → IPC socket first (another instance → 1, before anything is grabbed or opened) → threads `feedback`, `clipboard-owner`, `audio-consumer`, `pipeline`, `engine-monitor` → hotkey grab (problems → `hotkeys` notification, E4) → `threading.excepthook` → `controller` thread → `READY=1`. Teardown (after the controller returns) sends `STOPPING=1` and stops the components in reverse order; `capture.close()` runs before the consumer stops. Signals use ordinary Python handlers instead of `signal.set_wakeup_fd`: the main thread only waits in `join()`, which signal handlers interrupt, and each handler just posts an event. SIGUSR1 logs thread names and queue sizes, then the controller's status document. `stt.startup_timeout_s` is also applied live to the EngineMonitor. After a server restart, `use_server` points a `SwitchableEngine` (one reference swap read per request) at a new client. The injectors are also updated at IDLE, because they follow `hotkeys.push_to_talk`. E14 (`ThreadCrashHandler`): an exception in a critical thread (table above) → CRITICAL with traceback, then `os._exit(1)`; `engine-monitor` and `ipc-server` → CRITICAL and restarted; any other thread (`feedback`, `server-restart`, timers) → CRITICAL, thread ends. **Live-tested 2026-10-03** on the reference machine against a manually started whisper-server: startup to READY in about 0.1 s, `status`, `reload` and SIGUSR1 work; a second instance exits 1 and the first keeps running; PTT with the user (sounds and text in the window, `total` 2.4 s for 3.6 s of audio); SIGTERM → exit 0, socket removed. Composition found two interface bugs, now fixed: the Controller calls `capture.open(rid, cid)` positionally, but `AudioCapture.open` took keyword-only arguments; and `audio/capture.py` raised its own `AudioOpenError`, not the `interfaces.AudioOpenError` the Controller catches. Either would have crashed the controller thread on the first PTT or microphone error.
+*Implementation (task 1.13, `app.py`; user decisions 2026-10-03).* `local-stt daemon [--config P] [--log-level INFO|DEBUG|TRACE]`. Startup order: logging at INFO → config (errors → exit 78), configured log level, model files (`check_model_files` → exit 78) → session type (`doctor.session_type()`, ≠ `x11` → 78; `DISPLAY` unset → 1) → `secret` (missing or invalid → 78, like a missing model: a restart loop cannot fix it) → INFO line with versions, model and audio device (+ the `log_text` WARNING) → cheap `doctor` checks logged at INFO when not OK (manager `DISPLAY`, whisper-server binary/tag, `secret` and `whisper-server.env` modes, loopback-only port; no checksums, microphone or test grab) → components built (the engine client follows `stt.engine`, task 4.3; an X11 connection failure → 1) → IPC socket first (another instance → 1, before anything is grabbed or opened) → threads `feedback`, `clipboard-owner`, `audio-consumer`, `pipeline`, `engine-monitor` → hotkey grab (problems → `hotkeys` notification, E4) → `engine-unit` thread (starts the selected engine unit) → `threading.excepthook` → `controller` thread → `READY=1`. Teardown (after the controller returns) sends `STOPPING=1` and stops the components in reverse order; `capture.close()` runs before the consumer stops. Signals use ordinary Python handlers instead of `signal.set_wakeup_fd`: the main thread only waits in `join()`, which signal handlers interrupt, and each handler just posts an event. SIGUSR1 logs thread names and queue sizes, then the controller's status document. `stt.startup_timeout_s` is also applied live to the EngineMonitor. After a server restart, `use_server` points a `SwitchableEngine` (one reference swap read per request) at a new client. The injectors are also updated at IDLE, because they follow `hotkeys.push_to_talk`. E14 (`ThreadCrashHandler`): an exception in a critical thread (table above) → CRITICAL with traceback, then `os._exit(1)`; `engine-monitor` and `ipc-server` → CRITICAL and restarted; any other thread (`feedback`, `server-restart`, `engine-unit`, timers) → CRITICAL, thread ends. **Live-tested 2026-10-03** on the reference machine against a manually started whisper-server: startup to READY in about 0.1 s, `status`, `reload` and SIGUSR1 work; a second instance exits 1 and the first keeps running; PTT with the user (sounds and text in the window, `total` 2.4 s for 3.6 s of audio); SIGTERM → exit 0, socket removed. Composition found two interface bugs, now fixed: the Controller calls `capture.open(rid, cid)` positionally, but `AudioCapture.open` took keyword-only arguments; and `audio/capture.py` raised its own `AudioOpenError`, not the `interfaces.AudioOpenError` the Controller catches. Either would have crashed the controller thread on the first PTT or microphone error.
 
 ## 2.3 Repository structure
 
@@ -63,7 +64,8 @@ local-stt-daemon/
 │   └── wolnelektury_to_corpus.py
 ├── systemd/
 │   ├── local-stt.service
-│   └── local-stt-whisper.service
+│   ├── local-stt-whisper.service
+│   └── local-stt-engine.service       # Parakeet engine server (v0.4)
 ├── src/local_stt/
 │   ├── __init__.py                    # __version__
 │   ├── __main__.py                    # python -m local_stt → cli.main
@@ -75,6 +77,7 @@ local-stt-daemon/
 │   ├── controller.py                  # state machine (pure logic + effects through interfaces)
 │   ├── pipeline.py                    # PipelineWorker, Job, generations, retry, prompt context
 │   ├── engine_monitor.py
+│   ├── engine_server.py               # Parakeet engine server: `local-stt engine-server` (v0.4)
 │   ├── audio/
 │   │   ├── capture.py                 # AudioCapture (sounddevice), fallback resampling
 │   │   ├── consumer.py                # audio-consumer thread: frames → Recorder/Segmenter, flush/discard commands
@@ -84,9 +87,9 @@ local-stt-daemon/
 │   │   ├── segmenter.py               # state machine with hysteresis
 │   │   └── wav.py                     # float32 ↔ WAV s16 in memory
 │   ├── stt/
-│   │   ├── __init__.py                # engine registry
-│   │   ├── whisper_server.py          # WhisperServerEngine (http.client, multipart)
-│   │   └── fake.py                    # FakeEngine
+│   │   ├── __init__.py                # engine registry: ENGINES, ENGINE_UNITS
+│   │   ├── whisper_server.py          # WhisperServerEngine (http.client, multipart), TemporaryWhisperServer
+│   │   └── parakeet.py                # ParakeetEngine (client), TemporaryParakeetServer (v0.4)
 │   ├── text/
 │   │   ├── processor.py               # TextProcessor (steps 1–7)
 │   │   └── filters.py                 # hallucinations, repetitions, no_speech
@@ -103,13 +106,15 @@ local-stt-daemon/
 │   ├── sdnotify.py                    # READY=1 / STATUS=
 │   ├── logging_setup.py               # TRACE, journald format
 │   ├── doctor.py
-│   ├── models.py                      # list/pull/verify
+│   ├── models.py                      # list/pull/verify; single-file and directory models
 │   ├── models.sha256                  # pinned model checksums (package data, sha256sum format)
 │   └── bench/
 │       ├── corpus.py                  # record-corpus
 │       ├── prompts_pl.txt             # corpus A sentences (package data)
 │       ├── long_pl.txt                # continuous-recording text, CC BY-SA 4.0 (+ .ATTRIBUTION.md)
-│       ├── runner.py                  # matrix, temporary server, soak
+│       ├── runner.py                  # matrix on temporary servers (both engines)
+│       ├── soak.py                    # bench --soak
+│       ├── context.py                 # bench --context
 │       ├── wer.py
 │       └── report.py
 └── tests/
@@ -121,7 +126,7 @@ local-stt-daemon/
 ## 2.4 Sequence — PTT
 
 ```text
-User        Hotkeys       Controller          Capture/Recorder     Pipeline            whisper-server    Injector
+User        Hotkeys       Controller          Capture/Recorder     Pipeline            engine server     Injector
  │ ▼Ctrl_R    │               │                      │                  │                     │              │
  │──────────► │ PttPressed ─► │ engine READY?        │                  │                     │              │
  │            │               │── open()+start ────► │                  │                     │              │

@@ -1,6 +1,6 @@
 # 14. Test strategy
 
-Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` for `src/local_stt` (excluding `bench/`). python-xlib, sounddevice and onnxruntime ship no type information, so `pyproject.toml` contains `[[tool.mypy.overrides]] module = ["Xlib.*", "sounddevice", "onnxruntime"] ignore_missing_imports = true`; their calls are confined to `hotkeys/x11.py`, `inject/` (`x11util.py`, `clipboard.py`), `audio/capture.py` and `audio/vad.py`, whose public functions have fully typed signatures so untyped values do not leak into the rest of the code. Run `pytest -m "not needs_whisper and not needs_x11 and not needs_audio and not e2e"` for the fast suite and `pytest` for the complete local suite.
+Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` for `src/local_stt` (excluding `bench/`). python-xlib, sounddevice and onnxruntime ship no type information, so `pyproject.toml` contains `[[tool.mypy.overrides]] module = ["Xlib.*", "sounddevice", "onnxruntime"] ignore_missing_imports = true`; their calls are confined to `hotkeys/x11.py`, `inject/` (`x11util.py`, `clipboard.py`), `audio/capture.py` and `audio/vad.py`, whose public functions have fully typed signatures so untyped values do not leak into the rest of the code. Run `pytest -m "not needs_whisper and not needs_parakeet and not needs_x11 and not needs_audio and not e2e"` for the fast suite and `pytest` for the complete local suite.
 
 ## 14.1 Pyramid
 
@@ -8,6 +8,7 @@ Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` f
 |---|---|---|---|
 | Unit | pure logic | no external resources | — |
 | Integration: engine | `WhisperServerEngine` ↔ real `whisper-server` (`ggml-base-q5_1` for speed) | local build | `needs_whisper` |
+| Integration: Parakeet (v0.4) | the Parakeet engine server with the real model, called by the unchanged `WhisperServerEngine` client; `TemporaryParakeetServer` in its own process | the model in `~/.local/share/local-stt/models` (the test skips when it is missing) | `needs_parakeet` |
 | Integration: X11 | hotkeys, clipboard, XTest | a private `Xvfb -displayfd` started by the test fixture (`tests/integration/x11_clients.py`; `xvfb` package installed by `install.sh --dev`; no Mutter). Helpers take the display name explicitly and never read `$DISPLAY`, so a test cannot type into the real session | `needs_x11` |
 | Integration: audio | device opening, resampling | real PipeWire | `needs_audio` |
 | End-to-end | complete daemon | Xvfb + `FileAudioSource` + real server | `e2e`, `needs_x11`, `needs_whisper` |
@@ -33,6 +34,12 @@ Tools: `pytest`, `pytest-timeout`, `ruff` (lint + format), and `mypy --strict` f
 | `ipc` | protocol, unknown command, overlong line (> 64 KiB), `SO_PEERCRED` (different uid → reject; monkeypatch test) | |
 | `bench.wer` / metrics / selection | WER/CER on known examples, Polish-character normalization; cuts inside a word, at a boundary, and within silence; `base` excluded from production; a model slow without `audio_ctx` but fast with it is not eliminated in stage 1; stage 0 does not confirm N2 | |
 | `feedback` | generated WAV files have the correct duration and no DC offset; `notify-send` is called with expected arguments and **without transcript text** | mocked `subprocess` |
+| `engine_server` (v0.4) | `/health` (also during an inference), the `verbose_json` shape and an empty result, one inference at a time, 404/400/413/500 and the server continues after them, exit 78 without a secret or a model, the temporary-server options and `LOCAL_STT_REQUEST_PATH`, exit 1 with `couldn't bind` on a taken port | `FakeRecognizer` instead of the model, driven by `WhisperServerEngine` |
+| `stt.parakeet` (v0.4) | no prompt is sent; transcripts have Parakeet's engine and model names; `TemporaryParakeetServer` keeps the request path off the command line and needs the model directory | local `http.server` stub |
+| `models` (v0.4 additions) | the registry has the Parakeet directory model from one pinned revision; a directory model is installed only after every file verifies, only bad files are downloaded again; a dropped connection is resumed with `Range`, a server that ignores `Range` gets a new download, a download that keeps dropping fails after 3 attempts and leaves nothing | loopback HTTP server that drops the connection halfway |
+| `doctor`, `bench.runner`, `bench.report`, `cli` (v0.4 additions) | checks follow `stt.engine` (unit, `/health`, model directory); Parakeet runs once per thread count, without beam search or `whisper-bench`; a Parakeet result matches any `audio_ctx` and beam; `transcribe` picks the temporary server and the running engine by `stt.engine`; `--soak` rejects Parakeet | fakes for `systemctl`, servers and engines |
+
+Tests written for whisper-server (controller language switch and status, reload, startup model check) set `engine = "whisper-server"`, because the default engine is Parakeet since task 4.5.
 
 Coverage target: ≥ 90% of lines for `controller`, `pipeline`, `segmenter`, `text/`, and `config`. No hard threshold for other modules.
 
@@ -99,4 +106,14 @@ v0.3 (additional):
 - [ ] `local-stt models list --bench` lists the models with their latest WER, p90 latency and RAM; `*` marks `stt.model`.
 - [ ] `local-stt bench --context` on `long/001` reproduces the 3.4 results in [15](15-implementation-plan.md): word-error counts within ±1 word per policy and the same conclusion (the text is not fully deterministic: rerun 2026-10-07, two of four policies differed by one word, probably the temperature fallback, untested).
 - [ ] v0.2 regression: 2 minutes of continuous dictation with a pause > 5 s and a sentence longer than `max_segment_s` → complete text, no errors in the journal; one PTT dictation inserted.
+v0.4 (additional; draft from task 4.6, to be refined at acceptance):
+
+- [ ] Fresh `install.sh` (empty `models/`) downloads the Parakeet model, `small-q8_0` and Silero VAD; `doctor` reports no FAIL under Parakeet.
+- [ ] PTT and 2 minutes of continuous dictation under Parakeet in the applications of the v0.1 list → correct Polish text; `total` in the journal is far below the v0.1 whisper p90 (3.70 s).
+- [ ] `stt.engine` "parakeet" → "whisper-server" → "parakeet" with `local-stt reload` → after each switch, the other engine unit stops and the selected one reaches READY. Dictation works, and `status` shows the engine and its model.
+- [ ] Under Parakeet, the language hotkey and `local-stt language toggle` are rejected (notification “Language: automatic (Parakeet)”, exit code 4).
+- [ ] Humming, a cough and keyboard noise during continuous dictation insert nothing.
+- [ ] A code-switched sentence that comes out in Cyrillic is inserted unchanged and counted in `stats.jobs_non_latin`.
+- [ ] Engine server RSS stays ≤ 1.6 GB after 10 minutes of dictation (N1); `ss -ltnp` shows it only on `127.0.0.1` (N5).
+
 - *Backlog, not v0.3 (preview moved out of task 3.2, [15](15-implementation-plan.md) item 9):* Preview requires `continuous.preview=true` and `status --watch --preview`; ordinary status, `job` events, logs, and notifications contain no preview text. After the final subscriber disconnects, no further preview requests are submitted.

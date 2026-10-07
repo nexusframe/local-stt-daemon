@@ -16,7 +16,7 @@ Everything runs locally: whisper.cpp (`whisper-server` on `127.0.0.1`) plus a Py
 | 03 | [Decision log (ADR)](03-decisions.md) | 17 decisions with alternatives, objections, and responses |
 | 04 | [State machine](04-state-machine.md) | `(mode, pipeline, engine)` state, events, complete transition table, job queue, reload |
 | 05 | [Audio and VAD](05-audio-and-vad.md) | capture (sounddevice/PipeWire), PTT recorder, Silero VAD (ONNX), hysteresis segmenter |
-| 06 | [STT engine](06-stt-engine.md) | whisper.cpp v1.9.4: build, models, server flags, HTTP contract, `audio_ctx`, prompt, hallucination filtering |
+| 06 | [STT engines](06-stt-engine.md) | whisper.cpp v1.9.4: build, models, server flags, HTTP contract, `audio_ctx`, prompt, hallucination filtering; the Parakeet engine server (v0.4, §6.10) |
 | 07 | [X11 hotkeys](07-hotkeys-x11.md) | XGrabKey, default keys and GNOME conflicts, press/release, autorepeat |
 | 08 | [Text processing and injection](08-text-injection.md) | TextProcessor, clipboard + XTest with confirmation and restoration, xdotool fallback |
 | 09 | [Configuration](09-configuration.md) | complete `config.toml` with defaults, validation |

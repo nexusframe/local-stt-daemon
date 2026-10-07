@@ -6,7 +6,7 @@
 - File: `$XDG_CONFIG_HOME/local-stt/config.toml` (default: `~/.config/local-stt/config.toml`). The path can be overridden with the `--config PATH` flag or the `LOCAL_STT_CONFIG` variable.
 - If the file is absent, default values are used. `install.sh` copies the fully commented `config.example.toml` (repository root; every value in it is the default). A path given explicitly with `--config` or `LOCAL_STT_CONFIG` must exist.
 - Validation: dataclasses plus custom validators in `local_stt/config.py`. Every error has the form `<section>.<key>: <problem> (got <value>)`, for example `vad.end_threshold: must be < start_threshold (got 0.6)`. An unknown key is an **error**, not a warning, so typos never pass silently.
-- Changes take effect after `local-stt reload`, according to the groups in [04](04-state-machine.md) §4.6. Keys marked ⟳ cause the daemon to generate a new `whisper-server.env` and restart `local-stt-whisper.service` when the mode is IDLE and the queue is empty (or the engine is DOWN).
+- Changes take effect after `local-stt reload`, according to the groups in [04](04-state-machine.md) §4.6. Keys marked ⟳ cause a restart of the engine server. The daemon waits until the mode is IDLE and the queue is empty, or the engine is DOWN. Under whisper-server it first generates a new `whisper-server.env`.
 
 ## 9.2 Complete file with default values
 
@@ -14,12 +14,12 @@
 # ~/.config/local-stt/config.toml
 
 [stt]
-engine = "whisper-server"            # only implementation in v0.1–v0.3
+engine = "parakeet"                  # ⟳ "parakeet" (default since v0.4) or "whisper-server"; 9.2a
 port = 8178                          # ⟳
-model = "small-q8_0"                 # ⟳ ggml-<model>.bin filename in models_dir (stage-0 benchmark)
+model = "small-q8_0"                 # ⟳ whisper-server only: ggml-<model>.bin in models_dir (stage-0 benchmark)
 models_dir = "~/.local/share/local-stt/models"   # ⟳
 languages = ["pl", "en"]             # first = startup; the language hotkey cycles them; sent with every request
-threads = 4                          # ⟳ -t for whisper-server
+threads = 4                          # ⟳ inference threads of the engine server
 beam_size = -1                       # ⟳ -1 = greedy
 vocabulary_prompt = ""               # e.g. "Kubernetes, PipeWire, Gdańsk."
 continuous_context = true            # append the end of the previous segment to the prompt
@@ -103,6 +103,21 @@ log_text = false                     # true = full transcript text in logs (debu
 timings = true                       # timing line for each job (without content)
 ```
 
+### 9.2a Keys per engine (v0.4)
+
+`stt.engine` selects the engine server ([06](06-stt-engine.md) §6.9). Some `[stt]` keys apply to one engine only:
+
+| Key | whisper-server | Parakeet |
+|---|---|---|
+| `port`, `models_dir`, `threads`, `startup_timeout_s`, `request_timeout_max_s` | yes | yes |
+| `model` | yes | no: the Parakeet model is fixed (`parakeet-tdt-0.6b-v3-int8`) and has no key |
+| `languages` | yes | no: the language switch is rejected, the model detects the language |
+| `vocabulary_prompt`, `continuous_context` | yes | no: Parakeet has no prompt |
+| `audio_ctx`, `audio_ctx_margin`, `beam_size`, `extra_server_args` | yes | no |
+| `no_speech_threshold`, `logprob_threshold` | yes | no: Parakeet sends no confidences (06 §6.10) |
+
+The validator checks all keys for both engines. A key that does not apply is kept, so a switch back to whisper-server uses it again.
+
 ## 9.3 Cross-field validation
 
 | Rule | Message |
@@ -113,7 +128,8 @@ timings = true                       # timing line for each job (without content
 | `vad.max_segment_s ≤ 28` | margin for Whisper's 30 s window |
 | `stt.audio_ctx == 0` or `500 ≤ stt.audio_ctx < 1500`; `0 ≤ stt.audio_ctx_margin < stt.audio_ctx` when it is set | `stt.audio_ctx: must be 0 or 500-1499` (the lower bound is conservative: only 750 and 1000 were measured, 06 §6.7) |
 | `stt.audio_ctx > 0` and `vad.max_segment_s * 50 + stt.audio_ctx_margin > stt.audio_ctx` | warning `vad.max_segment_s: continuous segments longer than X s use the full window` |
-| the `models_dir/ggml-<model>.bin` file exists | `stt.model: file not found: … (run: local-stt models pull small-q8_0)` |
+| whisper-server: the `models_dir/ggml-<model>.bin` file exists | `stt.model: file not found: … (run: local-stt models pull small-q8_0)` |
+| Parakeet: the `models_dir/parakeet-tdt-0.6b-v3-int8/` directory exists (`doctor` also checks the checksum of each file) | `stt.engine: parakeet model not found: … (run: local-stt models pull parakeet-tdt-0.6b-v3-int8)` |
 | when `vad.enabled`: the `models_dir/<vad.model>` file exists | `vad.model: file not found: … (run: local-stt models pull silero-vad)` |
 | `len(stt.vocabulary_prompt) ≤ 300` | vocabulary character limit, not token count; the engine may truncate the prompt ([06](06-stt-engine.md) §6.6) |
 | `stt.languages` names at least one language; each is a language code (`[a-z]{2,3}` or `auto`), none repeated (task 3.7) | `stt.languages[1]: must be a language code such as "pl"`, `stt.languages: must not repeat a language` |
@@ -136,6 +152,8 @@ Notes on the implementation (`local_stt/config.py`):
 - Besides the rules above, single values are range-checked (port, threads, timeouts, enums such as `injection.backend` and `logging.level`); TOML types are strict (`port = "8178"` is an error, an integer is accepted where a float is expected).
 
 ## 9.4 Files generated for `whisper-server`
+
+The Parakeet server needs no generated file: it reads `config.toml` and `secret` itself ([06](06-stt-engine.md) §6.10).
 
 `install.sh` creates `~/.config/local-stt/secret` once (permissions 0600): 32 hex characters from `secrets.token_hex(16)`. The value is used as the server's `--request-path` ([06](06-stt-engine.md) §6.4).
 
