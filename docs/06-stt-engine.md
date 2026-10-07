@@ -229,7 +229,11 @@ Content filtering is performed by `TextProcessor`, not the engine ([08](08-text-
    - Loops are checked **before** the identical-segment rule: dropping identical 60-character segments of a loop (a 20-character phrase repeated six times gives two identical segments) would leave too few copies to detect. The identical-segment rule therefore applies only when no loop was found.
 4. **continuous mode only:** reject the entire result if, after normalization, it equals the suffix of the session context passed in the prompt (the `last_text` part, not `stt.vocabulary_prompt`). In PTT, and when the context is empty, this filter does not run. Normalization here means collapsed whitespace and case-insensitive comparison; the suffix must start at a word boundary.
 
-Every rejection is logged at DEBUG as `filtered: <reason>`. Content is logged only when `logging.log_text = true` ([12](12-logging-privacy-errors.md)).
+5. **Parakeet only** (task 4.4, user decision 2026-10-07: built in, independent of `text.hallucination_patterns`): reject the entire result if it consists only of non-speech fillers — any number of non-words (`hm`, `mm`, `mhm`, `mm-hmm`, `mm-mm`, `um`, `uh`, `uh-huh`, `eh`, `ah`, any letter count and case) or exactly one of `yeah`, `cool`, `so` — with punctuation around them. Parakeet produced these for non-speech that passed the VAD gate: on the user's 8 takes of 12 s (2026-10-07: room, breath, loud breath, keyboard, mouse and desk, cough, chair, humming) the gate dropped all but the cough (→ "Cool.") and the humming (→ "Hm", "Mm.", "Um", "Mm, mm, um"); quiet windows of the long recording gave "Mm-mm." and "So"; sherpa-onnx gave "Yeah.". A filler inside an utterance ("Yeah, I agree.", "Mm, tak.") is kept. Reason `parakeet_filler`.
+
+Every rejection is logged at DEBUG as `filtered: <reason>`.
+
+**Non-Latin output** (task 4.4): a result with any letter outside the Latin script (Cyrillic, Greek, …; Polish letters are Latin) is injected unchanged, logged as a WARNING `job N: non-Latin letters in the output (<engine>), injected unchanged` (with the text only when `logging.log_text = true`) and counted in `status` as `stats.jobs_non_latin`. The count is the evidence for a fallback engine ([15](15-implementation-plan.md) backlog item 10); it resets when the daemon restarts, the journal keeps the warnings. Content is logged only when `logging.log_text = true` ([12](12-logging-privacy-errors.md)).
 
 ## 6.9 Engine interface (replaceability — N7)
 

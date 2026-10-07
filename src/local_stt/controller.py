@@ -193,6 +193,7 @@ class Controller:
         self._jobs_ok = 0
         self._jobs_failed = 0
         self._jobs_filtered = 0
+        self._jobs_non_latin = 0
         self._recent: deque[tuple[float, float]] = deque(maxlen=STATS_WINDOW)  # (rtf, total)
         self._last_job: tuple[float, float, float] | None = None  # audio_s, stt_s, finished at
 
@@ -334,6 +335,7 @@ class Controller:
                 "jobs_ok": self._jobs_ok,
                 "jobs_failed": self._jobs_failed,
                 "jobs_filtered": self._jobs_filtered,
+                "jobs_non_latin": self._jobs_non_latin,
                 "rtf_avg_10": sum(r for r, _ in recent) / len(recent) if recent else None,
                 "latency_avg_10_s": sum(t for _, t in recent) / len(recent) if recent else None,
             },
@@ -879,6 +881,8 @@ class Controller:
             self._jobs_ok += 1
         else:
             self._jobs_failed += 1
+        if event.non_latin:
+            self._jobs_non_latin += 1
         t = event.timings
         if result.ok and {"audio", "stt", "total"} <= t.keys() and t["audio"] > 0:
             self._recent.append((t["stt"] / t["audio"], t["total"]))

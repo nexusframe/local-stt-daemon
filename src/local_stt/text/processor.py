@@ -90,6 +90,9 @@ class DefaultTextProcessor:
             if reason is not None:
                 log.debug("filtered: %s", reason)
         text = normalize_whitespace(collapsed)
+        if stt.engine == "parakeet" and filters.is_filler_only(text):  # task 4.4
+            log.debug("filtered: parakeet_filler")
+            return None
         if filters.is_prompt_echo(text, ctx.prompt_tail):
             log.debug("filtered: prompt_echo")
             return None

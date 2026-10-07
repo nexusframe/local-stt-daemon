@@ -868,6 +868,7 @@ def test_status_document(c: Controller, w: World) -> None:
             "jobs_ok": 0,
             "jobs_failed": 0,
             "jobs_filtered": 0,
+            "jobs_non_latin": 0,
             "rtf_avg_10": None,
             "latency_avg_10_s": None,
         },
@@ -890,7 +891,7 @@ def test_status_counts_jobs_and_averages_last_ten(c: Controller, w: World) -> No
     ok = InjectResult(True, "clipboard", 3, "x", False, None)
     for i in range(12):
         timings = {"audio": 2.0, "stt": 0.2 * (i + 1), "total": 1.0 + i}
-        c.handle(ev.JobFinished(i + 1, "ptt", ok, timings))
+        c.handle(ev.JobFinished(i + 1, "ptt", ok, timings, non_latin=i in (3, 7)))
     c.handle(ev.JobFinished(20, "ptt", InjectResult(False, "type", 0, None, False, "boom")))
     c.handle(ev.JobFailed(21, "ptt", 1.0, "timeout"))
     c.handle(ev.JobDiscarded(22, "ptt", "filtered"))
@@ -902,6 +903,7 @@ def test_status_counts_jobs_and_averages_last_ten(c: Controller, w: World) -> No
         "jobs_ok": 12,
         "jobs_failed": 2,
         "jobs_filtered": 2,
+        "jobs_non_latin": 2,  # task 4.4: counted, still injected and counted as ok
         "rtf_avg_10": pytest.approx(sum(0.1 * (i + 1) for i in range(2, 12)) / 10),
         "latency_avg_10_s": pytest.approx(sum(1.0 + i for i in range(2, 12)) / 10),
     }

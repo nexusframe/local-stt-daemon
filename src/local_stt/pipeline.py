@@ -41,6 +41,7 @@ from local_stt.stt.whisper_server import (
     EngineHttpError,
     EngineTimeoutError,
 )
+from local_stt.text import filters
 
 SAMPLE_RATE = 16000
 RMS_WINDOW_S = 0.1  # 05 §5.3: 1 s of speech in 20 s of silence must still pass
@@ -277,6 +278,16 @@ class PipelineWorker:
                 return self._discard(job, "filtered")
             if config.logging.log_text:
                 log.debug('text job=%d: "%s"', job.id, text)
+            # Counted, not changed: the count is the evidence for a fallback engine (task 4.4,
+            # backlog item 10). The text itself is logged only with logging.log_text (12).
+            non_latin = filters.has_non_latin_letters(text)
+            if non_latin:
+                log.warning(
+                    "job %d: non-Latin letters in the output (%s), injected unchanged%s",
+                    job.id,
+                    transcript.engine,
+                    f': "{text.strip()}"' if config.logging.log_text else "",
+                )
             if self._stale(job):
                 return self._discard(job, "cancelled")
 
@@ -296,7 +307,7 @@ class PipelineWorker:
             }
             if config.logging.timings:
                 timings_log.info(_timing_line(job, transcript, timings, result))
-            self._post(JobFinished(job.id, job.source, result, timings))
+            self._post(JobFinished(job.id, job.source, result, timings, non_latin))
         finally:
             with self._lock:
                 self._current = None

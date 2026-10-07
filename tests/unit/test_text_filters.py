@@ -5,6 +5,8 @@ from local_stt.interfaces import TranscriptSegment
 from local_stt.text.filters import (
     collapse_loops,
     compile_patterns,
+    has_non_latin_letters,
+    is_filler_only,
     is_hallucination,
     is_no_speech,
     is_prompt_echo,
@@ -136,3 +138,40 @@ def test_collapse_loops(text: str, expected: str) -> None:
 )
 def test_prompt_echo(text: str, tail: str | None, echo: bool) -> None:
     assert is_prompt_echo(text, tail) is echo
+
+
+# --- Parakeet fillers and non-Latin output (task 4.4) -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    # measured on the user's non-speech takes and quiet windows (2026-10-07)
+    ["Hm", "Mm.", "Um", "Mm, mm, um", "Mm-mm.", "Mm-hmm.", "So", "Cool.", "Yeah.", "Uh-huh.",
+     "mhm", "Ah!", "  Hmm…  "],
+)  # fmt: skip
+def test_filler_only_results(text: str) -> None:
+    assert is_filler_only(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "Yeah, I agree.", "So what?", "Mmm, dobrze.", "Ummah", "hmm tak", "Cool cool.",
+     "Ech, nie wiem.", "No."],
+)  # fmt: skip
+def test_real_speech_is_not_a_filler(text: str) -> None:
+    assert not is_filler_only(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Zażółć gęślą jaźń.", False),
+        ("Po code review zrób rebase i force push.", False),
+        ("naïve café, 12:30!", False),
+        ("По код ревю зроб ребейс.", True),  # the ADR-018 failure
+        ("Po code ревю.", True),
+        ("αβγ", True),
+    ],
+)
+def test_non_latin_letters(text: str, expected: bool) -> None:
+    assert has_non_latin_letters(text) is expected

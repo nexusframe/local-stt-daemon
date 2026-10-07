@@ -305,6 +305,32 @@ def test_log_text_and_disabled_timings(caplog: pytest.LogCaptureFixture) -> None
     assert not [r for r in caplog.records if r.name == "local_stt.timings"]
 
 
+@pytest.mark.parametrize("log_text", [False, True])
+def test_non_latin_output_is_counted_and_injected_unchanged(
+    log_text: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Task 4.4: the warning names the job; the text appears only with logging.log_text."""
+    h = Harness(config(logging={"log_text": log_text}))
+    h.processor.result = lambda t: "По код ревю. "
+    h.worker.start()
+    try:
+        job = h.submit()
+        outcome = h.outcome()
+    finally:
+        h.worker.stop()
+    assert isinstance(outcome, JobFinished) and outcome.non_latin
+    assert h.injector.texts == ["По код ревю. "]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and f"job {job.id}: non-Latin letters" in warnings[0]
+    assert ("По код" in warnings[0]) is log_text
+
+
+def test_latin_output_is_not_flagged(h: Harness) -> None:
+    h.submit()
+    outcome = h.outcome()
+    assert isinstance(outcome, JobFinished) and not outcome.non_latin
+
+
 def test_text_is_not_logged_by_default(h: Harness, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.DEBUG)
     h.submit()

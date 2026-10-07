@@ -160,6 +160,7 @@ class JobFinished:
     source: JobSource
     result: InjectResult
     timings: Mapping[str, float] = field(default_factory=dict, compare=False)
+    non_latin: bool = False  # letters outside the Latin script, injected unchanged (task 4.4)
 
 
 @dataclass(frozen=True)

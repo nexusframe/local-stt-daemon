@@ -172,3 +172,19 @@ def test_continuity_runs_after_replacements_and_before_the_space() -> None:
     p = processor(replacements=(Replacement(" kropka", ".", False),))
     ctx = TextContext("continuous", 1, 3, "max_length", "max_length", None)
     assert p.process(transcript(seg(" Kot ma Alę kropka")), ctx) == "kot ma Alę "
+
+
+@pytest.mark.parametrize(("engine", "kept"), [("parakeet", False), ("whisper-server", True)])
+def test_parakeet_filler_is_dropped_only_for_parakeet(
+    engine: str, kept: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Task 4.4: built in, independent of text.hallucination_patterns (user decision
+    2026-10-07), so whisper-server output "Yeah." stays."""
+    caplog.set_level(logging.DEBUG)
+    config = Config()
+    p = DefaultTextProcessor(
+        dataclasses.replace(config, stt=dataclasses.replace(config.stt, engine=engine))
+    )
+    assert (p.process(transcript(seg(" Mm-hmm.")), PTT) is not None) is kept
+    assert p.process(transcript(seg(" Mm, tak.")), PTT) == "Mm, tak. "
+    assert ("filtered: parakeet_filler" in caplog.messages) is not kept
