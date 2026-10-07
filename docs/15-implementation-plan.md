@@ -102,7 +102,7 @@ The preliminary design scope (“partial transcription, result stabilization, im
 | 3.3 | ~~**Segment-boundary stabilization:**~~ **rejected after measurement**, see the status below. `max_length` cuts with 1 s of audio overlap + removal of duplicate words at the join (longest common word suffix/prefix ≥ 2) | 05 §5.5 |
 | 3.4 | **Context:** tune `continuous_context` (tail length; reset after `min_silence` > 5 s = new paragraph) using the `long/` corpus | 06 §6.6 |
 | 3.5 | **Not needed** (closed 2026-10-06, status below). `stt.continuous_model` (second server)—**only if** required by the rule in 13 §13.5 | ADR-016 |
-| 3.6 | Full benchmark report (`bench report`) with thermals; update `docs/benchmark-results.md` | 13 |
+| 3.6 | **Closed, moved to v0.4** (task 4.7, user decision 2026-10-07). ~~Full benchmark report (`bench report`) with thermals; update `docs/benchmark-results.md`~~ | 13 |
 | 3.7 | **Language switch hotkey (cycles `stt.languages`)**, design below (user decisions 2026-10-05) | 04, 06, 07, 09, 10 |
 
 Status: 3.1 done 2026-10-04 (`models list --bench`, details in [10](10-cli-ipc-status.md) §10.1); checked on the stored runs — the values match [benchmark-results](benchmark-results.md).
@@ -123,6 +123,8 @@ Status: 3.4 done 2026-10-06 — **no change to the production policy** (user dec
 Decision rule (agreed before the runs): change the default only for > 1 point of WER, or a clear raw-WER gain without a WER loss. The tail length moved WER by at most 0.65 points, even with no context at all, so 200 stays. The reset lost 7 words: after the 60 s pause it hallucinated a clause ("…z rodziny, który w tym roku wchodzili z rodziną"), and a paragraph start lost "W Szczółkach"; the other differences went both ways. The pause recording is synthetic: room noise from the recording's longest natural pause (360.4–362.4 s, tiled with 50 ms crossfades) inserted at the 7 paragraph boundaries for pauses of 6, 30, 4, 60, 12, 8 and 20 s (re-segmented: 6.1, 30.1, 4.0, 60.0, 13.6, 8.0, 20.5 s; the 60 s of noise produced no false segment); script `make_pauses.py` in the results directory. Limits: one text (one biography, so the previous paragraph is relevant context), synthetic pauses, small differences. Found while building the pause recording: `pause_before_s` after a `max_length` split whose rest was dropped counted from an older segment (88 s instead of ~1 s); fixed before the measurement, with a test.
 
 Status: 3.5 closed 2026-10-06 as **not needed**. The 13 §13.5 rule asks for a second server only when the default model fails the soak test **and** a faster production model passes it with a WER gap > 3 pp. On AC with the `performance` profile `small-q8_0` passes (RTF 0.33, queue slope −0.115 s/min, [acceptance-v0.2](acceptance-v0.2.md)), so the rule is not triggered. It fails on `power-saver` (RTF 1.99, the stand-in for the missing battery), but no production model is fast enough to change that: `base-q5_1` is excluded from production, and the runner-up `small-q5_1` is slower than `small-q8_0` ([benchmark-results](benchmark-results.md), stage 2, t=4, `audio_ctx` 1000: p90 `text_ready` 5.07 vs 3.67 s, RTF 0.84 vs 0.60). This is a deduction from those numbers, not a `power-saver` soak of `small-q5_1`. N3 holds on AC `performance` only, as accepted for v0.2 (user decision 2026-10-04).
+
+Status: 3.6 closed 2026-10-07 without a new run (user decision 2026-10-07). The whisper.cpp matrix on corpus A is already in [benchmark-results](benchmark-results.md) (2026-10-03, same corpus, matrix and whisper.cpp v1.9.4), and the soaks are in [acceptance-v0.2](acceptance-v0.2.md) (2026-10-04). v0.4 replaces the default engine (ADR-018), so a fresh report on Whisper would describe the outgoing default; the full report with thermals moves to task 4.7.
 
 **Task 3.7 design — language switch hotkey** (user decisions 2026-10-05). Basis: whisper-server honours the per-request `language` and `stt.language` is already a live reload key (06 §6.5).
 
@@ -155,6 +157,7 @@ Basis: ADR-018 (user decisions 2026-10-07). Goal: text appears sooner after the 
 | 4.4 | **Text filtering:** add Parakeet's non-speech fillers ("Yeah.", "Mm.", "Mm-mm.") as whole-utterance patterns; count outputs with non-Latin letters (Cyrillic) in the log and `status`, but inject them unchanged — the count is the evidence for backlog item 10 | ADR-017, 06 §6.8 |
 | 4.5 | **Install, models, doctor:** `install.sh` downloads the model with a pinned sha256 (`models.sha256`), installs the service; `doctor` checks the service and model; `models list --bench` and `bench` accept the new engine | 06, 11, 13 |
 | 4.6 | **Spec updates:** N1 (RAM per engine), N5 (the new listener), 02 architecture, 06 (new engine section), 09 (`stt.engine`, model keys), 13, 14 | 01, 02, 06, 09, 13, 14 |
+| 4.7 | **Full benchmark report** (former task 3.6): `bench` and `bench report` for the new default and `small-q8_0` on corpus A, with thermals; update `docs/benchmark-results.md` | 13 |
 
 **v0.4 acceptance** (thresholds approved by the user 2026-10-07):
 
