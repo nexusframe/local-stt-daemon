@@ -161,6 +161,18 @@ Basis: ADR-018 (user decisions 2026-10-07). Goal: text appears sooner after the 
 | 4.6 | **Spec updates:** N1 (RAM per engine), N5 (the new listener), 02 architecture, 06 (new engine section), 09 (`stt.engine`, model keys), 13, 14 | 01, 02, 06, 09, 13, 14 |
 | 4.7 | **Full benchmark report** (former task 3.6): `bench` and `bench report` for the new default and `small-q8_0` on corpus A, with thermals; update `docs/benchmark-results.md` | 13 |
 
+Status: 4.1 measured 2026-10-07: **`onnx-asr` chosen** by the rule above. Setup: `sherpa-onnx` 1.13.8 with the k2-fsa int8 export, `onnx-asr` 0.12.0 (onnxruntime 1.30.0) with the HF `istupakov/parakeet-tdt-0.6b-v3-onnx` int8 export; 4 threads; corpus A (40 files); one process per library with a warm-up, run order sherpa, onnx-asr, sherpa, onnx-asr, 3 repetitions each (6 per library); daemon stopped; AC, `performance`, no extra cooling (CPU 86–87 °C mean, peaks 98 °C, so latencies are throttled). Results:
+
+| | `sherpa-onnx` | `onnx-asr` | difference |
+|---|---|---|---|
+| WER (identical in all 6 repetitions) | 5.73 % | 5.57 % | −0.16 pp |
+| medium p50 / p90 | 0.93 / 1.15 s | 1.01 / 1.24 s | +8 % / +8 % |
+| all files p50 / p90, mean RTF | 0.91 / 2.48 s, 0.125 | 0.98 / 2.59 s, 0.136 | +7 % / +5 %, +9 % |
+| RSS after load / peak | 0.84 / 1.23 GB | 1.13 / 1.55 GB | +0.3 GB |
+| load | 2.7–2.9 s | 2.4–2.9 s | — |
+
+The two exports differ, so 10 of 40 transcripts differ (in both directions; neither is consistently better). The latency gap is within the rule but not small: the second `onnx-asr` run (medium p50 0.94 s) matched `sherpa-onnx` (0.93 s), the first did not (1.08 s), so throttling moves it by several percent. The rule did not cover memory: `onnx-asr` costs ~0.3 GB more RSS, which counts for N1 (task 4.6) and for the `resident` mode of backlog item 10. Script, raw results and summary: `~/.local/share/local-stt/bench/libchoice-2026-10-07/` (outside the repo). The user confirmed `onnx-asr` on 2026-10-07 knowing the memory cost.
+
 **v0.4 acceptance** (thresholds approved by the user 2026-10-07):
 
 - corpus A WER with the default engine ≤ 7.4 % (the `small-q8_0` result),
