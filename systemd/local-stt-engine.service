@@ -1,0 +1,27 @@
+[Unit]
+Description=local-stt: Parakeet inference server (loopback only)
+Documentation=file://%h/projects/local-stt-daemon/docs/06-stt-engine.md
+PartOf=graphical-session.target
+After=graphical-session.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+# READY=1 is sent once the model is loaded and the socket listens (~3 s).
+Type=notify
+ExecStart=%h/.local/share/local-stt/venv/bin/local-stt engine-server
+Restart=on-failure
+RestartSec=2
+# 78 = config error, missing secret or model: a restart cannot fix it.
+RestartPreventExitStatus=78
+Environment=PYTHONUNBUFFERED=1
+Nice=5
+# Parakeet int8 via onnx-asr peaks at ~1.55 GB RSS on corpus A (task 4.1).
+MemoryMax=2500M
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+LimitCORE=0
+
+[Install]
+WantedBy=graphical-session.target

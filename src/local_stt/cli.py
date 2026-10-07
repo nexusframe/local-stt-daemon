@@ -35,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--log-level", choices=["INFO", "DEBUG", "TRACE"], help="overrides logging.level"
     )
 
+    _add_config_option(
+        commands.add_parser(
+            "engine-server", help="run the Parakeet inference server in the foreground (systemd)"
+        )
+    )
+
     status = commands.add_parser("status", help="daemon status")
     status.add_argument("--json", action="store_true", help="machine-readable status")
     status.add_argument(
@@ -563,6 +569,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from local_stt.app import run_daemon
 
         return run_daemon(args.config, args.log_level)
+    if args.command == "engine-server":
+        from local_stt.engine_server import run_engine_server
+
+        config = _load_config(args)
+        return EXIT_CONFIG if config is None else run_engine_server(config)
     if args.command == "doctor":
         from local_stt.doctor import cmd_doctor
 

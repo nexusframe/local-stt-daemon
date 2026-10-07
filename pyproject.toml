@@ -14,6 +14,7 @@ dependencies = [
     "onnxruntime",
     "python-xlib",
     "soxr",
+    "onnx-asr>=0.12,<0.13",  # Parakeet engine server (ADR-018, task 4.1)
 ]
 
 [project.optional-dependencies]
@@ -49,6 +50,7 @@ filterwarnings = [
 ]
 markers = [
     "needs_whisper: requires a local whisper-server build and a model",
+    "needs_parakeet: requires the Parakeet model in ~/.local/share/local-stt/models",
     "needs_x11: requires an X server (run under xvfb-run)",
     "needs_audio: requires a real PipeWire session and microphone",
     "e2e: full daemon end-to-end test",
