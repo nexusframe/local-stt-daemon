@@ -124,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument(
         "--reference", type=Path, help="--context: the text read (default: the --long .txt)"
     )
-    bench.add_argument("--model", help="--soak: the model (default: stt.model)")
+    bench.add_argument("--model", help="--soak: the model (default: the stt.engine model)")
     bench.add_argument(
         "--duration", type=float, default=600.0, help="--soak: seconds (default 600)"
     )
@@ -302,13 +302,17 @@ def _run_soak(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from local_stt.config import Config
     from local_stt.stt.parakeet import PARAKEET_MODEL
 
-    if args.model == PARAKEET_MODEL:  # task 4.5: --soak and --context stay Whisper-only
-        print("error: --soak runs Whisper models only", file=sys.stderr)
-        return 2
     stt = Config().stt
+    model = args.model or stt.engine_model  # the production default (Parakeet since v0.4)
+    if model == PARAKEET_MODEL and args.audio_ctx is not None:
+        print("error: --audio-ctx does not apply to Parakeet", file=sys.stderr)
+        return 2
     try:
         threads = int(args.threads) if args.threads else stt.threads
-        audio_ctx = int(args.audio_ctx) if args.audio_ctx is not None else stt.audio_ctx
+        if model == PARAKEET_MODEL:
+            audio_ctx = 0
+        else:
+            audio_ctx = int(args.audio_ctx) if args.audio_ctx is not None else stt.audio_ctx
     except ValueError:
         parser.error("--soak takes one --threads and one --audio-ctx value")
     dataset = args.dataset.expanduser()
@@ -316,7 +320,7 @@ def _run_soak(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         result = soak.run_soak(
             args.long or dataset / "long" / "001.wav",
             args.resume or runner.default_out_dir(),
-            model=args.model or stt.model,
+            model=model,
             threads=threads,
             audio_ctx=audio_ctx,
             models_dir=stt.models_dir,

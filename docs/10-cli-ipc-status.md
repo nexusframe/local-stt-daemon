@@ -21,7 +21,7 @@ One entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), with sub
 | `local-stt transcribe FILE.wav [--model M]` | stage 0 | one-shot file transcription (test without microphone or hotkeys). Without `--model`, it uses the running server of `stt.engine`. With `--model`, it uses a **temporary** server on a random free loopback port (like `bench`, [13](13-benchmark.md) §13.4), so the service model does not change. `--model parakeet-tdt-0.6b-v3-int8` starts a temporary Parakeet server; any other name starts a temporary whisper-server (task 4.5) | without `--model`: the engine server, not the daemon |
 | `local-stt record-corpus DIR [--long]` | stage 0 | records the benchmark corpus ([13](13-benchmark.md) §13.2) | no |
 | `local-stt bench [--quick] [--dataset DIR] …` | stage 0 | model matrix on temporary servers, Whisper models and Parakeet ([13](13-benchmark.md) §13.4) | no (both engine services must be stopped) |
-| `local-stt bench --soak …` | v0.2 | 10-minute continuous-mode test through the real Segmenter; Whisper models only (Parakeet → code 2, task 4.5) | no |
+| `local-stt bench --soak …` | v0.2 | 10-minute continuous-mode test through the real Segmenter; default model: the `stt.engine` model (Parakeet since task 4.9); `--audio-ctx` with Parakeet → code 2 | no |
 | `local-stt bench --context [--long F.wav] [--reference F.txt] [--context-chars 0,100,200,300] [--context-reset off]` | v0.3 | continuous-mode context policies on one long recording ([13](13-benchmark.md) §13.4); whisper-server only, because Parakeet has no prompt | no |
 | `local-stt bench report DIR` | stage 0 | Markdown results report | no |
 

@@ -96,8 +96,3 @@ def test_without_model_uses_the_selected_engine_service(
     config.write_text(config.read_text() + 'engine = "whisper-server"\n')
     assert cli.main(["transcribe", "--config", str(config), str(FIXTURE)]) == 0
     assert used == ["ParakeetEngine", "WhisperServerEngine"]
-
-
-def test_soak_rejects_parakeet(capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main(["bench", "--soak", "--model", parakeet.PARAKEET_MODEL]) == 2
-    assert "Whisper models only" in capsys.readouterr().err

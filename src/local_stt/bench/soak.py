@@ -33,6 +33,7 @@ from local_stt.audio.wav import wav_bytes_to_float32
 from local_stt.bench.runner import (
     SystemSampler,
     concurrency_error,
+    model_path,
     process_cpu_seconds,
     process_peak_rss_mb,
     system_info,
@@ -43,6 +44,7 @@ from local_stt.controller import Controller
 from local_stt.interfaces import EngineHealth, HotkeyProblem, InjectResult, Sound
 from local_stt.pipeline import PipelineWorker
 from local_stt.stt import whisper_server as ws
+from local_stt.stt.parakeet import PARAKEET_MODEL, TemporaryParakeetServer
 from local_stt.text.processor import DefaultTextProcessor
 
 log = logging.getLogger("local_stt.bench")
@@ -233,21 +235,29 @@ def run_soak(
         raise ValueError(f"{long_wav}: {rate} Hz, expected {SAMPLE_RATE} Hz")
     words, verified = load_words(words_path) if words_path else ([], False)
 
+    parakeet = model == PARAKEET_MODEL  # task 4.8 follow-up: N3 for the default engine
+    if parakeet:
+        audio_ctx = 0  # Parakeet has no audio_ctx (13 §13.4)
     base = Config()
     config = replace(
         base,
         stt=replace(
             base.stt,
-            model=model,
+            engine="parakeet" if parakeet else "whisper-server",
+            model=base.stt.model if parakeet else model,
             threads=threads,
             audio_ctx=audio_ctx,
             models_dir=models_dir,
         ),
         logging=replace(base.logging, timings=False),
     )
-    server = ws.TemporaryWhisperServer(
-        config.stt.model_path, model=model, threads=threads, audio_ctx=audio_ctx
-    )
+    server: ws.TemporaryWhisperServer
+    if parakeet:
+        server = TemporaryParakeetServer(model_path(model, models_dir), threads=threads)
+    else:
+        server = ws.TemporaryWhisperServer(
+            config.stt.model_path, model=model, threads=threads, audio_ctx=audio_ctx
+        )
     server.start()
     assert server.engine is not None and server.pid is not None
     recorder = _Recorder()
@@ -356,6 +366,7 @@ def run_soak(
     )
     info = system_info(long_wav.parent.parent)
     result["config"] = {
+        "engine": config.stt.engine,
         "model": model,
         "threads": threads,
         "audio_ctx": audio_ctx,

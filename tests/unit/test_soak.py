@@ -10,6 +10,7 @@ import pytest
 from local_stt import cli
 from local_stt.bench import soak
 from local_stt.bench.soak import Word
+from local_stt.stt.parakeet import PARAKEET_MODEL
 
 
 def token(text: str, start_ms: int, end_ms: int) -> dict[str, Any]:
@@ -156,12 +157,23 @@ def test_cli_soak_uses_the_production_defaults(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(soak, "run_soak", fake_run)
     monkeypatch.setattr(soak, "format_summary", lambda result: "summary")
     assert cli.main(["bench", "--soak", "--dataset", "/data", "--duration", "60"]) == 0
+    # the default engine since v0.4; Parakeet has no audio_ctx
     assert (seen["model"], seen["threads"], seen["audio_ctx"], seen["duration_s"]) == (
-        "small-q8_0",
+        PARAKEET_MODEL,
         4,
-        1000,
+        0,
         60.0,
     )
     assert seen["long_wav"] == Path("/data/long/001.wav")
-    assert cli.main(["bench", "--soak", "--threads", "8", "--audio-ctx", "0"]) == 0
+    assert cli.main(["bench", "--soak", "--model", "small-q8_0"]) == 0
+    assert (seen["model"], seen["threads"], seen["audio_ctx"]) == ("small-q8_0", 4, 1000)
+    assert (
+        cli.main(["bench", "--soak", "--model", "small-q8_0", "--threads", "8", "--audio-ctx", "0"])
+        == 0
+    )
     assert (seen["threads"], seen["audio_ctx"]) == (8, 0)
+
+
+def test_cli_soak_rejects_audio_ctx_for_parakeet(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["bench", "--soak", "--audio-ctx", "1000"]) == 2
+    assert "--audio-ctx does not apply to Parakeet" in capsys.readouterr().err
