@@ -24,6 +24,8 @@ readonly UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 readonly UNITS=(local-stt-whisper.service local-stt-engine.service local-stt.service)
 # Engine services are never enabled: the daemon starts the one stt.engine selects (task 4.3).
 readonly ENGINE_UNITS=(local-stt-whisper.service local-stt-engine.service)
+# Step 9 waits at most this long for the engine unit (the model load takes 3-8 s).
+readonly ENGINE_WAIT_S=30
 # The default engine's model (stt.engine = "parakeet"); --model is the whisper-server fallback.
 readonly PARAKEET_MODEL="parakeet-tdt-0.6b-v3-int8"
 
@@ -255,8 +257,26 @@ install_units() {
 }
 
 # 9. Diagnostics
+# The daemon starts the engine unit and does not wait for it (11 §11.5), and the model load
+# takes a few seconds. Without this wait, doctor saw `activating` and reported FAIL (v0.4
+# acceptance, finding 1). Returns at once if the daemon does not run (--no-enable).
+wait_for_engine() {
+    local i unit state
+    systemctl --user is-active --quiet local-stt.service || return 0
+    for ((i = 0; i < ENGINE_WAIT_S; i++)); do
+        for unit in "${ENGINE_UNITS[@]}"; do
+            # is-active exits 3 for an inactive unit: keep set -e from stopping the script
+            state=$(systemctl --user is-active "$unit" 2>/dev/null) || true
+            [[ "$state" == active || "$state" == failed ]] && return 0
+        done
+        sleep 1
+    done
+    warn "no engine unit became active in ${ENGINE_WAIT_S} s"
+}
+
 run_doctor() {
     log "9/9 local-stt doctor"
+    wait_for_engine
     "$LOCAL_STT" doctor || warn "doctor reported FAIL (see above)"
 }
 

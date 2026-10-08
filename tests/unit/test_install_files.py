@@ -66,3 +66,52 @@ def test_example_config_model_substitution(tmp_path: Path) -> None:
     config, _ = load_config(path)
     assert config.stt.model == "medium-q5_0"
     assert config.vad.model == "silero_vad.onnx"
+
+
+def _run_wait_for_engine(tmp_path: Path, states: list[str], daemon: str = "active") -> str:
+    """install.sh `wait_for_engine` with a fake systemctl that walks through `states`."""
+    script = (REPO / "scripts/install.sh").read_text(encoding="utf-8")
+    match = re.search(r"^wait_for_engine\(\) \{\n.*?^\}\n", script, re.S | re.M)
+    assert match is not None
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (tmp_path / "states").write_text("\n".join(states) + "\n")
+    (bin_dir / "systemctl").write_text(
+        "#!/bin/bash\n"
+        f'if [[ "$*" == *"--quiet local-stt.service"* ]]; then [[ {daemon} == active ]]; exit; fi\n'
+        'echo "$*" >> "$LOG"\n'
+        'if [[ "$*" == *local-stt-engine.service* ]]; then\n'
+        '  state=$(head -1 "$STATES"); sed -i 1d "$STATES"; state=${state:-inactive}\n'
+        "else state=inactive; fi\n"
+        'echo "$state"; [[ $state == active ]] || exit 3\n'
+    )
+    (bin_dir / "sleep").write_text("#!/bin/bash\n")
+    for name in ("systemctl", "sleep"):
+        (bin_dir / name).chmod(0o755)
+    program = (  # the script runs with these options; `inactive` exits 3
+        "set -euo pipefail\n"
+        "ENGINE_UNITS=(local-stt-whisper.service local-stt-engine.service)\nENGINE_WAIT_S=5\n"
+        'warn() { echo "WARN: $*"; }\n' + match.group(0) + "wait_for_engine\n"
+    )
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "STATES": str(tmp_path / "states")}
+    env["LOG"] = str(tmp_path / "log")
+    done = subprocess.run(["bash", "-c", program], env=env, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def test_install_waits_for_the_engine_before_doctor(tmp_path: Path) -> None:
+    # v0.4 acceptance, finding 1: doctor ran while the engine was `activating`
+    out = _run_wait_for_engine(tmp_path, ["inactive", "activating", "activating", "active"])
+    assert out == ""
+    assert (tmp_path / "log").read_text().count("local-stt-engine.service") == 4
+
+
+def test_install_engine_wait_gives_up_with_a_warning(tmp_path: Path) -> None:
+    out = _run_wait_for_engine(tmp_path, ["activating"] * 10)
+    assert "no engine unit became active in 5 s" in out
+
+
+def test_install_engine_wait_skips_without_the_daemon(tmp_path: Path) -> None:
+    assert _run_wait_for_engine(tmp_path, ["activating"], daemon="inactive") == ""
+    assert not (tmp_path / "log").exists()
