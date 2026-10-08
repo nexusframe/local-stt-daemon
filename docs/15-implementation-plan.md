@@ -220,6 +220,8 @@ Status: 4.9 done 2026-10-08 (user request 2026-10-08: N3 of the v0.4 acceptance 
 - N3: soak RTF ≤ 0.5 on AC `performance`, and a `power-saver` run recorded (it fails with Whisper),
 - `stt.engine = "whisper-server"` still passes the v0.2 soak (no regression of the alternative).
 
+Status: v0.4 checklist and criteria completed 2026-10-08, results in [acceptance-v0.4.md](acceptance-v0.4.md). All pass: corpus A WER 5.6 %; N2 p90 `total` 0.99 s (21 dictations of 4–10 s); soak RTF 0.09 on `performance` and 0.31 on `power-saver`; the whisper-server soak RTF 0.32. Findings, decided by the user 2026-10-08: `doctor` in `install.sh` ran before the engine was ready (fixed: step 9 waits for the engine unit); the N1 margin was 1.7 % (N1 for Parakeet is now 2.4 GB); the VAD share on `power-saver` is 4.9 % (no change).
+
 ## Backlog (no commitments)
 
 Ordered by user value:

@@ -21,7 +21,7 @@ Parakeet has no language setting: it detects the language itself. A sentence tha
 - Ubuntu 24.04 with a GNOME **X11** session ("Ubuntu on Xorg").
 - PipeWire (the Ubuntu default) and a microphone.
 - Python 3.12.
-- About 1.3 GB of RAM for the Parakeet engine, up to 2.2 GB during a 2-minute dictation (0.5 GB with Whisper `small-q8_0`).
+- About 1.3 GB of RAM for the Parakeet engine, up to 2.4 GB during a 2-minute dictation (0.5 GB with Whisper `small-q8_0`).
 - A few minutes of CPU time to build whisper.cpp.
 
 ## Installation

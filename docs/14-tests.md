@@ -114,6 +114,6 @@ v0.4 (additional; draft from task 4.6, to be refined at acceptance):
 - [ ] Under Parakeet, the language hotkey and `local-stt language toggle` are rejected (notification “Language: automatic (Parakeet)”, exit code 4).
 - [ ] Humming, a cough and keyboard noise during continuous dictation insert nothing.
 - [ ] A code-switched sentence that comes out in Cyrillic is inserted unchanged and counted in `stats.jobs_non_latin`.
-- [ ] Engine server RSS stays ≤ 2.2 GB after 10 minutes of dictation, with one 120 s PTT recording (N1); `ss -ltnp` shows it only on `127.0.0.1` (N5).
+- [ ] Engine server RSS stays ≤ 2.4 GB after 10 minutes of dictation, with one 120 s PTT recording (N1); `ss -ltnp` shows it only on `127.0.0.1` (N5).
 
 - *Backlog, not v0.3 (preview moved out of task 3.2, [15](15-implementation-plan.md) item 9):* Preview requires `continuous.preview=true` and `status --watch --preview`; ordinary status, `job` events, logs, and notifications contain no preview text. After the final subscriber disconnects, no further preview requests are submitted.

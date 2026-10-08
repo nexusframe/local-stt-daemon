@@ -310,7 +310,7 @@ The server implements the subset of 6.5 that the daemon uses. Thus the client is
 
 - The language hotkey and `local-stt language` are rejected with `language_unsupported` (exit code 4). `status` shows the language `auto` ([04](04-state-machine.md) §4.6, [10](10-cli-ipc-status.md)).
 - Code-switched speech (Polish with English terms) can come out in Cyrillic. Such output is injected unchanged and counted (6.8, `stats.jobs_non_latin`).
-- RAM: 1.13–1.26 GB RSS after load and short requests. The peak increases with the recording length: ~1.6 GB at 60 s, ~2.1 GB at 120 s (N1: ≤ 2.2 GB). The unit has `MemoryMax=3000M`.
+- RAM: 1.13–1.26 GB RSS after load and short requests. The peak increases with the recording length: ~1.6 GB at 60 s, ~2.1–2.2 GB at 106–120 s (N1: ≤ 2.4 GB). The unit has `MemoryMax=3000M`.
 - Latency (task 4.4, live, 11 PTT jobs of 1.5–5.1 s): 0.47–0.82 s from key release to injected text. Whisper `small-q8_0` had p90 3.70 s in v0.1.
 
 ### Temporary server
