@@ -146,14 +146,14 @@ def test_select_applies_n1_audio_ctx_rule_and_n2_filter() -> None:
 
 def test_select_applies_n1_per_engine() -> None:
     stats = [
-        _stats(PARAKEET_MODEL, 0.056, 0.9, rss=1585),  # under 1.6 GB -> allowed
-        _stats(PARAKEET_MODEL, 0.056, 1.2, rss=2188, threads=8),
+        _stats(PARAKEET_MODEL, 0.056, 0.9, rss=2188),  # under 2.2 GB -> allowed
+        _stats(PARAKEET_MODEL, 0.056, 1.2, rss=2300, threads=8),
         _stats("small-q8_0", 0.074, 2.8, rss=1100),
     ]
     selection = report.select({s.key: s for s in stats}, control="base-q5_1")
     assert [(s.model, s.threads) for s in selection.provisional] == [(PARAKEET_MODEL, 4)]
     reasons = selection.excluded
-    assert "> 1.6 GB (N1)" in reasons[key(cfg(PARAKEET_MODEL, threads=8))]
+    assert "> 2.2 GB (N1)" in reasons[key(cfg(PARAKEET_MODEL, threads=8))]
     assert "> 1 GB (N1)" in reasons[key(cfg("small-q8_0"))]
 
 

@@ -25,7 +25,7 @@ from local_stt.stt.parakeet import PARAKEET_MODEL
 MEDIUM = "medium"
 ELIMINATION_P50_S = 6.0
 N1_SERVER_RSS_MB = 1024.0  # whisper-server (01 §1.5)
-N1_PARAKEET_RSS_MB = 1.6 * 1024  # Parakeet engine server (task 4.6)
+N1_PARAKEET_RSS_MB = 2.2 * 1024  # Parakeet engine server (task 4.8)
 N2_P90_S = 5.0  # N2 target, raised from 2.5 s on 2026-09-17 (01 §1.5)
 AUDIO_CTX_MAX_WER_DELTA = 0.01  # 1.0 pp
 WER_TIE = 0.01

@@ -152,8 +152,8 @@ RestartSec=2
 RestartPreventExitStatus=78
 Environment=PYTHONUNBUFFERED=1
 Nice=5
-# Parakeet int8 via onnx-asr peaks at ~1.55 GB RSS on corpus A (task 4.1).
-MemoryMax=2500M
+# Parakeet int8 via onnx-asr peaks at ~2.1 GB RSS for 120 s of audio (task 4.8).
+MemoryMax=3000M
 NoNewPrivileges=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=yes
@@ -166,7 +166,7 @@ WantedBy=graphical-session.target
 - **Same package and venv as the daemon** (user decision 2026-10-07). The server reads `config.toml` and `secret` itself, so it needs no env file. Details: [06](06-stt-engine.md) §6.10.
 - **`Type=notify`.** The server sends `READY=1` after the model loads and the socket listens. Thus `systemctl --user start` returns when the server can answer.
 - **`RestartPreventExitStatus=78`.** A missing secret or model directory stops the restarts. `doctor` shows the cause.
-- **`MemoryMax=2500M`.** This is above the measured peak (1.55 GB) and N1 (1.6 GB). It stops a leak before the system uses swap.
+- **`MemoryMax=3000M`.** This is above the measured peak (~2.1 GB for a 120 s recording) and N1 (2.2 GB). It stops a leak. The unit has no swap limit: at the old limit (2500M), 120 s recordings pushed the server into swap instead of a stop (task 4.8).
 - **`Nice=5`** and the other settings are the same as for whisper-server.
 - **Loopback only (N5).** The host `127.0.0.1` is hard-coded in `engine_server.py`. `doctor` checks the port.
 

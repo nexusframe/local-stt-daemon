@@ -42,6 +42,8 @@ log = logging.getLogger("local_stt.engine_server")
 EXIT_CONFIG = 78  # EX_CONFIG, as cli.EXIT_CONFIG: systemd does not restart on it
 
 ONNX_ASR_MODEL = "nemo-parakeet-tdt-0.6b-v3"  # onnx-asr model type for that directory
+# Encoder input of 30 s: features have 100 frames/s (measured: 60 s = 6001 frames, task 4.8)
+ARENA_SHRINK_FRAMES = 3000
 # 64 MiB of s16 WAV is ~35 min of audio; the daemon sends segments of at most ~30 s.
 MAX_BODY_BYTES = 64 * 1024 * 1024
 
@@ -58,6 +60,7 @@ def load_parakeet(model_dir: Path, threads: int) -> Recognizer:
     model = onnx_asr.load_model(
         ONNX_ASR_MODEL, model_dir, quantization="int8", sess_options=options
     )
+    shrink_arena_after_long_runs(model)
 
     def recognize(audio: NDArray[np.float32], sample_rate: int) -> str:
         if sample_rate != SAMPLE_RATE:  # the handler rejects other rates with HTTP 400
@@ -65,6 +68,43 @@ def load_parakeet(model_dir: Path, threads: int) -> Recognizer:
         return model.recognize(audio, sample_rate=16000)
 
     return recognize
+
+
+class ShrinkingSession:
+    """An onnxruntime session that frees its CPU arena after a long input (task 4.8).
+
+    The arena keeps the memory of the largest request: after 120 s of audio the server held
+    ~2.5 GB until it stopped. Shrinking after every request cost ~15 % on short ones, so only
+    inputs of more than `ARENA_SHRINK_FRAMES` feature frames shrink it.
+    """
+
+    def __init__(self, session: Any):
+        import onnxruntime as ort
+
+        self._session = session
+        self._shrink = ort.RunOptions()
+        self._shrink.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu:0")
+
+    def run(self, output_names: Any, feeds: Mapping[str, Any]) -> Any:
+        if feeds["audio_signal"].shape[-1] > ARENA_SHRINK_FRAMES:
+            return self._session.run(output_names, feeds, self._shrink)
+        return self._session.run(output_names, feeds)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._session, name)
+
+
+def shrink_arena_after_long_runs(model: Any) -> bool:
+    """Wraps the encoder session of an onnx-asr NeMo model; False (and a warning) if it is missing.
+
+    onnx-asr 0.12 has no run-options parameter, so this uses its private `asr._encoder`.
+    """
+    asr = getattr(model, "asr", None)
+    if getattr(asr, "_encoder", None) is None:
+        log.warning("onnx-asr has no asr._encoder: the arena is not shrunk after long recordings")
+        return False
+    asr._encoder = ShrinkingSession(asr._encoder)  # type: ignore[union-attr]
+    return True
 
 
 class RequestError(Exception):

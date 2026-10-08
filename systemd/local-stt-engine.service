@@ -16,8 +16,8 @@ RestartSec=2
 RestartPreventExitStatus=78
 Environment=PYTHONUNBUFFERED=1
 Nice=5
-# Parakeet int8 via onnx-asr peaks at ~1.55 GB RSS on corpus A (task 4.1).
-MemoryMax=2500M
+# Parakeet int8 via onnx-asr peaks at ~2.1 GB RSS for 120 s of audio (task 4.8).
+MemoryMax=3000M
 NoNewPrivileges=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 LockPersonality=yes

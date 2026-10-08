@@ -300,6 +300,7 @@ The server implements the subset of 6.5 that the daemon uses. Thus the client is
 | an exception in the model | `500`; the server continues |
 
 - The server decodes one request at a time.
+- **Memory after long recordings (task 4.8).** The onnxruntime CPU arena keeps the memory of the largest request. After 120 s of audio the server held ~2.5 GB until it stopped. Thus, after an encoder input of more than 30 s (`ARENA_SHRINK_FRAMES`, 3000 feature frames), the server shrinks the arena (run option `memory.enable_memory_arena_shrinkage`). The RSS then goes back to ~1.25 GB. Shorter requests do not shrink it, because shrinking after every request cost ~15 % latency. onnx-asr 0.12 has no run-options parameter, so the server wraps its private `asr._encoder`. If that attribute is missing, the server logs a warning and runs without the shrink.
 - It ignores the other form fields (`language`, `prompt`, `audio_ctx`, temperatures).
 - `ParakeetEngine` never sends a prompt and always sends `audio_ctx = 0`. Thus `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.audio_ctx` and `stt.beam_size` have no effect under Parakeet.
 - `avg_logprob` and `no_speech_prob` are `null`. Thus rule 1 of 6.8 never rejects a Parakeet segment. The VAD gate and rule 5 handle non-speech.
@@ -309,7 +310,7 @@ The server implements the subset of 6.5 that the daemon uses. Thus the client is
 
 - The language hotkey and `local-stt language` are rejected with `language_unsupported` (exit code 4). `status` shows the language `auto` ([04](04-state-machine.md) §4.6, [10](10-cli-ipc-status.md)).
 - Code-switched speech (Polish with English terms) can come out in Cyrillic. Such output is injected unchanged and counted (6.8, `stats.jobs_non_latin`).
-- RAM: 1.13–1.19 GB RSS after load, peak 1.55 GB on corpus A (N1: ≤ 1.6 GB). The unit has `MemoryMax=2500M`.
+- RAM: 1.13–1.26 GB RSS after load and short requests. The peak increases with the recording length: ~1.6 GB at 60 s, ~2.1 GB at 120 s (N1: ≤ 2.2 GB). The unit has `MemoryMax=3000M`.
 - Latency (task 4.4, live, 11 PTT jobs of 1.5–5.1 s): 0.47–0.82 s from key release to injected text. Whisper `small-q8_0` had p90 3.70 s in v0.1.
 
 ### Temporary server

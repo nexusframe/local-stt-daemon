@@ -102,7 +102,7 @@ Measure each configuration three times. Report the WER for every run plus its me
 
 ```text
 production = configurations excluding base-q5_1, with peak server RSS ≤ the N1 limit of their engine
-             (whisper-server 1 GB, Parakeet 1.6 GB; task 4.6),
+             (whisper-server 1 GB, Parakeet 2.2 GB; task 4.8),
              and with audio_ctx > 0 only when
              WER(audio_ctx) − WER(0) ≤ 1.0 pp for the same model, threads, and beam
 

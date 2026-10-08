@@ -76,7 +76,7 @@ Pressing `Esc` while holding PTT cancels the recording. Taps shorter than `ptt.m
 
 | ID | Target | How it is measured |
 |---|---|---|
-| N1 | RAM: Python daemon ≤ 150 MB RSS; `whisper-server` with the selected model ≤ 1 GB RSS; Parakeet engine server ≤ 1.6 GB RSS (task 4.6, user decision 2026-10-08; measured peak 1.55 GB on corpus A, 15 task 4.1) | `local-stt bench` (peak server RSS), `ps -o rss` |
+| N1 | RAM: Python daemon ≤ 150 MB RSS; `whisper-server` with the selected model ≤ 1 GB RSS; Parakeet engine server ≤ 2.2 GB RSS (task 4.8, user decision 2026-10-08; measured peak ~2.1 GB for a 120 s recording; was 1.6 GB from task 4.6) | `local-stt bench` (peak server RSS), `ps -o rss` |
 | N2 | PTT: p90 latency from key release to injector completion, including clipboard handling (`total` in logs), ≤ 5 s for 4–10 s utterances (default model). Raised from 2.5 s on 2026-09-17 after stage-0 measurements (13 §13.5) | `bench` measures the stage up to ready text; acceptance: p90 `total` from at least 20 complete dictations with successful injection, including audio finalization and clipboard handling (13 §13.5) |
 | N3 | Continuous: average RTF ≤ 0.5 in a 10-minute test; the queue does not grow monotonically | `bench --soak` |
 | N4 | Continuous in silence: daemon CPU ≤ 5% of one core | `pidstat` |

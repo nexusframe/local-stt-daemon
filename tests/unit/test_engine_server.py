@@ -277,3 +277,47 @@ def test_cli_engine_server_passes_the_overrides(
     args = ["engine-server", "--port", "4000", "--threads", "3", "--model-dir", str(tmp_path)]
     assert cli.main(args) == 0
     assert seen == [{"port": 4000, "threads": 3, "model_dir": tmp_path}]
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, object]] = []
+
+    def run(self, output_names: object, feeds: dict, run_options: object = None) -> list[str]:
+        self.calls.append((feeds["audio_signal"].shape[-1], run_options))
+        return ["out"]
+
+    def get_inputs(self) -> list[str]:
+        return ["audio_signal"]
+
+
+def test_shrinking_session_shrinks_the_arena_only_after_long_inputs() -> None:
+    # task 4.8: shrinking after every request cost ~15 % on short ones
+    inner = FakeSession()
+    session = engine_server.ShrinkingSession(inner)
+    limit = engine_server.ARENA_SHRINK_FRAMES
+    for frames in (900, limit, limit + 1):
+        assert session.run(["outputs"], {"audio_signal": np.zeros((1, 128, frames))}) == ["out"]
+
+    assert [frames for frames, _ in inner.calls] == [900, limit, limit + 1]
+    assert inner.calls[0][1] is None and inner.calls[1][1] is None
+    options = inner.calls[2][1]
+    assert options.get_run_config_entry("memory.enable_memory_arena_shrinkage") == "cpu:0"
+    assert session.get_inputs() == ["audio_signal"]  # other attributes pass through
+
+
+def test_shrink_arena_wraps_the_encoder_or_warns(caplog: pytest.LogCaptureFixture) -> None:
+    class Asr:
+        def __init__(self) -> None:
+            self._encoder = FakeSession()
+
+    class Model:
+        def __init__(self, asr: object) -> None:
+            self.asr = asr
+
+    model = Model(Asr())
+    assert engine_server.shrink_arena_after_long_runs(model)
+    assert isinstance(model.asr._encoder, engine_server.ShrinkingSession)
+
+    assert not engine_server.shrink_arena_after_long_runs(Model(object()))
+    assert "arena is not shrunk" in caplog.text

@@ -204,7 +204,7 @@ Rationale in [02](02-architecture.md) §2.2. All key libraries are blocking.
   - the context tail moved WER by under 1 point (task 3.4), so losing it costs little; vocabulary biasing (sherpa-onnx hotwords) is untested — it crashed without a `bpe.vocab` file,
   - whisper-server remains one config key away.
 - **Further costs:**
-  - RAM: 1.13 GB RSS after load and a 1.55 GB peak with `onnx-asr`. N1 now has a separate limit of 1.6 GB for this server (task 4.6, user decision 2026-10-08).
+  - RAM: 1.13 GB RSS after load and a 1.55 GB peak with `onnx-asr`. N1 now has a separate limit of 1.6 GB for this server (task 4.6, user decision 2026-10-08). Task 4.8 raised it to 2.2 GB: the peak increases with the recording length (~2.1 GB at 120 s).
   - Non-speech: Parakeet can output short English fillers. **Correction (task 4.4, 2026-10-07):** the first claim was "fillers in 6 of 10 non-speech clips, Whisper hallucinated in 10 of 10". Those clips were the quietest windows of the continuous reading, and 19 of the 20 quietest windows contain speech. Thus that comparison is not evidence about non-speech. On 8 real non-speech takes, the VAD gate dropped 6. The cough gave "Cool." and the humming gave "Hm", "Mm.", "Um". Rule 5 of [06](06-stt-engine.md) §6.8 drops these results.
-  - The sherpa-onnx export fails on a 6-minute input. Continuous segments are short (`vad.max_segment_s ≤ 28`). A PTT recording can be as long as `ptt.max_duration_s` (120 s). Inputs longer than 24 s were not tested with `onnx-asr`.
+  - The sherpa-onnx export fails on a 6-minute input. Continuous segments are short (`vad.max_segment_s ≤ 28`). A PTT recording can be as long as `ptt.max_duration_s` (120 s). Inputs longer than 24 s were not tested with `onnx-asr`. Task 4.8 tested 60 s and 120 s: the transcripts were complete.
 - **Revisit:** if Cyrillic or wrong-language output bothers the user in daily use (backlog item 10), or if the v0.4 acceptance fails.
