@@ -10,9 +10,9 @@ Text is inserted through the clipboard with a simulated paste. The previous clip
 
 ## Status
 
-Pre-release (version 0.0.1). v0.1 (push-to-talk) and v0.2 (continuous dictation) have passed their acceptance checklists on the reference machine (Intel i5-8365U, no GPU): [v0.1](docs/acceptance-v0.1.md), [v0.2](docs/acceptance-v0.2.md). It has not been tested on other hardware or distributions. Wayland is not supported: global hotkeys and input simulation rely on X11.
+Version 0.4.0. Four milestones have passed their acceptance checklists on the reference machine (Intel i5-8365U, no GPU): [v0.1](docs/acceptance-v0.1.md) (push-to-talk), [v0.2](docs/acceptance-v0.2.md) (continuous dictation), [v0.3](docs/acceptance-v0.3.md) (language switch for Whisper) and [v0.4](docs/acceptance-v0.4.md) (the Parakeet engine). It has not been tested on other hardware or distributions. Wayland is not supported: global hotkeys and input simulation rely on X11.
 
-Whisper `small-q8_0` was the default until v0.4. With it, the 90th-percentile delay from key release to inserted text was 3.7 s on the reference machine. Its word error rate on the author's voice was 7.4 % ([benchmark results](docs/benchmark-results.md)). Parakeet had a word error rate of 5.6 % on the same recordings. In 11 live dictations of 1.5–5.1 s, the text appeared 0.47–0.82 s after key release. The full Parakeet benchmark is not done yet (task 4.7 in [the plan](docs/15-implementation-plan.md)).
+Parakeet is the default engine since v0.4. On the reference machine, the 90th-percentile delay from key release to inserted text is 0.99 s (21 dictations of 4–10 s). With Whisper `small-q8_0`, the default until v0.4, it was 3.7 s. On the author's voice, the word error rate is 5.6 % with Parakeet and 7.4 % with Whisper ([benchmark results](docs/benchmark-results.md)). Continuous dictation keeps up on the `performance` and `power-saver` profiles.
 
 Parakeet has no language setting: it detects the language itself. A sentence that mixes Polish and English can come out in Cyrillic. To use Whisper instead, set `engine = "whisper-server"` in the config and run `local-stt reload`.
 
