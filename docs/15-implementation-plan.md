@@ -238,6 +238,10 @@ Status: 5.2 implemented 2026-10-09. User decisions 2026-10-09: `history.size = 1
 
 Status: 5.3 implemented 2026-10-09. User decisions 2026-10-09: the segments of one continuous session are joined in the clipboard; a notification after each PTT recording and once for each continuous session; CLIPBOARD only (PRIMARY does not change); the mode is set only in the config file. Changes: `ClipboardOnlyInjector` (`inject/clipboard.py`) puts the text in CLIPBOARD and sends no keys; `take_text(as_user=True)` makes the text the user's content, so a later paste in another mode restores it; `AutoInjector` selects it before the window rules; the pipeline joins the session text (`_Session.clipboard`, a new start above 64 KiB); `JobFinished.session_id` lets the Controller notify once for each session; specs 04, 08 §8.4, 09. Tests: 941 unit tests pass (new: backend selection, joining, a failed segment, the limit, notifications), 68 integration tests pass (new on Xvfb: no keys and the old content replaced, a later paste restores the dictated text, cancellation keeps the clipboard); ruff is clean, mypy is clean for `src`. Live test 2026-10-09 after `install.sh --no-apt`, with the user's config set to `clipboard-only`: PTT put the text in the clipboard without a paste (inject 1–8 ms), and `Ctrl+V` pasted it; one continuous session of 6 segments gave one notification, and one `Ctrl+V` pasted all segments; `local-stt last 2` put the second newest text in the clipboard with a notification.
 
+**v0.5 acceptance:** the 14.4 (v0.5) checklist (user decision 2026-10-09). v0.5 has no measured criteria.
+
+Status: v0.5 checklist completed 2026-10-10, results in [acceptance-v0.5.md](acceptance-v0.5.md). All six items pass. Findings: `local-stt history` showed a text that is only a line break as an empty line (fixed: the line break is replaced before `strip()`); one paste waited 17.5 s in a continuous session, probably because the PTT key was held (08 §8.5 step 1; no change, user decision 2026-10-10).
+
 ## Backlog (no commitments)
 
 Ordered by user value:

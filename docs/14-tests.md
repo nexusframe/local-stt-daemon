@@ -116,4 +116,13 @@ v0.4 (additional; draft from task 4.6, to be refined at acceptance):
 - [ ] A code-switched sentence that comes out in Cyrillic is inserted unchanged and counted in `stats.jobs_non_latin`.
 - [ ] Engine server RSS stays ≤ 2.4 GB after 10 minutes of dictation, with one 120 s PTT recording (N1); `ss -ltnp` shows it only on `127.0.0.1` (N5).
 
+v0.5 (additional; user decision 2026-10-09):
+
+- [ ] `install.sh --no-apt` from the release commit → `doctor` reports no FAIL; ruff, mypy and the full test suite pass.
+- [ ] `text.commands = true`: one PTT dictation with dwukropek, średnik, nowa linia, myślnik and trzy kropki in GNOME Text Editor → the signs and the line break replace the words. “nowa linia” in GNOME Terminal moves the cursor and runs no command.
+- [ ] `local-stt history` lists the dictations newest first; `local-stt last 2` inserts the second newest text. `last` during continuous mode → `busy` (code 4); `last 99` → `no_history` (code 4); `last 0` → code 2; after a daemon restart the history is empty.
+- [ ] `injection.backend = "clipboard-only"`: PTT sends no keys and shows a notification, and `Ctrl+V` pastes the text. A continuous session of at least 3 segments gives one notification, and one `Ctrl+V` pastes all segments.
+- [ ] Regression with `backend = "auto"`: PTT in Firefox and VS Code, and 1 minute of continuous dictation → complete text in the correct order, without duplicates.
+- [ ] The journal contains no dictated text.
+
 - *Backlog, not v0.3 (preview moved out of task 3.2, [15](15-implementation-plan.md) item 9):* Preview requires `continuous.preview=true` and `status --watch --preview`; ordinary status, `job` events, logs, and notifications contain no preview text. After the final subscriber disconnects, no further preview requests are submitted.
