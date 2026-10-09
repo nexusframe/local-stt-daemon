@@ -480,7 +480,7 @@ def _format_history(texts: list[str]) -> str:
     """One numbered line per text, the number `last` takes; line breaks shown as ⏎."""
     if not texts:
         return "history is empty"
-    return "\n".join(f"{i}  {t.strip().replace(chr(10), '⏎')}" for i, t in enumerate(texts, 1))
+    return "\n".join(f"{i}  {t.replace(chr(10), '⏎').strip()}" for i, t in enumerate(texts, 1))
 
 
 def _format_language(language: dict[str, Any]) -> str:

@@ -158,6 +158,13 @@ def test_history_lists_texts_numbered_like_last(
     assert capsys.readouterr().out == "1  Nowy⏎tekst.\n2  Stary.\n"
 
 
+def test_history_shows_edge_line_breaks(fake: FakeIpc, capsys: pytest.CaptureFixture[str]) -> None:
+    # "nowa linia" spoken alone gives "\n"; it must not look like an empty entry
+    fake.response = {"ok": True, "texts": ["\n", "masło\n"]}
+    assert cli.main(["history"]) == 0
+    assert capsys.readouterr().out == "1  ⏎\n2  masło⏎\n"
+
+
 def test_empty_history(fake: FakeIpc, capsys: pytest.CaptureFixture[str]) -> None:
     fake.response = {"ok": True, "texts": []}
     assert cli.main(["history"]) == 0
