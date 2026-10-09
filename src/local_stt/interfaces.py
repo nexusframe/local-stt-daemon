@@ -65,7 +65,7 @@ class SttEngine(Protocol):
 
 Sound = Literal["start", "stop", "cancel", "error", "language", "language_alt"]  # 10 §10.6
 Cut = Literal["release", "max_duration", "silence", "max_length", "flush"]
-JobSource = Literal["ptt", "continuous"]
+JobSource = Literal["ptt", "continuous", "history"]  # history: `local-stt last` (5.2)
 
 
 @dataclass(frozen=True)
@@ -109,6 +109,7 @@ class Job:
     cut: Cut
     language: str  # active when the recording (PTT) or segment (continuous) was taken
     pause_before_s: float | None = None  # continuous: `AudioSegment.pause_before_s`
+    text: str | None = None  # source "history": the text to insert again, no audio (task 5.2)
 
     @property
     def duration_s(self) -> float:
@@ -222,6 +223,8 @@ class PipelineControl(Protocol):
     def generation(self) -> int: ...
 
     def submit(self, job: Job) -> None: ...
+
+    def reinject(self, job_id: int, text: str) -> None: ...
 
     def cancel_all(self) -> CancelResult: ...
 

@@ -98,6 +98,9 @@ sound_volume = 0.4                   # 0.0–1.0 (generated WAV scaling)
 notifications = "errors"             # none | errors | all
                                      # all also includes “Dictation enabled/disabled”, “Engine ready” (10 §10.6)
 
+[history]
+size = 10                            # texts kept in RAM for `local-stt last`; 0 = off (12 §12.2)
+
 [logging]
 level = "INFO"                       # INFO | DEBUG | TRACE
 log_text = false                     # true = full transcript text in logs (debugging only)
@@ -143,6 +146,7 @@ The validator checks all keys for both engines. A key that does not apply is kep
 | `stt.extra_server_args` items and the model path (`stt.models_dir`) contain no whitespace, quotes, backslashes, or `$`: systemd splits the unbraced `$LOCAL_STT_WHISPER_ARGS` on whitespace (9.4) | `stt.models_dir: must not contain whitespace, quotes, backslashes or $` |
 | `stt.extra_server_args` does not contain `-pr`/`--print-realtime` or `-debug`/`--debug-mode`: `--print-realtime` prints transcribed text to the server's stdout, which ends up in journald (12 §12.1; verified in `examples/server/server.cpp`, v1.9.4); `--debug-mode` enables whisper.cpp debug output derived from the audio | `stt.extra_server_args: flag X would log transcribed content` |
 | `continuous` requires `vad.enabled` | warning `vad.enabled=false: continuous dictation unavailable`; `toggle` returns `vad_disabled` |
+| `history.size` is 0..100 (task 5.2) | `history.size: must be 0..100 (got 500)` |
 | regexes in `text.*` compile | `text.hallucination_patterns[2]: invalid regex: …` |
 | the `replace` template of a regex `text.replacements` rule is valid for its pattern (group references exist, no bad escapes); `re.sub` parses the template even without a match, so a bad one would fail on every transcript | `text.replacements[0].replace: invalid replacement template: …` |
 

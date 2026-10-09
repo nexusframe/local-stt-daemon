@@ -168,6 +168,11 @@ class FeedbackConfig:
 
 
 @dataclass(frozen=True)
+class HistoryConfig:
+    size: int = 10  # texts kept in RAM for `local-stt last`; 0 = no history (task 5.2)
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     level: str = "INFO"
     log_text: bool = False
@@ -185,6 +190,7 @@ class Config:
     text: TextConfig = field(default_factory=TextConfig)
     injection: InjectionConfig = field(default_factory=InjectionConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
+    history: HistoryConfig = field(default_factory=HistoryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @property
@@ -467,6 +473,8 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
 
     ptt = config.ptt
     check(ptt.min_duration_ms >= 0, "ptt.min_duration_ms", "must be >= 0", ptt.min_duration_ms)
+    size = config.history.size
+    check(0 <= size <= 100, "history.size", "must be 0..100", size)
     check(
         ptt.max_duration_s > ptt.min_duration_ms / 1000,
         "ptt.max_duration_s",

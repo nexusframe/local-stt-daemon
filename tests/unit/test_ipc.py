@@ -84,6 +84,9 @@ def test_permissions(server: ipc.IpcServer, path: Path) -> None:
         ({"cmd": "toggle"}, ev.ContinuousToggle),
         ({"cmd": "language"}, ev.LanguageSwitch),
         ({"cmd": "language", "set": "en"}, ev.LanguageSwitch),
+        ({"cmd": "last"}, ev.HistoryInsert),
+        ({"cmd": "last", "n": 3}, ev.HistoryInsert),
+        ({"cmd": "history"}, ev.HistoryRequested),
     ],
 )
 def test_commands_become_events(
@@ -100,6 +103,9 @@ def test_commands_become_events(
         (b'{"cmd": "nope"}\n', "unknown_command"),
         (b'{"cmd": "ptt", "action": "hold"}\n', "bad_request"),
         (b'{"cmd": "language", "set": 1}\n', "bad_request"),
+        (b'{"cmd": "last", "n": 0}\n', "bad_request"),
+        (b'{"cmd": "last", "n": "2"}\n', "bad_request"),
+        (b'{"cmd": "last", "n": true}\n', "bad_request"),
         (b"[1, 2]\n", "bad_request"),
         (b"{not json\n", "bad_request"),
         (b"\xff\xfe\n", "bad_request"),

@@ -102,6 +102,9 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> FakeIpc:
         (["language"], {"cmd": "status"}),  # shows the language, switches nothing
         (["language", "toggle"], {"cmd": "language"}),
         (["language", "en"], {"cmd": "language", "set": "en"}),
+        (["last"], {"cmd": "last", "n": 1}),
+        (["last", "3"], {"cmd": "last", "n": 3}),
+        (["history"], {"cmd": "history"}),
     ],
 )
 def test_requests(
@@ -109,7 +112,7 @@ def test_requests(
     argv: list[str],
     request_: dict[str, Any],
 ) -> None:
-    fake.response = {"ok": True, "status": STATUS, "language": STATUS["language"]}
+    fake.response = {"ok": True, "status": STATUS, "language": STATUS["language"], "texts": []}
     assert cli.main(argv) == 0
     assert fake.sent == [request_]
 
@@ -145,6 +148,33 @@ def test_language_rejected(fake: FakeIpc, capsys: pytest.CaptureFixture[str]) ->
     }
     assert cli.main(["language", "de"]) == 4
     assert "language must be one of stt.languages: pl, en" in capsys.readouterr().err
+
+
+def test_history_lists_texts_numbered_like_last(
+    fake: FakeIpc, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake.response = {"ok": True, "texts": ["Nowy\ntekst. ", "Stary. "]}
+    assert cli.main(["history"]) == 0
+    assert capsys.readouterr().out == "1  Nowy⏎tekst.\n2  Stary.\n"
+
+
+def test_empty_history(fake: FakeIpc, capsys: pytest.CaptureFixture[str]) -> None:
+    fake.response = {"ok": True, "texts": []}
+    assert cli.main(["history"]) == 0
+    assert capsys.readouterr().out == "history is empty\n"
+
+
+def test_last_rejected(fake: FakeIpc, capsys: pytest.CaptureFixture[str]) -> None:
+    fake.response = {"ok": False, "error": "no_history", "message": "no history text number 4"}
+    assert cli.main(["last", "4"]) == 4
+    assert "no history text number 4" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("n", ["0", "-1", "x"])
+def test_last_needs_a_positive_number(n: str) -> None:
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["last", n])
+    assert exc.value.code == 2
 
 
 def test_status_json(

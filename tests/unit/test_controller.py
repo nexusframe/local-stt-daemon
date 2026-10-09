@@ -11,6 +11,7 @@ import pytest
 from local_stt import events as ev
 from local_stt.config import Config, ConfigError, SttConfig
 from local_stt.controller import Controller, Mode, config_diff, reload_group
+from local_stt.history import TranscriptHistory
 from local_stt.interfaces import (
     AudioClip,
     AudioOpenError,
@@ -136,6 +137,9 @@ class Pipeline:
         self.w.generation += 1
         return self.w.cancel_result
 
+    def reinject(self, job_id: int, text: str) -> None:
+        self.w.calls.append(("pipeline.reinject", job_id, text))
+
     def pause(self) -> None:
         self.w.calls.append(("pipeline.pause",))
 
@@ -167,7 +171,11 @@ def w() -> World:
 
 
 def make(
-    w: World, *, engine: EngineHealth | None = EngineHealth.READY, config: Config | None = None
+    w: World,
+    *,
+    engine: EngineHealth | None = EngineHealth.READY,
+    config: Config | None = None,
+    history: TranscriptHistory | None = None,
 ) -> Controller:
     c = Controller(
         config or WHISPER,
@@ -181,6 +189,7 @@ def make(
         clock=lambda: w.now,
         schedule=lambda delay, event: w.calls.append(("schedule", delay, event)),
         on_status=w.statuses.append,
+        history=history,
     )
     if engine is not None:
         c.handle(ev.EngineStateChanged(engine))
@@ -1059,3 +1068,58 @@ def test_reload_of_the_languages_resets_the_active_language(c: Controller, w: Wo
     c.handle(ev.ReloadRequested())
     assert c.language == "pl"
     assert c.status()["language"] == {"active": "pl", "languages": ["pl", "en", "de"]}
+
+
+# --- history (task 5.2) --------------------------------------------------------------------
+
+
+def history_of(*texts: str) -> TranscriptHistory:
+    history = TranscriptHistory(10)
+    for text in texts:
+        history.add(text)
+    return history
+
+
+def test_last_inserts_the_nth_newest_text_again(w: World) -> None:
+    c = make(w, history=history_of("stary ", "nowy "))
+    r1, r2 = reply(), reply()
+    c.handle(ev.HistoryInsert(1, r1))
+    c.handle(ev.HistoryInsert(2, r2))
+    assert r1.result() == {"ok": True, "chars": 5}
+    assert r2.result() == {"ok": True, "chars": 6}
+    reinjected = [call[2] for call in w.calls if call[0] == "pipeline.reinject"]
+    assert reinjected == ["nowy ", "stary "]
+
+
+@pytest.mark.parametrize("n", [1, 3])
+def test_last_without_such_text_is_rejected(w: World, n: int) -> None:
+    c = make(w, history=history_of() if n == 1 else history_of("a ", "b "))
+    r = reply()
+    c.handle(ev.HistoryInsert(n, r))
+    assert r.result()["error"] == "no_history"
+    assert not [call for call in w.calls if call[0] == "pipeline.reinject"]
+
+
+def test_last_is_rejected_while_recording(c: Controller, w: World) -> None:
+    c = make(w, history=history_of("tekst "))
+    press(c, w)
+    r = reply()
+    c.handle(ev.HistoryInsert(1, r))
+    assert r.result()["error"] == "busy"
+    assert not [call for call in w.calls if call[0] == "pipeline.reinject"]
+
+
+def test_history_lists_texts_newest_first(w: World) -> None:
+    c = make(w, history=history_of("a ", "b "))
+    r = reply()
+    c.handle(ev.HistoryRequested(r))
+    assert r.result() == {"ok": True, "texts": ["b ", "a "]}
+
+
+def test_reinserted_job_is_not_counted_as_a_dictation(w: World) -> None:
+    c = make(w, history=history_of("tekst "))
+    c.handle(ev.HistoryInsert(1, reply()))
+    job_id = next(call[1] for call in w.calls if call[0] == "pipeline.reinject")
+    result = InjectResult(True, "clipboard", 6, "gedit", False, None)
+    c.handle(ev.JobFinished(job_id, "history", result, {"inject": 0.2}))
+    assert c.status()["stats"]["jobs_ok"] == 0

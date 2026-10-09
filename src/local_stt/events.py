@@ -189,6 +189,21 @@ class ReloadRequested:
 
 
 @dataclass(frozen=True)
+class HistoryInsert:
+    """IPC `last` (task 5.2): insert the n-th newest history text again (1 = the newest)."""
+
+    n: int = 1
+    reply: Reply = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
+class HistoryRequested:
+    """IPC `history` (task 5.2): the history texts, newest first."""
+
+    reply: Reply = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
 class StatusRequested:
     """IPC `status` (10 §10.4): the controller composes the status in its own thread."""
 
@@ -231,6 +246,8 @@ Event = (
     | EngineStateChanged
     | ReloadRequested
     | StatusRequested
+    | HistoryInsert
+    | HistoryRequested
     | ShutdownRequested
     | X11ConnectionLost
 )

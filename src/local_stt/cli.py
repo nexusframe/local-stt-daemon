@@ -59,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         "target", nargs="?", metavar="toggle|CODE", help="switch like the hotkey, or to CODE"
     )
     commands.add_parser("cancel", help="cancel the recording and pending jobs")
+    last = commands.add_parser("last", help="insert a recent transcript again (RAM history)")
+    last.add_argument(
+        "n", nargs="?", type=_history_number, default=1, help="1 = the newest (default)"
+    )
+    commands.add_parser("history", help="list the recent transcripts, newest first")
     commands.add_parser("reload", help="reload the config file")
     commands.add_parser("devices", help="list PipeWire microphones for audio.device")
     _add_config_option(commands.add_parser("doctor", help="environment diagnostics"))
@@ -428,6 +433,8 @@ def _run_daemon_command(args: argparse.Namespace) -> int:
     request: dict[str, Any] = {"cmd": args.command}
     if args.command == "ptt":
         request["action"] = args.action
+    if args.command == "last":
+        request["n"] = args.n
     if args.command == "language":
         if args.target is None:  # show: read it from the status, switch nothing
             request = {"cmd": "status"}
@@ -454,7 +461,26 @@ def _run_daemon_command(args: argparse.Namespace) -> int:
     elif args.command == "language":
         # a switch answers with the language, a plain `language` reads the status
         print(_format_language(response.get("language") or response["status"]["language"]))
+    elif args.command == "history":
+        print(_format_history(response["texts"]))
     return 0
+
+
+def _history_number(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer: {value!r}")
+    return n
+
+
+def _format_history(texts: list[str]) -> str:
+    """One numbered line per text, the number `last` takes; line breaks shown as ⏎."""
+    if not texts:
+        return "history is empty"
+    return "\n".join(f"{i}  {t.strip().replace(chr(10), '⏎')}" for i, t in enumerate(texts, 1))
 
 
 def _format_language(language: dict[str, Any]) -> str:
@@ -590,7 +616,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "status" and args.watch:
         return _run_watch(json_lines=args.json)
-    if args.command in ("status", "ptt", "toggle", "language", "cancel", "reload"):
+    if args.command in (
+        "status",
+        "ptt",
+        "toggle",
+        "language",
+        "cancel",
+        "reload",
+        "last",
+        "history",
+    ):
         return _run_daemon_command(args)
     if args.command == "devices":
         return _run_devices()

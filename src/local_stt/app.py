@@ -282,6 +282,7 @@ class Daemon:
         from local_stt.controller import Controller
         from local_stt.engine_monitor import EngineMonitor
         from local_stt.feedback import DesktopFeedback
+        from local_stt.history import TranscriptHistory
         from local_stt.hotkeys.x11 import HotkeyConnectError, X11GrabHotkeys
         from local_stt.inject.auto import build_injector
         from local_stt.inject.clipboard import ClipboardOwner
@@ -313,6 +314,7 @@ class Daemon:
             raise StartupError(EXIT_FAILURE, str(e)) from e
         except Exception as e:  # python-xlib raises several unrelated types on connect
             raise StartupError(EXIT_FAILURE, f"cannot connect to the X display: {e}") from e
+        self.history = TranscriptHistory(config.history.size)  # RAM only (task 5.2)
         self.pipeline = PipelineWorker(
             engine=self.engine,
             processor=self.processor,
@@ -321,6 +323,7 @@ class Daemon:
             report_connection_failure=self.monitor.report_connection_failure,
             config=config,
             trimmer=self.trimmer,
+            history=self.history,
         )
         self.feedback = DesktopFeedback(config.feedback)
         self.ipc = IpcServer(socket_path(), post)
@@ -342,6 +345,7 @@ class Daemon:
                 self.feedback.update_config,
                 lambda c: self.consumer.set_max_duration(c.ptt.max_duration_s),
                 lambda c: self.monitor.set_startup_timeout(c.stt.startup_timeout_s),
+                lambda c: self.history.resize(c.history.size),
             ],
             # the injectors wait for the PTT key's release, so they follow hotkeys.* too
             at_idle=[
@@ -365,6 +369,7 @@ class Daemon:
             load_config=lambda: load_config(pre.config_path),
             on_status=self._publish_status,
             on_publish=self.ipc.publish,
+            history=self.history,
         )
 
     def start(self) -> None:

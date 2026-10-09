@@ -93,6 +93,9 @@ sounds = true                        # start/stop/cancel/error sounds
 sound_volume = 0.4                   # 0.0–1.0
 notifications = "errors"             # none | errors | all
 
+[history]
+size = 10                            # texts kept in RAM for `local-stt last`; 0 = off (12 §12.2)
+
 [logging]
 level = "INFO"                       # INFO | DEBUG | TRACE
 log_text = false                     # true = full transcript text in logs (debugging only)

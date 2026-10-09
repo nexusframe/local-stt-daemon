@@ -209,7 +209,7 @@ The daemon does not start the server itself after a failure (`Restart=on-failure
 
 | Group | Keys | When applied |
 |---|---|---|
-| **live** | `logging.*`, `text.*`, `injection.*`, `feedback.*`, `ptt.*`, `continuous.*`, `stt.languages`, `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.no_speech_threshold`, `stt.logprob_threshold`, `stt.startup_timeout_s`, `stt.request_timeout_max_s` | immediately |
+| **live** | `logging.*`, `text.*`, `history.*`, `injection.*`, `feedback.*`, `ptt.*`, `continuous.*`, `stt.languages`, `stt.vocabulary_prompt`, `stt.continuous_context`, `stt.no_speech_threshold`, `stt.logprob_threshold`, `stt.startup_timeout_s`, `stt.request_timeout_max_s` | immediately |
 | **at IDLE** | `audio.*`, `vad.*`, `hotkeys.*` | immediately if `mode == IDLE`; otherwise stored in `pending_reload` and applied on the next transition to IDLE (without interrupting the recording) |
 | **server restart** ⟳ | `stt.engine`, `stt.model`, `stt.models_dir`, `stt.threads`, `stt.beam_size`, `stt.port`, `stt.extra_server_args`, `stt.audio_ctx`, `stt.audio_ctx_margin` (a server only ever sees one fixed `audio_ctx` plus the full window, 06 §6.7) | see below |
 

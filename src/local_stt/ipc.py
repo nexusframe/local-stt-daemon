@@ -27,6 +27,8 @@ from local_stt.events import (
     CancelRequested,
     ContinuousToggle,
     Event,
+    HistoryInsert,
+    HistoryRequested,
     LanguageSwitch,
     PttPressed,
     PttReleased,
@@ -94,6 +96,13 @@ def request_event(request: Any, reply: "Future[Response]") -> Event | Response:
         if target is not None and not isinstance(target, str):
             return error("bad_request", 'language "set" must be a language code')
         return LanguageSwitch(target, reply)
+    if cmd == "last":
+        n = request.get("n", 1)
+        if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+            return error("bad_request", 'last "n" must be a positive integer')
+        return HistoryInsert(n, reply)
+    if cmd == "history":
+        return HistoryRequested(reply)
     return error("unknown_command", f"unknown command {cmd!r}")
 
 

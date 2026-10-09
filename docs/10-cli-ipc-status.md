@@ -12,6 +12,8 @@ One entry point (`[project.scripts] local-stt = "local_stt.cli:main"`), with sub
 | `local-stt ptt start\|stop` | v0.1 | equivalent to pressing/releasing the PTT key | yes |
 | `local-stt toggle` | v0.2 | enables/disables continuous mode | yes |
 | `local-stt language [toggle\|CODE]` | v0.3 (task 3.7) | without an argument prints the active language (`en (languages: pl, en)`, read from `status`); `toggle` moves to the next of `stt.languages` like the hotkey; `CODE` selects a language from the list (other codes → `bad_language`, code 4). The daemon never writes the config, so a restart returns to the first language of the list. Under Parakeet, `toggle` and `CODE` are rejected with `language_unsupported` (code 4), and the active language shows as `auto` (task 4.3) | yes |
+| `local-stt last [N]` | v0.5 (task 5.2) | inserts the N-th newest text of the history again into the active window (default 1 = the newest), through the same injector and queue as a dictation. Rejected with `busy` (code 4) while PTT records or continuous mode is on, and with `no_history` (code 4) when there is no text number N. N < 1 → usage error (code 2). The command prints nothing on success | yes |
+| `local-stt history` | v0.5 (task 5.2) | prints the history texts, newest first, one per line with the number for `last`: `1  Ala ma kota.`. A line break in a text shows as `⏎`. An empty history prints `history is empty` | yes |
 | `local-stt cancel` | v0.1 | cancels recording/continuous mode and pending jobs; an injection operation already underway may finish (08 §8.3) | yes |
 | `local-stt reload` | v0.1 | reloads the config; reports applied and deferred changes and whether the server will restart ([04](04-state-machine.md) §4.6) | yes |
 | `local-stt doctor` | v0.1 | environment diagnostics (10.5) | no |
@@ -52,6 +54,12 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 → {"cmd": "language"}                    // toggle; {"cmd": "language", "set": "en"} selects
 ← {"ok": true, "language": {"active": "en", "languages": ["pl", "en"]}}
 
+→ {"cmd": "last", "n": 1}                 // task 5.2; "n" is optional, default 1
+← {"ok": true, "chars": 14}
+
+→ {"cmd": "history"}
+← {"ok": true, "texts": ["Ala ma kota. ", "Dzień dobry. "]}   // newest first
+
 → {"cmd": "reload"}
 ← {"ok": true, "applied": ["vad.min_silence_ms"], "deferred": [], "server_restart": true}
 
@@ -61,9 +69,9 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 ← {"event": "job", "job_id": 17, "source": "continuous", "audio_s": 4.1, "processing_s": 1.9, "chars": 62, "result": "injected"}
 ```
 
-`job` events **do not contain text**.
+`job` events **do not contain text**. Only the `history` response contains text (task 5.2, 12 §12.2).
 
-*Implementation (task 2.5).* `subscribe` turns the connection into a stream; the client sends nothing more and closes the connection to end it. The first line is the current state (or, if the Controller does not answer, a `timeout` error and the connection closes). A `state` line follows every change of the displayed state (04 §4.7), with the full status document. A `job` line follows every finished job: `audio_s`, `processing_s` (`null` when the engine was not reached), `chars` (0 when nothing was entered), and `result` ∈ `injected`, `clipboard` (left in the clipboard), `failed`, `no_speech`, `filtered`, `cancelled`. A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
+*Implementation (task 2.5).* `subscribe` turns the connection into a stream; the client sends nothing more and closes the connection to end it. The first line is the current state (or, if the Controller does not answer, a `timeout` error and the connection closes). A `state` line follows every change of the displayed state (04 §4.7), with the full status document. A `job` line follows every finished job: `audio_s`, `processing_s` (`null` when the engine was not reached), `chars` (0 when nothing was entered), `source` ∈ `ptt`, `continuous`, `history` (a `last` insert, task 5.2; it does not count in the `stats` of 10.4), and `result` ∈ `injected`, `clipboard` (left in the clipboard), `failed`, `no_speech`, `filtered`, `cancelled`. A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
 
 Response to `cancel`: `{"ok": true, "injection_in_flight": false}`, or `true` in the second field if injection began before cancellation. With `true`, the CLI prints “Remaining jobs cancelled; injection already in progress may finish.” This applies to a single paste sequence or the current `type` chunk, never subsequent chunks or jobs.
 

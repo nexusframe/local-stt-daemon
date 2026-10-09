@@ -13,6 +13,7 @@ from local_stt import pipeline as pipeline_mod
 from local_stt.cancellation import CancellationToken, Cancelled
 from local_stt.config import Config
 from local_stt.events import Event, JobDiscarded, JobFailed, JobFinished, JobStarted
+from local_stt.history import TranscriptHistory
 from local_stt.interfaces import (
     Cut,
     InjectResult,
@@ -143,6 +144,7 @@ class Harness:
         self.processor = FakeProcessor()
         self.injector = RecordingInjector()
         self.connection_failures = 0
+        self.history = TranscriptHistory(10)
         self.worker = PipelineWorker(
             engine=self.engine,
             processor=self.processor,
@@ -151,6 +153,7 @@ class Harness:
             report_connection_failure=self._report,
             config=config,
             trimmer=trimmer,
+            history=self.history,
             **context,
         )
         self._next_id = 0
@@ -799,3 +802,30 @@ def test_requeued_job_keeps_its_own_context(h: Harness) -> None:
     assert [c["prompt"] for c in h.engine.calls] == [None, "Ala ma kota.", "Ala ma kota."]
     (ctx,) = h.processor.contexts[1:]
     assert ctx.prev_cut == "max_length"
+
+
+# --- history (task 5.2) --------------------------------------------------------------------
+
+
+def test_processed_text_goes_to_the_history(h: Harness) -> None:
+    h.submit()
+    assert isinstance(h.outcome(), JobFinished)
+    assert h.history.items() == ["Ala ma kota. "]
+
+
+def test_text_of_a_failed_paste_stays_in_the_history(h: Harness) -> None:
+    failed = InjectResult(False, "clipboard", 0, "gedit", True, "no paste confirmation")
+    h.injector.inject = lambda text, *, cancel: failed  # type: ignore[method-assign]
+    h.submit()
+    assert isinstance(h.outcome(), JobFinished)
+    assert h.history.get(1) == "Ala ma kota. "
+
+
+def test_reinject_pastes_a_history_text_without_the_engine(h: Harness) -> None:
+    h.worker.reinject(99, "Stary tekst. ")
+    event = h.outcome()
+    assert isinstance(event, JobFinished)
+    assert (event.job_id, event.source, event.result.ok) == (99, "history", True)
+    assert h.injector.texts == ["Stary tekst. "]
+    assert h.engine.calls == []
+    assert h.history.items() == []  # a re-insert does not add a copy

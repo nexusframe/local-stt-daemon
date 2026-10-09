@@ -24,6 +24,7 @@ from numpy.typing import NDArray
 from local_stt.cancellation import CancellationToken
 from local_stt.config import Config
 from local_stt.events import Event, JobDiscarded, JobFailed, JobFinished, JobStarted
+from local_stt.history import TranscriptHistory
 from local_stt.interfaces import (
     CancelResult,
     Cut,
@@ -113,6 +114,7 @@ class PipelineWorker:
         report_connection_failure: Callable[[], None],
         config: Config,
         trimmer: SpeechTrimmer | None = None,
+        history: TranscriptHistory | None = None,
         clock: Callable[[], float] = time.monotonic,
         context_chars: int = CONTEXT_CHARS,
         context_reset_s: float | None = CONTEXT_RESET_S,
@@ -124,6 +126,7 @@ class PipelineWorker:
         self._report_connection_failure = report_connection_failure
         self._config = config
         self._trimmer = trimmer
+        self._history = history
         self._clock = clock
         # Constructor parameters only so `bench --context` can compare policies (task 3.4).
         self._context_chars = context_chars
@@ -152,6 +155,22 @@ class PipelineWorker:
         with self._cond:
             self._queue.append(_Queued(job, self._clock()))
             self._cond.notify()
+
+    def reinject(self, job_id: int, text: str) -> None:
+        """Queues `text` from the history for injection only (`local-stt last`, task 5.2)."""
+        job = Job(
+            id=job_id,
+            source="history",
+            audio=np.zeros(0, dtype=np.float32),
+            ended_at=self._clock(),
+            generation=self.generation,
+            session_id=None,
+            seq=None,
+            cut="release",
+            language="",
+            text=text,
+        )
+        self.submit(job)
 
     def cancel_all(self) -> CancelResult:
         with self._cond:
@@ -244,6 +263,8 @@ class PipelineWorker:
         started = self._clock()
         try:
             self._post(JobStarted(job.id))
+            if job.text is not None:
+                return self._reinsert(job, job.text, token)
             config = self._config
             if job.source == "ptt":
                 speech = self._ptt_speech(job.audio, config)
@@ -276,6 +297,8 @@ class PipelineWorker:
             text_s = self._clock() - text_started
             if text is None:
                 return self._discard(job, "filtered")
+            if self._history is not None:  # before injection: a failed paste stays here (5.2)
+                self._history.add(text)
             if config.logging.log_text:
                 log.debug('text job=%d: "%s"', job.id, text)
             # Counted, not changed: the count is the evidence for a fallback engine (task 4.4,
@@ -316,6 +339,18 @@ class PipelineWorker:
                 if text and self._context_chars > 0:
                     tail = (session.tail + " " + text.strip()).strip()
                     session.tail = tail[-self._context_chars :].lstrip()
+
+    def _reinsert(self, job: Job, text: str, token: CancellationToken) -> None:
+        """A history text: no engine, no text processing, not added to the history again."""
+        if self._stale(job):
+            return self._discard(job, "cancelled")
+        inject_started = self._clock()
+        result = self._injector.inject(text, cancel=token)
+        if result.cancelled:
+            return self._discard(job, "cancelled")
+        log.info("job %d: inserted again from the history (%d chars)", job.id, result.chars)
+        timings = {"inject": self._clock() - inject_started}
+        self._post(JobFinished(job.id, job.source, result, timings))
 
     def _session_of(self, job: Job) -> _Session | None:
         """The continuous session of `job`; a new session replaces the previous one."""

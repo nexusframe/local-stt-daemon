@@ -23,6 +23,7 @@ from typing import Any, Literal
 from local_stt import __version__
 from local_stt import events as ev
 from local_stt.config import Config, ConfigError
+from local_stt.history import TranscriptHistory
 from local_stt.interfaces import (
     AudioCaptureControl,
     AudioConsumerControl,
@@ -150,6 +151,7 @@ class Controller:
         on_status: Callable[[str], None] | None = None,
         on_publish: Callable[[dict[str, Any]], None] | None = None,
         hotkey_problems: Sequence[HotkeyProblem] = (),
+        history: TranscriptHistory | None = None,
     ):
         self.events: queue.Queue[ev.Event] = queue.Queue()
         self.config = config  # what components currently run with
@@ -165,6 +167,7 @@ class Controller:
         self._schedule = schedule or self._timer
         self._on_status = on_status
         self._on_publish = on_publish  # IPC `subscribe` stream (10 §10.2)
+        self._history = history  # filled by the pipeline thread (task 5.2)
 
         self.mode = Mode.IDLE
         self.engine = EngineHealth.STARTING
@@ -207,6 +210,8 @@ class Controller:
             ev.PttCancelKey: self._on_ptt_cancel_key,
             ev.ContinuousToggle: self._on_continuous_toggle,
             ev.LanguageSwitch: self._on_language_switch,
+            ev.HistoryInsert: self._on_history_insert,
+            ev.HistoryRequested: self._on_history_requested,
             ev.CancelRequested: self._on_cancel,
             ev.RecordingStarted: self._on_recording_started,
             ev.RecordingLimitReached: self._on_recording_limit,
@@ -603,6 +608,23 @@ class Controller:
 
     # --- language (task 3.7) --------------------------------------------------------------
 
+    def _on_history_insert(self, event: ev.HistoryInsert) -> None:
+        """`local-stt last` (task 5.2): only at IDLE, so the text never lands between
+        recorded segments; the pipeline inserts it after any queued job."""
+        if self.mode is not Mode.IDLE:
+            message = "cannot insert a history text while recording"
+            return self._respond(event.reply, _error("busy", message))
+        text = self._history.get(event.n) if self._history is not None else None
+        if text is None:
+            message = f"no history text number {event.n}"
+            return self._respond(event.reply, _error("no_history", message))
+        self._pipeline.reinject(self._new_id("job"), text)
+        self._respond(event.reply, _ok(chars=len(text)))
+
+    def _on_history_requested(self, event: ev.HistoryRequested) -> None:
+        texts = self._history.items() if self._history is not None else []
+        self._respond(event.reply, _ok(texts=texts))
+
     def _on_language_switch(self, event: ev.LanguageSwitch) -> None:
         """Switches the active language among stt.languages (the config is never written,
         ADR-008; its first language is the startup one).
@@ -877,7 +899,9 @@ class Controller:
             processing_s=event.timings.get("stt"),
             chars=result.chars,
         )
-        if result.ok:
+        if event.source == "history":  # not a dictation: no stats (task 5.2)
+            pass
+        elif result.ok:
             self._jobs_ok += 1
         else:
             self._jobs_failed += 1
