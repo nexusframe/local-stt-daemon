@@ -161,6 +161,7 @@ class JobFinished:
     result: InjectResult
     timings: Mapping[str, float] = field(default_factory=dict, compare=False)
     non_latin: bool = False  # letters outside the Latin script, injected unchanged (task 4.4)
+    session_id: int | None = None  # continuous session (one clipboard-only notification, 5.3)
 
 
 @dataclass(frozen=True)

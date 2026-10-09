@@ -14,6 +14,7 @@ from local_stt.config import Config
 from local_stt.inject import clipboard as clipboard_mod
 from local_stt.inject.clipboard import (
     MAX_TARGET_BYTES,
+    ClipboardOnlyInjector,
     ClipboardOwner,
     ClipboardPasteInjector,
     ClipboardUnrestorable,
@@ -462,3 +463,34 @@ def test_connection_loss_is_reported() -> None:
         owner.start()
     # Xvfb is gone now
     assert lost.wait(WAIT_S)
+
+
+# --- clipboard-only (task 5.3) ----------------------------------------------------------------
+
+
+def test_clipboard_only_sends_no_keys_and_replaces_the_clipboard(env: Env) -> None:
+    env.client(SelectionOwner(env.name, FIREFOX_LIKE))
+    receiver = env.client(Receiver(env.name))
+    result = ClipboardOnlyInjector(env.owner).inject(TEXT, cancel=env.token)
+    assert result == InjectResult(True, "clipboard-only", len(TEXT), None, True, None)
+    time.sleep(0.2)
+    assert receiver.received == []
+    assert read_selection(env.name, "UTF8_STRING") == ("UTF8_STRING", 8, TEXT.encode())
+    assert read_selection(env.name, "text/html") is None  # the old content is gone
+
+
+def test_paste_after_clipboard_only_restores_the_dictated_text(env: Env) -> None:
+    env.client(SelectionOwner(env.name, FIREFOX_LIKE))
+    assert ClipboardOnlyInjector(env.owner).inject(TEXT, cancel=env.token).ok
+    receiver = env.client(Receiver(env.name))
+    assert env.inject("drugi ").ok
+    assert receiver.received == ["drugi "]
+    assert read_selection(env.name, "UTF8_STRING") == ("UTF8_STRING", 8, TEXT.encode())
+
+
+def test_cancelled_clipboard_only_keeps_the_clipboard(env: Env) -> None:
+    env.client(SelectionOwner(env.name, FIREFOX_LIKE))
+    env.cancel()
+    result = ClipboardOnlyInjector(env.owner).inject(TEXT, cancel=env.token)
+    assert result.cancelled and not result.left_in_clipboard
+    assert_restored(env.name, FIREFOX_LIKE)

@@ -119,7 +119,7 @@ class Job:
 @dataclass(frozen=True)
 class InjectResult:
     ok: bool
-    backend: str  # "clipboard" | "type"
+    backend: str  # "clipboard" | "type" | "clipboard-only"
     chars: int
     window_class: str | None  # WM_CLASS of the target window, informational
     left_in_clipboard: bool  # text intentionally left in the clipboard

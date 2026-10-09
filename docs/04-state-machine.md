@@ -145,7 +145,7 @@ Between steps 1 and 4, another `ContinuousToggle` is ignored (IPC: `invalid_in_m
 | `X11ConnectionLost` | close capture and the IPC socket, **without** X11 operations → WARNING, exit 0 (the session is ending; systemd does not restart, and `PartOf` stops the unit) |
 | `ReloadRequested` | 4.6 |
 | `EngineStateChanged(s)` | `engine = s`; `READY` → `pipeline.paused = false`; in CONTINUOUS, `DOWN` also applies the corresponding CONTINUOUS table row |
-| `JobStarted` / `JobFinished` | update `pipeline` and status statistics; `JobFinished` with `left_in_clipboard` → notification from [08](08-text-injection.md) §8.5 (sent by the Controller based on `InjectResult`; the injector does not notify by itself) |
+| `JobStarted` / `JobFinished` | update `pipeline` and status statistics; `JobFinished` with `left_in_clipboard` → notification from [08](08-text-injection.md) §8.5 (sent by the Controller based on `InjectResult`; the injector does not notify by itself); with the `clipboard-only` backend → the notification from 08 §8.4 |
 | `JobFailed` | update statistics + aggregate notification (4.4), regardless of mode |
 | `JobDiscarded` | update statistics; `cancel` sound only in IDLE and only for `no_speech` from PTT (IDLE table) |
 | audio events and timers with a stale `recording_id`, `capture_id`, or `operation_id` | ignored before consulting the transition table, even if the new session has the same mode |

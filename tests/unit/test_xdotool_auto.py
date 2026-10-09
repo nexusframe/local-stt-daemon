@@ -197,7 +197,11 @@ def auto(
     clip = FakeInjector("clipboard", clipboard_raises)
     typ = FakeInjector("type")
     injector = AutoInjector(
-        cast(Any, FakeSession(wm_class)), cast(Any, clip), cast(Any, typ) if typer else None, config
+        cast(Any, FakeSession(wm_class)),
+        cast(Any, clip),
+        cast(Any, typ) if typer else None,
+        config,
+        clipboard_only=FakeInjector("clipboard-only"),
     )
     return injector, clip, typ
 
@@ -215,6 +219,8 @@ def token() -> CancellationToken:
         (None, "auto", "clipboard"),  # no window: the clipboard path handles it
         ("XTerm", "clipboard", "clipboard"),
         ("Gedit", "type", "type"),
+        ("XTerm", "clipboard-only", "clipboard-only"),  # before type_window_classes
+        (None, "clipboard-only", "clipboard-only"),
     ],
 )
 def test_backend_selection(wm_class: str | None, backend: str, expected: str) -> None:
@@ -246,3 +252,9 @@ def test_update_config_reaches_both_injectors() -> None:
     new = Config()
     injector.update_config(new)
     assert clip.configs[-1] is new and typ.configs[-1] is new
+
+
+def test_clipboard_only_without_xdotool() -> None:
+    injector, clip, _ = auto(backend="clipboard-only", typer=False)
+    assert injector.inject("x", cancel=token()).backend == "clipboard-only"
+    assert clip.texts == []

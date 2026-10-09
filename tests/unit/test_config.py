@@ -127,7 +127,7 @@ def test_all_errors_are_collected() -> None:
         ({"stt": {"language": "pl"}}, 'stt.language: replaced by stt.languages, the first is the startup language: languages = ["pl", "en"]'),
         ({"stt": {"beam_size": 0}}, "stt.beam_size: must be -1 or >= 1 (got 0)"),
         ({"ptt": {"max_duration_s": 0.2}}, "ptt.max_duration_s: must be > min_duration_ms (got 0.2)"),
-        ({"injection": {"backend": "xdotool"}}, 'injection.backend: must be auto, clipboard or type (got "xdotool")'),
+        ({"injection": {"backend": "xdotool"}}, 'injection.backend: must be auto, clipboard, type or clipboard-only (got "xdotool")'),
         ({"feedback": {"sound_volume": 1.5}}, "feedback.sound_volume: must be in [0, 1] (got 1.5)"),
         ({"feedback": {"notifications": "some"}}, 'feedback.notifications: must be none, errors or all (got "some")'),
         ({"logging": {"level": "debug"}}, 'logging.level: must be INFO, DEBUG or TRACE (got "debug")'),

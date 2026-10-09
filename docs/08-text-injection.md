@@ -59,7 +59,7 @@ class Injector(Protocol):
 @dataclass(frozen=True)
 class InjectResult:
     ok: bool
-    backend: str                     # "clipboard" | "type"
+    backend: str                     # "clipboard" | "type" | "clipboard-only"
     chars: int
     window_class: str | None
     left_in_clipboard: bool          # text intentionally left in the clipboard
@@ -92,6 +92,14 @@ Decision: `injection.backend = "auto"`:
 - **type** also when the current clipboard contents **cannot be saved and restored faithfully** (8.5, step 3), to avoid destroying them.
 
 Explicit backends (implementation decision, task 1.8c): `backend = "clipboard"` always pastes; an unrestorable clipboard is pasted without restoration (WARNING), as `auto` does without xdotool (8.7). `backend = "type"` always types; without xdotool it falls back to the clipboard with a WARNING.
+
+**`backend = "clipboard-only"`** (task 5.3): the daemon puts the text in CLIPBOARD and sends no keys. The user pastes the text. User decisions 2026-10-09:
+
+- The daemon does not wait for modifiers, does not read the target window and does not restore the clipboard. PRIMARY does not change.
+- The text replaces the user's clipboard content. It also replaces `user_saved` (8.5 step 3), so a later paste in another mode restores this text, not older content.
+- In continuous mode, the pipeline joins the segments of one session. After each segment, the clipboard contains the full session text, so one paste inserts all of it. A new session or a PTT recording starts with an empty text. A segment that the daemon could not put in the clipboard is not joined. If the session text becomes longer than 64 KiB (8.5 step 4), the joined text starts again from the current segment.
+- `InjectResult`: `ok = true`, `left_in_clipboard = true`, `window_class = None`; `chars` counts only the current segment.
+- The Controller shows “Text is in the clipboard (Ctrl+V)” after each PTT recording and each `local-stt last`. In continuous mode, it shows the notification once for each session.
 
 ## 8.5 `ClipboardPasteInjector` — algorithm
 

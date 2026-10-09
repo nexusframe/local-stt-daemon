@@ -79,7 +79,7 @@ hallucination_patterns = [
 # regex = true
 
 [injection]
-backend = "auto"                     # auto | clipboard | type
+backend = "auto"                     # auto | clipboard | type | clipboard-only (no paste, 08 §8.4)
 restore_clipboard = true
 modifier_wait_ms = 1000
 paste_timeout_ms = 1000

@@ -54,6 +54,8 @@ CONTEXT_CHARS = 200  # session text passed in the prompt (06 §6.6)
 # recording with 4-60 s pauses (task 3.4, docs/15); `bench --context --context-reset` retests it.
 CONTEXT_RESET_S: float | None = None
 RTF_TIMEOUT_FACTOR = 4.0
+# Clipboard text limit without INCR (08 §8.5 step 4); the clipboard module needs X11.
+CLIPBOARD_ONLY_MAX_BYTES = 64 * 1024
 
 DiscardReason = Literal["no_speech", "filtered", "cancelled"]
 
@@ -99,6 +101,7 @@ class _Session:
     tail: str = ""  # last CONTEXT_CHARS characters of the session's text
     prev_cut: Cut | None = None  # cut of the session's previous segment
     language: str | None = None  # of the text in `tail` (task 3.7)
+    clipboard: str = ""  # session text put in the clipboard so far (clipboard-only, 5.3)
 
 
 class PipelineWorker:
@@ -315,7 +318,7 @@ class PipelineWorker:
                 return self._discard(job, "cancelled")
 
             inject_started = self._clock()
-            result = self._injector.inject(text, cancel=token)
+            result = self._inject(text, session, config, token)
             done = self._clock()
             if result.cancelled:
                 text = None  # not entered: it must not become context
@@ -330,7 +333,7 @@ class PipelineWorker:
             }
             if config.logging.timings:
                 timings_log.info(_timing_line(job, transcript, timings, result))
-            self._post(JobFinished(job.id, job.source, result, timings, non_latin))
+            self._post(JobFinished(job.id, job.source, result, timings, non_latin, job.session_id))
         finally:
             with self._lock:
                 self._current = None
@@ -339,6 +342,23 @@ class PipelineWorker:
                 if text and self._context_chars > 0:
                     tail = (session.tail + " " + text.strip()).strip()
                     session.tail = tail[-self._context_chars :].lstrip()
+
+    def _inject(
+        self, text: str, session: _Session | None, config: Config, token: CancellationToken
+    ) -> InjectResult:
+        """In clipboard-only mode a continuous session's segments are joined, so one paste
+        inserts the whole session (08 §8.4, task 5.3). `chars` counts this segment only."""
+        if session is None or config.injection.backend != "clipboard-only":
+            return self._injector.inject(text, cancel=token)
+        joined = session.clipboard + text
+        if len(joined.encode("utf-8")) > CLIPBOARD_ONLY_MAX_BYTES:
+            log.warning("session text over 64 KiB: the clipboard starts again")
+            joined = text
+        result = self._injector.inject(joined, cancel=token)
+        if result.ok:
+            session.clipboard = joined
+            result = dataclasses.replace(result, chars=len(text))
+        return result
 
     def _reinsert(self, job: Job, text: str, token: CancellationToken) -> None:
         """A history text: no engine, no text processing, not added to the history again."""

@@ -190,8 +190,10 @@ class ClipboardOwner:
     def save(self) -> "Future[SaveResult]":
         return self._call(self._save)
 
-    def take_text(self, text: str) -> "Future[bool]":
-        return self._call(lambda: self._take_text(text))
+    def take_text(self, text: str, *, as_user: bool = False) -> "Future[bool]":
+        """Serve `text`. `as_user`: the text replaces `user_saved`, so that a later paste
+        restores it and not older content (`clipboard-only`, task 5.3)."""
+        return self._call(lambda: self._take_text(text, as_user=as_user))
 
     def restore(self, saved: Saved | None) -> "Future[bool]":
         """Serve `saved` (None: give up ownership), only while we still own CLIPBOARD."""
@@ -440,7 +442,7 @@ class ClipboardOwner:
             self._handle(ev)
         return None
 
-    def _take_text(self, text: str) -> bool:
+    def _take_text(self, text: str, *, as_user: bool = False) -> bool:
         utf8 = text.encode("utf-8")
         content: Saved = {
             self._atom("UTF8_STRING"): TargetData(self._atom("UTF8_STRING"), 8, utf8),
@@ -458,7 +460,9 @@ class ClipboardOwner:
             return False
         self._owned_since = stamp
         self._served = content
-        self._serving_text = True
+        self._serving_text = not as_user  # no paste to confirm in clipboard-only
+        if as_user:
+            self._user_saved = content
         self._requests.clear()
         return True
 
@@ -630,3 +634,40 @@ class ClipboardPasteInjector:
         if names & {c.lower() for c in cfg.terminal_window_classes}:
             return "Ctrl+Shift+V"
         return "Ctrl+V"
+
+
+class ClipboardOnlyInjector:
+    """`injection.backend = "clipboard-only"` (08 §8.4, task 5.3): put the text in CLIPBOARD
+    and send no keys. The user pastes it. No modifier wait, no target window, no restoration;
+    the text becomes the user's clipboard content (`take_text(as_user=True)`).
+    """
+
+    backend = "clipboard-only"
+
+    def __init__(self, owner: ClipboardOwner):
+        self._owner = owner
+
+    def inject(self, text: str, *, cancel: CancellationToken) -> InjectResult:
+        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+            return self._result(text, ok=False, error="text longer than 64 KiB (no INCR support)")
+        try:
+            with cancel.operation():
+                taken = _await(self._owner.take_text(text, as_user=True), None, 2.0)
+        except Cancelled:
+            return InjectResult(False, self.backend, 0, None, False, None, cancelled=True)
+        except (XError, ConnectionClosedError, FutureTimeout) as e:
+            log.error("clipboard-only injection failed: %s", e)
+            return self._result(text, ok=False, error=str(e))
+        if not taken:
+            return self._result(text, ok=False, error="could not own CLIPBOARD")
+        return self._result(text, ok=True)
+
+    def _result(self, text: str, *, ok: bool, error: str | None = None) -> InjectResult:
+        return InjectResult(
+            ok=ok,
+            backend=self.backend,
+            chars=len(text) if ok else 0,
+            window_class=None,
+            left_in_clipboard=ok,
+            error=error,
+        )

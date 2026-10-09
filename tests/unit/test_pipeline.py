@@ -829,3 +829,71 @@ def test_reinject_pastes_a_history_text_without_the_engine(h: Harness) -> None:
     assert h.injector.texts == ["Stary tekst. "]
     assert h.engine.calls == []
     assert h.history.items() == []  # a re-insert does not add a copy
+
+
+# --- clipboard-only (task 5.3) --------------------------------------------------------------
+
+
+def clipboard_only(h: Harness) -> None:
+    h.worker.update_config(config(injection={"backend": "clipboard-only"}))
+
+
+def test_clipboard_only_joins_the_segments_of_a_session(h: Harness) -> None:
+    clipboard_only(h)
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" Kot ma Alę."), transcript(" B.")]
+    run_continuous(
+        h, continuous_job(h, 1), continuous_job(h, 2), continuous_job(h, 1, session_id=2)
+    )
+    assert h.injector.texts == ["Ala ma kota. ", "Ala ma kota. Kot ma Alę. ", "B. "]
+
+
+def test_clipboard_only_counts_the_segment_and_reports_the_session(h: Harness) -> None:
+    clipboard_only(h)
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" Kot.")]
+    h.worker.submit(continuous_job(h, 1, session_id=7))
+    assert isinstance(h.outcome(), JobFinished)
+    h.worker.submit(continuous_job(h, 2, session_id=7))
+    event = h.outcome()
+    assert isinstance(event, JobFinished)
+    assert (event.result.chars, event.session_id) == (len("Kot. "), 7)
+
+
+def test_clipboard_only_ptt_jobs_are_not_joined(h: Harness) -> None:
+    clipboard_only(h)
+    h.engine.outcomes = [transcript(" Ala ma kota."), transcript(" Kot.")]
+    h.submit()
+    h.submit()
+    assert isinstance(h.outcome(), JobFinished) and isinstance(h.outcome(), JobFinished)
+    assert h.injector.texts == ["Ala ma kota. ", "Kot. "]
+
+
+def test_clipboard_only_failed_segment_is_not_joined(h: Harness) -> None:
+    clipboard_only(h)
+    record = h.injector.inject
+    results = iter([False, True])
+
+    def inject(text: str, *, cancel: CancellationToken) -> InjectResult:
+        if next(results):
+            return record(text, cancel=cancel)
+        return InjectResult(False, "clipboard-only", 0, None, False, "could not own CLIPBOARD")
+
+    h.injector.inject = inject  # type: ignore[method-assign]
+    h.engine.outcomes = [transcript(" Ala."), transcript(" Kot.")]
+    run_continuous(h, continuous_job(h, 1), continuous_job(h, 2))
+    assert h.injector.texts == ["Kot. "]
+
+
+def test_clipboard_only_session_over_the_limit_starts_again(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(pipeline_mod, "CLIPBOARD_ONLY_MAX_BYTES", 10)
+    clipboard_only(h)
+    h.engine.outcomes = [transcript(" Ala ma."), transcript(" Kot.")]
+    run_continuous(h, continuous_job(h, 1), continuous_job(h, 2))
+    assert h.injector.texts == ["Ala ma. ", "Kot. "]
+
+
+def test_other_backends_do_not_join_segments(h: Harness) -> None:
+    h.engine.outcomes = [transcript(" Ala."), transcript(" Kot.")]
+    run_continuous(h, continuous_job(h, 1), continuous_job(h, 2))
+    assert h.injector.texts == ["Ala. ", "Kot. "]

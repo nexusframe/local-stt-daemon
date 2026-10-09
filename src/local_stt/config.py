@@ -544,9 +544,9 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
 
     inj = config.injection
     check(
-        inj.backend in ("auto", "clipboard", "type"),
+        inj.backend in ("auto", "clipboard", "type", "clipboard-only"),
         "injection.backend",
-        "must be auto, clipboard or type",
+        "must be auto, clipboard, type or clipboard-only",
         inj.backend,
     )
     for name in ("modifier_wait_ms", "paste_timeout_ms", "type_delay_ms"):

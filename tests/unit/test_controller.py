@@ -613,6 +613,25 @@ def test_job_finished_notifications(
     assert w.notifications() == [title]
 
 
+CLIPBOARD_ONLY = InjectResult(True, "clipboard-only", 5, None, True, None)
+
+
+def test_clipboard_only_notifies_every_ptt_and_once_per_session(c: Controller, w: World) -> None:
+    c.handle(ev.JobFinished(1, "ptt", CLIPBOARD_ONLY))
+    c.handle(ev.JobFinished(2, "ptt", CLIPBOARD_ONLY))
+    for job_id in (3, 4, 5):  # the segments of one session are joined in the clipboard
+        c.handle(ev.JobFinished(job_id, "continuous", CLIPBOARD_ONLY, session_id=1))
+    c.handle(ev.JobFinished(6, "continuous", CLIPBOARD_ONLY, session_id=2))
+    c.handle(ev.JobFinished(7, "history", CLIPBOARD_ONLY))
+    assert w.notifications() == ["Text is in the clipboard (Ctrl+V)"] * 5
+
+
+def test_failed_clipboard_only_job(c: Controller, w: World) -> None:
+    failed = InjectResult(False, "clipboard-only", 0, None, False, "could not own CLIPBOARD")
+    c.handle(ev.JobFinished(1, "ptt", failed))
+    assert w.notifications() == ["Could not enter text"]
+
+
 def test_job_failures_are_aggregated_within_10_s(c: Controller, w: World) -> None:
     c.handle(ev.JobFailed(1, "ptt", 4.2, "HTTP 500"))
     w.now += 5

@@ -197,6 +197,7 @@ class Controller:
         self._jobs_failed = 0
         self._jobs_filtered = 0
         self._jobs_non_latin = 0
+        self._clipboard_only_session: int | None = None  # notified once (task 5.3)
         self._recent: deque[tuple[float, float]] = deque(maxlen=STATS_WINDOW)  # (rtf, total)
         self._last_job: tuple[float, float, float] | None = None  # audio_s, stt_s, finished at
 
@@ -912,7 +913,12 @@ class Controller:
             self._recent.append((t["stt"] / t["audio"], t["total"]))
             self._last_job = (t["audio"], t["stt"], self._clock())
         # The injector never notifies by itself (08 §8.5); messages never contain the text.
-        if result.left_in_clipboard:
+        if result.backend == "clipboard-only" and result.ok:
+            # Once per continuous session: its segments are joined in the clipboard (5.3).
+            if event.session_id is None or event.session_id != self._clipboard_only_session:
+                self._feedback.notify("clipboard", "Text is in the clipboard (Ctrl+V)")
+            self._clipboard_only_session = event.session_id
+        elif result.left_in_clipboard:
             title = (
                 "No active field — text is in the clipboard"
                 if result.no_target

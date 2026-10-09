@@ -6,6 +6,7 @@
   unrestorable clipboard is pasted without restoration (WARNING).
 - "clipboard": always paste; an unrestorable clipboard is not restored (WARNING).
 - "type": always `xdotool type`; falls back to the clipboard if xdotool is missing.
+- "clipboard-only": put the text in the clipboard and send no keys (task 5.3).
 """
 
 import logging
@@ -14,6 +15,7 @@ import shutil
 from local_stt.cancellation import CancellationToken
 from local_stt.config import Config
 from local_stt.inject.clipboard import (
+    ClipboardOnlyInjector,
     ClipboardOwner,
     ClipboardPasteInjector,
     ClipboardUnrestorable,
@@ -34,10 +36,13 @@ class AutoInjector:
         clipboard: ClipboardPasteInjector,
         typer: XdotoolTypeInjector | None,
         config: Config,
+        *,
+        clipboard_only: Injector,
     ):
         self._x = session
         self._clipboard = clipboard
         self._typer = typer
+        self._clipboard_only = clipboard_only
         self.update_config(config)
 
     def update_config(self, config: Config) -> None:
@@ -61,6 +66,8 @@ class AutoInjector:
 
     def _select(self) -> Injector:
         backend = self._config.backend
+        if backend == "clipboard-only":
+            return self._clipboard_only
         if self._typer is None or backend == "clipboard":
             return self._clipboard
         if backend == "type":
@@ -90,4 +97,6 @@ def build_injector(
     )
     if typer is None:
         log.warning("xdotool not found: the type backend is unavailable")
-    return AutoInjector(session, clipboard, typer, config)
+    return AutoInjector(
+        session, clipboard, typer, config, clipboard_only=ClipboardOnlyInjector(owner)
+    )
