@@ -138,6 +138,7 @@ DEFAULT_HALLUCINATION_PATTERNS = (
 @dataclass(frozen=True)
 class TextConfig:
     append_space: bool = True
+    commands: bool = False
     hallucination_patterns: tuple[str, ...] = DEFAULT_HALLUCINATION_PATTERNS
     replacements: tuple[Replacement, ...] = ()
 

@@ -55,6 +55,7 @@ language_toggle = "Ctrl+Control_R"   # next of stt.languages; left Ctrl first; "
 
 [text]
 append_space = true
+commands = false                     # spoken dwukropek, średnik, myślnik, trzy kropki, nowa linia (08 §8.2)
 # Python regexes; a matching transcript is dropped as a Whisper hallucination.
 hallucination_patterns = [
   'napisy (stworzone|wykonane) przez społeczność amara\.org',

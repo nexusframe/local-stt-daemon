@@ -222,11 +222,21 @@ Status: 4.9 done 2026-10-08 (user request 2026-10-08: N3 of the v0.4 acceptance 
 
 Status: v0.4 checklist and criteria completed 2026-10-08, results in [acceptance-v0.4.md](acceptance-v0.4.md). All pass: corpus A WER 5.6 %; N2 p90 `total` 0.99 s (21 dictations of 4–10 s); soak RTF 0.09 on `performance` and 0.31 on `power-saver`; the whisper-server soak RTF 0.32. Findings, decided by the user 2026-10-08: `doctor` in `install.sh` ran before the engine was ready (fixed: step 9 waits for the engine unit); the N1 margin was 1.7 % (N1 for Parakeet is now 2.4 GB); the VAD share on `power-saver` is 4.9 % (no change).
 
+## v0.5 — Commands
+
+Basis: backlog item 1 (user decision 2026-10-08).
+
+| # | Task | Notes |
+|---|---|---|
+| 5.1 | **Built-in spoken commands:** `text.commands = false` (opt-in) turns spoken signs (`:` `;` `–` `...`) and line breaks into text, as step 4a before `text.replacements` | 08 §8.2, 09 |
+
+Status: 5.1 implemented 2026-10-09. User decisions 2026-10-08: a built-in set behind one key (not example rules to copy), default `false`, only the commands that Parakeet recognizes, and only the English commands that do not occur in ordinary speech. First test round (2026-10-08, 12 phrases, one take each, `~/stt-corpus-cmd/`, outside the repo): Parakeet wrote each command as words with its own punctuation (`dobry, przecinek. Jak`). It did not recognize “dwukropek” (“dwóch kropek”), “wykrzyknik” (“wygrzytnik”), “nowy akapit” (“I w nowym akapicie”) and “new paragraph” (empty result). The first set was przecinek, kropka, średnik, znak zapytania, question mark, nowa linia and new line. Live test 2026-10-09: the commands worked; “kropka kropka kropka” gave `. . .`; “trzy kropki” came once as “3 kropki”; Parakeet wrote “Krop.” once for “kropka”. The user then decided (2026-10-09): join signs from commands in a row, add “trzy kropki”, and keep the text layer but change the set. Reason: in dictation, pauses give commas and periods, and colons, semicolons and dashes are more useful. Second test round (2026-10-09, 10 phrases, `~/stt-corpus-cmd2/`): “myślnik” 5 of 5, “średnik” 4 of 4 (both rounds), “dwukropek” 2 of 5 (“dwóch kropek” 2 times, “dwuchrotek” once). Final set: dwukropek (+ “dwóch kropek”), średnik, myślnik (` – `), trzy kropki (+ “3 kropki”), nowa linia, new line (08 §8.2 step 4a). A result that ends with a line break gets no trailing space. In the user's terminal, the line break moved the cursor and did not run the command. Live test of the final set 2026-10-09 after `install.sh --no-apt`: one PTT dictation with all five commands gave the expected text. Tests: 903 unit tests pass (new: the Parakeet outputs of both rounds, case rules, line break rules, commands in a row, words that are not commands); ruff and mypy are clean. Open: a command spoken alone comes after the previous trailing space; the `type` backend with a line break is not tested.
+
 ## Backlog (no commitments)
 
 Ordered by user value:
 
-1. `text.replacements` with ready-made “commands” (new line, period, comma)—the mechanism already exists.
+1. ~~`text.replacements` with ready-made “commands” (new line, period, comma)~~ **moved to v0.5** (task 5.1). Left here: “wykrzyknik” and “nowy akapit” (Parakeet did not recognize them), a command spoken alone, the `type` backend with a line break, and engine hotwords for command words (untested whether onnx-asr supports them).
 2. History of the last N transcripts **in RAM only** + `local-stt last` (insert again)—useful for E12.
 3. Tray / indicator (separate IPC client process, AppIndicator).
 4. “Transcribe, do not paste” mode (`injection.backend = "clipboard-only"`).

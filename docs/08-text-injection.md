@@ -24,11 +24,28 @@ class TextContext:
 1. **Segment filter** ([06](06-stt-engine.md) §6.8): `no_speech_prob` together with `avg_logprob`, the hallucination list, repetition loops, and prompt echo.
 2. **Assembly**: adjacent retained segments are joined with `"".join(s.text for s in run)`, without applying `strip()` to individual segments and without adding spaces. A Whisper segment boundary can occur inside a word: `" trans"` + `"krypcja"` must produce `" transkrypcja"`. If the filter removed a segment between two retained runs, insert one separator in its place so that words on either side of the removed content are not joined. The engine adapter preserves whitespace in `TranscriptSegment.text` (06 §6.8).
 3. **Whitespace normalization**: sequences of spaces and tabs → one space, `strip()`. Replace Whisper line breaks with spaces.
-4. **User replacements** from `text.replacements`: a list of `{pattern, replace, regex}` applied in order, e.g. `{pattern = "(?i)\\bnowa linia\\b", replace = "\n", regex = true}`. This is the only “command” mechanism in v0.1–v0.3.
+4a. **Built-in commands** (task 5.1), only when `text.commands = true` (default `false`). The daemon replaces these spoken words with text:
+
+   | Spoken | Inserted |
+   |---|---|
+   | dwukropek (also “dwóch kropek”) | `:` |
+   | średnik | `;` |
+   | myślnik | ` – ` (en dash with a space on both sides) |
+   | trzy kropki (also “3 kropki”) | `...` |
+   | nowa linia, new line | line break |
+
+   - The set contains only signs that the engine does not set from pauses. The engine sets commas, periods and question marks itself, so “przecinek”, “kropka” and “znak zapytania” are not commands (user decision 2026-10-09). These words also occur in ordinary speech, e.g. the name “Kropka”.
+   - The set contains only spoken forms that Parakeet wrote in the user's test recordings (2026-10-08/09). The alternative forms are Parakeet's recognition errors that occurred more than once. Parakeet did not recognize “wykrzyknik” and “nowy akapit”. The English words “colon” and “period” are not in the set, because they also occur in ordinary speech.
+   - The engine writes a command as ordinary words with its own punctuation, e.g. `Uwaga, dwukropek. Jutro`. A match is case-insensitive and covers whole words only. It also removes the spaces, punctuation and dashes on both sides of the command.
+   - A sign follows the previous word without a space. After `:`, `;` or the dash, the next word starts lowercase if the engine put a sentence end after the command. After `...`, the next word starts uppercase.
+   - Signs from commands in a row have no spaces between them, e.g. “trzy kropki dwukropek” gives `...:`.
+   - A line break keeps the sentence end (`.`, `?`, `!`, `…`) that the engine put before it. It has no spaces around it and does not change the next word. In the user's terminal (clipboard paste), the line break moved the cursor to a new line and did not run the command (live test 2026-10-09). The `type` backend was not tested.
+   - Known limit: a command spoken alone, e.g. “dwukropek”, comes after the trailing space of the previous dictation (`słowo :`).
+4. **User replacements** from `text.replacements`: a list of `{pattern, replace, regex}` applied in order, e.g. `{pattern = "(?i)\\bnowa linia\\b", replace = "\n", regex = true}`. This was the only “command” mechanism in v0.1–v0.4. Built-in commands (step 4a) come before it, so a user rule can change their result.
 5. **Continuous-mode continuity**:
    - if `cut in ("max_length", "max_duration")` (the segment ends in the middle of an utterance) and the text ends with a single period, remove that period (`?`, `!`, and `…` remain),
    - if `prev_cut == "max_length"`, the first letter is uppercase, and the second word is not capitalized (the “not a proper name” heuristic), lowercase the first letter. A one-word result is left as is: it may be a name (implementation decision, task 2.4).
-6. **Separator**: when `text.append_space = true` (the default), append a **trailing space** to every non-empty result. Subsequent segments and dictations then join naturally without tracking window state.
+6. **Separator**: when `text.append_space = true` (the default), append a **trailing space** to every non-empty result. No trailing space follows a result that ends with a line break (task 5.1). Subsequent segments and dictations then join naturally without tracking window state.
 7. Empty result → `None`; the pipeline skips injection.
 
 Each step is a pure function with unit tests ([14](14-tests.md)).

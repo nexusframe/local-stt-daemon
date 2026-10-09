@@ -1,6 +1,6 @@
 """TextProcessor: Transcript -> text to inject (docs/08-text-injection.md §8.2).
 
-Steps 1-7; step 5 (continuous-mode continuity) since task 2.4.
+Steps 1-7; step 5 (continuous-mode continuity) since task 2.4, step 4a since task 5.1.
 """
 
 import logging
@@ -9,6 +9,7 @@ import re
 from local_stt.config import Config, Replacement
 from local_stt.interfaces import Cut, TextContext, Transcript, TranscriptSegment
 from local_stt.text import filters
+from local_stt.text.commands import apply_commands
 
 log = logging.getLogger("local_stt.text")
 
@@ -97,8 +98,11 @@ class DefaultTextProcessor:
             log.debug("filtered: prompt_echo")
             return None
 
+        if text_cfg.commands:
+            text = apply_commands(text)
         text = apply_replacements(text, text_cfg.replacements)
         text = continuity(text, ctx.cut, ctx.prev_cut)
         if not text:
             return None
-        return text + " " if text_cfg.append_space else text
+        # No space at the start of a new line (step 6).
+        return text + " " if text_cfg.append_space and not text.endswith("\n") else text

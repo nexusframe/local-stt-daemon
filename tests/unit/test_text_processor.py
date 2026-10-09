@@ -188,3 +188,18 @@ def test_parakeet_filler_is_dropped_only_for_parakeet(
     assert (p.process(transcript(seg(" Mm-hmm.")), PTT) is not None) is kept
     assert p.process(transcript(seg(" Mm, tak.")), PTT) == "Mm, tak. "
     assert ("filtered: parakeet_filler" in caplog.messages) is not kept
+
+
+def test_commands_off_by_default() -> None:
+    assert processor().process(transcript(seg(" Uwaga, dwukropek.")), PTT) == "Uwaga, dwukropek. "
+
+
+def test_commands_before_replacements() -> None:
+    p = processor(commands=True, replacements=(Replacement(":", " ->"),))
+    assert p.process(transcript(seg(" Uwaga, dwukropek. Jutro")), PTT) == "Uwaga -> jutro "
+
+
+def test_no_trailing_space_after_a_new_line() -> None:
+    p = processor(commands=True)
+    assert p.process(transcript(seg(" Ala. Nowa linia.")), PTT) == "Ala.\n"
+    assert p.process(transcript(seg(" Nowa linia.")), PTT) == "\n"
