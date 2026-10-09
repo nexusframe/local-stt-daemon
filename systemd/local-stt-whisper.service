@@ -1,6 +1,6 @@
 [Unit]
 Description=local-stt: whisper.cpp inference server (loopback only)
-Documentation=file://%h/projects/local-stt-daemon/docs/06-stt-engine.md
+Documentation=file://%h/projects/local-stt/docs/06-stt-engine.md
 PartOf=graphical-session.target
 After=graphical-session.target
 StartLimitIntervalSec=120

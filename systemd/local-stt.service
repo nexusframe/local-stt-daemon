@@ -1,6 +1,6 @@
 [Unit]
 Description=local-stt: offline Polish voice-to-text daemon
-Documentation=file://%h/projects/local-stt-daemon/docs/README.md
+Documentation=file://%h/projects/local-stt/docs/README.md
 PartOf=graphical-session.target
 After=graphical-session.target
 StartLimitIntervalSec=60

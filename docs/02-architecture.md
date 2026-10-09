@@ -51,7 +51,7 @@ Rules:
 ## 2.3 Repository structure
 
 ```text
-local-stt-daemon/
+local-stt/
 ├── pyproject.toml
 ├── requirements.lock
 ├── config.example.toml

@@ -237,7 +237,7 @@ install_units() {
     local unit
     for unit in "${UNITS[@]}"; do
         # Documentation= points at this checkout, wherever it is
-        sed "s|%h/projects/local-stt-daemon|$REPO_DIR|" "$REPO_DIR/systemd/$unit" >"$UNIT_DIR/$unit"
+        sed "s|%h/projects/local-stt|$REPO_DIR|" "$REPO_DIR/systemd/$unit" >"$UNIT_DIR/$unit"
         chmod 644 "$UNIT_DIR/$unit"
     done
     systemctl --user daemon-reload

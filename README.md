@@ -1,4 +1,4 @@
-# local-stt-daemon
+# local-stt
 
 Offline Polish speech-to-text dictation for Ubuntu 24.04, GNOME on X11. Speak, and the text appears in the focused application. Recognition runs on the CPU with [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) through [onnx-asr](https://github.com/istupakov/onnx-asr) (the default since v0.4) or with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and with [Silero VAD](https://github.com/snakers4/silero-vad). It uses no cloud service and no network access.
 
@@ -27,8 +27,8 @@ Parakeet has no language setting: it detects the language itself. A sentence tha
 ## Installation
 
 ```bash
-git clone https://github.com/nexusframe/local-stt-daemon.git
-cd local-stt-daemon
+git clone https://github.com/nexusframe/local-stt.git
+cd local-stt
 scripts/install.sh
 ```
 
