@@ -208,3 +208,28 @@ Rationale in [02](02-architecture.md) §2.2. All key libraries are blocking.
   - Non-speech: Parakeet can output short English fillers. **Correction (task 4.4, 2026-10-07):** the first claim was "fillers in 6 of 10 non-speech clips, Whisper hallucinated in 10 of 10". Those clips were the quietest windows of the continuous reading, and 19 of the 20 quietest windows contain speech. Thus that comparison is not evidence about non-speech. On 8 real non-speech takes, the VAD gate dropped 6. The cough gave "Cool." and the humming gave "Hm", "Mm.", "Um". Rule 5 of [06](06-stt-engine.md) §6.8 drops these results.
   - The sherpa-onnx export fails on a 6-minute input. Continuous segments are short (`vad.max_segment_s ≤ 28`). A PTT recording can be as long as `ptt.max_duration_s` (120 s). Inputs longer than 24 s were not tested with `onnx-asr`. Task 4.8 tested 60 s and 120 s: the transcripts were complete.
 - **Revisit:** if Cyrillic or wrong-language output bothers the user in daily use (backlog item 10), or if the v0.4 acceptance fails.
+
+## ADR-019 🧪 Transcripts and VAD events for a local client over IPC (v0.6)
+
+Accepted by the user 2026-10-10. Provisional (🧪) until tasks 6.4 and 6.5 measure the CPU cost and the echo.
+
+- **Context:** the orchestrator `local-assistant` (separate repository) needs the text of each utterance and the start and end of speech. It uses them for the LLM prompt and for barge-in (it sends `cancel` to local-tts when the user speaks). Today the daemon injects the text into the active window. 10 §10.2 says that `job` events contain no text, and 12 §12.2 lets text leave the daemon only through `history` and injection. User decisions 2026-10-09 are in [15](15-implementation-plan.md) v0.6.
+- **Options considered:**
+  1. A new `injection.backend` (for example `"none"`) in the config file. Rejected: if the orchestrator stops, dictation silently inserts nothing until the user changes the config again.
+  2. A second socket only for the orchestrator. Rejected: it repeats the `0600` and `SO_PEERCRED` code of the control socket and adds a second path to secure.
+  3. **The existing control socket:** an opt-in `subscribe` with `"transcripts": true`, and a `conversation` command whose effect ends with its connection.
+- **Decision:** option 3.
+  - `speech_start` and `speech_end` contain no text and go to every subscriber.
+  - `transcript` and `transcript_retracted` contain text and go only to subscribers that ask for them.
+  - In conversation mode the text goes to these subscribers and not to the active window, the history, the clipboard or a notification.
+  - Conversation mode ends when the connection that started it closes. Then dictation works as before.
+  - Speculative transcription (`final: false`) is a full-utterance request before the end of speech. It is not a live partial transcript, so ADR-010 does not change: the daemon still injects only final text, and in conversation mode it injects nothing.
+- **Objection:** every process of the same user can connect to the socket, ask for `"transcripts": true` and read everything the user says.
+- **Response:**
+  - the `history` command (task 5.2) already gives the same process the last texts, and the same process can read the clipboard after each paste; the new stream adds no new reader, only a faster one,
+  - the socket stays `0600` with the `SO_PEERCRED` uid check, so other users and sandboxed processes with another uid cannot connect,
+  - the text stays in RAM and goes over a Unix socket; it does not go to the disk, the journal or the network. 12 §12.2 gets a row for this stream.
+- **Further costs:**
+  - speculative requests use the engine while the LLM and the TTS also need the CPU (4 cores, thermal throttling). Task 6.4 measures the number of extra requests;
+  - echo: without headphones, the microphone hears the TTS. The VAD can see it as user speech (a false barge-in). Task 6.5 measures it.
+- **Revisit:** after the v0.6 acceptance, or if a client needs live partial transcripts (then ADR-010 and backlog item 9).

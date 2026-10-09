@@ -242,6 +242,81 @@ Status: 5.3 implemented 2026-10-09. User decisions 2026-10-09: the segments of o
 
 Status: v0.5 checklist completed 2026-10-10, results in [acceptance-v0.5.md](acceptance-v0.5.md). All six items pass. Findings: `local-stt history` showed a text that is only a line break as an empty line (fixed: the line break is replaced before `strip()`); one paste waited 17.5 s in a continuous session, probably because the PTT key was held (08 §8.5 step 1; no change, user decision 2026-10-10).
 
+## v0.6 — Input for a voice assistant
+
+Status: plan, ADR-019 and acceptance criteria accepted by the user 2026-10-10.
+
+Basis: ADR-019 and user decisions 2026-10-09. Goal: local-stt becomes the speech input of the orchestrator `local-assistant` (ASR → LLM → TTS, separate repository). Dictation (PTT, injection, CLI) must work as before. The new function is separate and is off until a client turns it on.
+
+Facts from the code and from the other projects (read-only, 2026-10-09):
+
+- `subscribe` already exists: JSON lines to every subscriber, disconnect after 256 queued messages, socket `0600` and an `SO_PEERCRED` uid check (10 §10.2, `ipc.py`).
+- The audio consumer already makes `SpeechStarted` and `SpeechEnded` in continuous mode. The Controller does not publish them.
+- `job` events do not contain text (10 §10.2). Only the `history` response contains text.
+- local-tts uses the same style (`cmd`, `event`, JSON lines). Its `cancel` → `cancelled` takes 4 ms (median). Thus the barge-in delay comes almost fully from the VAD confirmation in local-stt.
+- The `local-assistant` report `docs/m4-real-llm.md` measured 180–350 ms of LLM prompt processing for a new user utterance. The LLM can start this work only when it has the text.
+
+User decisions 2026-10-09:
+
+1. The orchestrator starts conversation mode with an IPC command. The mode belongs to that connection: when the connection closes, local-stt goes back to dictation.
+2. PTT is off during conversation mode.
+3. Conversation texts do not go into the RAM history (task 5.2).
+4. Sounds and information notifications are off during conversation mode. Error notifications stay.
+5. `vad.min_silence_ms` stays shared with dictation (700 ms). No separate, shorter value.
+6. Speculative transcription (task 6.4) is part of v0.6.
+7. Live partial transcripts (backlog item 9, ADR-010) are not part of v0.6.
+
+Protocol draft (10 §10.2 gets the final text in task 6.1–6.3):
+
+```json
+→ {"cmd": "subscribe", "transcripts": true}
+→ {"cmd": "conversation", "on": true}
+← {"ok": true}
+← {"event": "speech_start", "utt": 41, "session_id": 3, "t": 81234.512}
+← {"event": "speech_end", "utt": 41, "t_start": 81234.262, "t_end": 81236.940}
+← {"event": "transcript", "utt": 41, "job_id": 17, "final": true, "text": "Jaka jest pogoda?",
+   "language": "auto", "t_start": 81234.262, "t_end": 81236.940, "t_ready": 81237.610,
+   "audio_s": 2.68, "stt_s": 0.61}
+← {"event": "transcript_retracted", "utt": 41}
+← {"event": "utterance_dropped", "utt": 41, "reason": "no_speech"}
+```
+
+- `utt` is a number that the daemon gives at `speech_start`. All events of one utterance have the same `utt`.
+- All times are `time.monotonic()` (`CLOCK_MONOTONIC`). Other processes on the same machine can compare them with their own monotonic clock.
+- `speech_start` and `speech_end` contain no text. Every subscriber gets them.
+- `transcript` and `transcript_retracted` go only to a subscriber with `"transcripts": true`.
+- `utterance_dropped` tells the client that no final text comes for this `utt`. `reason` ∈ `no_speech`, `filtered`, `cancelled`, `failed`. Without this event, a client waits without a limit after `speech_end`.
+- `language` is `"auto"` under Parakeet, because Parakeet does not report the language. Under whisper-server it is the active language.
+
+| # | Task | Notes |
+|---|---|---|
+| 6.1 | **VAD events:** publish `speech_start` and `speech_end` with `utt` and monotonic times in `subscribe`. Add the start of speech to `AudioSegment`. Measure the delay from the start of speech to `speech_start` | hypothesis: about `min_speech_ms` (250 ms) + one frame; 10 §10.2, 04 §4.2, 05 |
+| 6.2 | **Transcript stream:** `subscribe` with `"transcripts": true`; events `transcript` (`final: true`) and `utterance_dropped` | ADR-019; 10 §10.2, 12 §12.2 |
+| 6.3 | **Conversation mode:** `{"cmd": "conversation", "on": true/false}` starts or stops continuous mode with the subscriber as the text target (`sink = subscriber`): no injection, no history, no sounds, no information notifications, PTT off. The mode ends when the connection that started it closes. `status` shows the sink | 04 §4.3, §4.4, §4.7; 08; 09; 10 |
+| 6.4 | **Speculative transcription:** in conversation mode only, after `conversation.speculative_ms` of silence (draft value 250 ms), transcribe the utterance so far and send `transcript` with `final: false`. If speech starts again in the same utterance, send `transcript_retracted`. If the silence reaches `min_silence_ms` and no speech frame came after the speculative cut, the final `transcript` uses the speculative text again (no second engine request) | ADR-019; measure the gain and the extra engine requests |
+| 6.5 | **Echo measurement:** play TTS from the laptop speakers during conversation mode and count false `speech_start` events, without and with the PipeWire `module-echo-cancel` (installed, not loaded). The decision about echo comes after this measurement | local-tts plays with `pw-cat --media-role Communication`; the MVP assumes headphones |
+
+**v0.6 acceptance** (criteria accepted by the user 2026-10-10):
+
+| # | Criterion | Threshold | Method |
+|---|---|---|---|
+| K1 | Barge-in: the delay from the start of speech to the arrival of `speech_start` at the client | p90 ≤ 400 ms | corpus A recordings through `FileAudioSource`; the start of speech comes from an offline VAD run (task 6.1) |
+| K2 | Speculative text: `t_ready − t_end` of `transcript` with `final: false`, utterances of 2–10 s | p90 ≤ 0.9 s | the same recordings (task 6.4) |
+| K3 | Final text: `t_ready − t_end` of `transcript` with `final: true` when no retraction came | p90 ≤ 0.8 s | as K2 |
+| K4 | Quality: corpus A WER in conversation mode compared with dictation | at most +0.5 pp | checks that the reuse of the speculative text drops no words |
+| K5 | CPU cost: a 10-minute soak in conversation mode; all engine requests count, also speculative and retracted ones | RTF ≤ 0.5 (N3); record the number of retractions | `bench --soak` in conversation mode (an extension of about 1–2 h) |
+| K6 | Isolation: in conversation mode no text goes to the window, the clipboard, the history or a notification. After the client disconnects, dictation works again within 1 s. A client without `"transcripts": true` gets no text | all pass | Xvfb tests and a live test |
+| K7 | Regression and privacy: a short v0.5 checklist (PTT, continuous mode, `doctor`, the full test suite); the journal contains no dictated text | all pass | as in the v0.5 acceptance |
+
+Echo (task 6.5) has no threshold. The acceptance records the number of false `speech_start` events for each minute of TTS, without and with `module-echo-cancel`. The user decides after the measurement. Conversation mode assumes headphones until then.
+
+K1–K3 use recordings, because the real start of speech is not known in a live test. A live result can differ by the PipeWire capture delay. This is not measured.
+
+Open points:
+
+- The config key names: `[conversation]` with `speculative_ms`.
+- The `local-assistant` README and CLAUDE.md still use the old name `local-stt-daemon`. That repository must change them.
+
 ## Backlog (no commitments)
 
 Ordered by user value:
