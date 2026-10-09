@@ -4,9 +4,10 @@ encode their sample index, so segment boundaries are asserted to the sample."""
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from pytest import approx
 
 from local_stt.audio.capture import FRAME_SAMPLES, SAMPLE_RATE, AudioFrame
-from local_stt.audio.segmenter import Segmenter, SegmenterOutput
+from local_stt.audio.segmenter import Segmenter, SegmenterOutput, SpeechEnd, SpeechStart
 from local_stt.config import VadConfig
 from local_stt.interfaces import AudioSegment
 
@@ -52,6 +53,12 @@ class Run:
         return T0 + (frame + 1) * FRAME_S
 
 
+def kinds(out: list[SegmenterOutput]) -> list[str]:
+    """Speech events as "speech_started" / "speech_ended", segments as "segment"."""
+    names = {SpeechStart: "speech_started", SpeechEnd: "speech_ended", AudioSegment: "segment"}
+    return [names[type(o)] for o in out]
+
+
 def segments(out: list[SegmenterOutput]) -> list[AudioSegment]:
     return [o for o in out if isinstance(o, AudioSegment)]
 
@@ -70,8 +77,27 @@ def test_speech_starts_after_min_speech_ms() -> None:
     run = Run()
     assert run.feed([Q] * 20 + [S] * 7) == []  # 224 ms < 250 ms
     assert run.seg.state == "CANDIDATE"
-    assert run.feed([M]) == ["speech_started"]  # 8th frame: 256 ms, between thresholds counts
+    # 8th frame: 256 ms, between thresholds counts
+    assert kinds(run.feed([M])) == ["speech_started"]
     assert run.seg.state == "SPEECH"
+
+
+def test_speech_events_carry_the_speech_times() -> None:
+    """6.1: the start is the first speech frame (also from CANDIDATE), not the confirmation;
+    the end is the last frame with p >= end_threshold, not the end of the silence."""
+    run = Run()
+    (start,) = run.feed([Q] * 20 + [S] * 8)
+    assert start == SpeechStart(at=approx(T0 + 20 * FRAME_S), confirmed_at=approx(run.end_of(27)))
+    out = run.feed([S] * 10 + [M, M] + [Q] * 22)  # speech frames 20..39 (M counts)
+    assert out[-1] == SpeechEnd(start=approx(T0 + 20 * FRAME_S), end=approx(run.end_of(39)))
+
+
+def test_speech_end_after_flush_and_split_keeps_the_utterance_start() -> None:
+    run = Run(max_segment_s=3.2, split_search_s=1.6)
+    out = run.feed([Q] * 10 + [S] * 70 + [Q] * 21 + [S] * 10 + [Q] * 3)  # split, then speech
+    assert kinds(out) == ["speech_started", "segment"]
+    end = run.seg.flush(at=200.0)[-1]
+    assert end == SpeechEnd(start=approx(T0 + 10 * FRAME_S), end=approx(run.end_of(110)))
 
 
 @pytest.mark.parametrize("dip", [Q, 0.34])
@@ -94,10 +120,10 @@ def test_between_thresholds_does_not_start_speech() -> None:
 def test_segment_with_preroll_and_trailing_pad() -> None:
     run = Run()
     out = run.feed([Q] * 20 + [S] * 30 + [Q] * 21)
-    assert out == ["speech_started"]
+    assert kinds(out) == ["speech_started"]
     assert run.seg.state == "TRAILING"
     out = run.feed([Q])  # 22 x 32 ms = 704 ms >= 700 ms
-    assert out[1:] == ["speech_ended"]
+    assert kinds(out)[1:] == ["speech_ended"]
     (seg,) = segments(out)
     assert span(seg) == (20 * FRAME_SAMPLES - PAD, 50 * FRAME_SAMPLES + PAD)
     assert (seg.session_id, seg.seq, seg.cut) == (7, 1, "silence")
@@ -115,7 +141,7 @@ def test_preroll_is_clipped_to_the_stream_start() -> None:
 def test_hysteresis_between_thresholds_does_not_end_speech() -> None:
     run = Run()
     out = run.feed([Q] * 10 + [S] * 10 + [M] * 60 + [S, M] * 20)
-    assert out == ["speech_started"]
+    assert kinds(out) == ["speech_started"]
     assert run.seg.state == "SPEECH"
 
 
@@ -177,7 +203,7 @@ def test_remainder_with_too_little_speech_is_dropped() -> None:
     (first,) = segments(out)  # split in the middle of the trailing silence run (80..100)
     assert (first.cut, span(first)[1]) == ("max_length", 90 * FRAME_SAMPLES)
     out = run.feed([Q])
-    assert out == ["speech_ended"]  # only silence left: no segment, seq not used
+    assert kinds(out) == ["speech_ended"]  # only silence left: no segment, seq not used
     (nxt,) = segments(run.feed([S] * 10 + [Q] * 22))
     assert nxt.seq == 2
 
@@ -190,7 +216,7 @@ def test_flush_emits_the_utterance_in_progress() -> None:
     run.feed([Q] * 10 + [S] * 10 + [Q] * 5)
     out = run.seg.flush(at=123.0)
     (seg,) = segments(out)
-    assert out[-1] == "speech_ended"
+    assert kinds(out)[-1] == "speech_ended"
     assert span(seg) == (10 * FRAME_SAMPLES - PAD, 25 * FRAME_SAMPLES)  # pad clipped to data
     assert (seg.cut, seg.ended_at) == ("flush", 123.0)
     assert run.seg.state == "SILENCE"
@@ -202,7 +228,7 @@ def test_flush_drops_a_candidate_and_short_remainders() -> None:
     assert run.seg.flush(at=1.0) == []
     run = Run(max_segment_s=3.2, split_search_s=1.6)
     run.feed([Q] * 10 + [S] * 70 + [Q] * 21 + [S] * 3)  # split at 90, remainder 90..103
-    assert run.seg.flush(at=1.0) == ["speech_ended"]  # 96 ms of speech < 250 ms
+    assert kinds(run.seg.flush(at=1.0)) == ["speech_ended"]  # 96 ms of speech < 250 ms
 
 
 def test_reset_clears_buffers_and_vad_and_keeps_seq_within_a_session() -> None:

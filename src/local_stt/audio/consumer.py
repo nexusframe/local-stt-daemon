@@ -23,7 +23,7 @@ import numpy as np
 
 from local_stt.audio.capture import SAMPLE_RATE, AudioFrame
 from local_stt.audio.recorder import Recorder
-from local_stt.audio.segmenter import Segmenter, SegmenterOutput
+from local_stt.audio.segmenter import Segmenter, SegmenterOutput, SpeechEnd, SpeechStart
 from local_stt.audio.vad import SileroVad, Vad, VadModel
 from local_stt.config import Config, VadConfig
 from local_stt.events import (
@@ -307,12 +307,12 @@ class AudioConsumer:
         operation_id: int | None = None,
     ) -> None:
         for out in outputs:
-            if out == "speech_started":
+            if isinstance(out, SpeechStart):
                 log.debug("VAD speech started")
-                self._post(SpeechStarted(rid, cid))
-            elif out == "speech_ended":
+                self._post(SpeechStarted(rid, cid, out.at, out.confirmed_at))
+            elif isinstance(out, SpeechEnd):
                 log.debug("VAD speech ended")
-                self._post(SpeechEnded(rid, cid))
+                self._post(SpeechEnded(rid, cid, out.start, out.end))
             else:
                 log.debug(
                     "VAD segment seq=%d speech_ms=%d cut=%s audio=%.2fs",

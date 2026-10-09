@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from numpy.typing import NDArray
+from pytest import approx
 
 from local_stt.audio.capture import FRAME_SAMPLES, SAMPLE_RATE, AudioFrame
 from local_stt.audio.consumer import AudioConsumer, Item
@@ -17,6 +18,8 @@ from local_stt.events import (
     RecordingLimitReached,
     RecordingStarted,
     SegmentReady,
+    SpeechEnded,
+    SpeechStarted,
 )
 
 FRAME_S = FRAME_SAMPLES / SAMPLE_RATE
@@ -267,6 +270,18 @@ def test_continuous_session_emits_speech_and_segments() -> None:
     assert (ready.recording_id, ready.capture_id, ready.operation_id) == (1, 1, None)
     assert (ready.segment.session_id, ready.segment.seq, ready.segment.cut) == (1, 1, "silence")
     assert all(not isinstance(e, RecordingStarted) for e in w.events)
+
+
+def test_speech_events_carry_monotonic_speech_times() -> None:
+    """Task 6.1: frames 5..14 are speech; it is confirmed at the 8th frame (256 ms)."""
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    w.speech([Q] * 5 + [S] * 10 + [Q] * 22)
+    w.drain()
+    started = next(e for e in w.events if isinstance(e, SpeechStarted))
+    ended = next(e for e in w.events if isinstance(e, SpeechEnded))
+    assert started == SpeechStarted(1, 1, approx(T0 + 5 * FRAME_S), approx(T0 + 13 * FRAME_S))
+    assert ended == SpeechEnded(1, 1, approx(T0 + 5 * FRAME_S), approx(T0 + 15 * FRAME_S))
 
 
 def test_stop_flush_emits_the_utterance_then_flush_done() -> None:

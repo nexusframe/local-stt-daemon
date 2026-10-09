@@ -34,7 +34,7 @@ All sources send events to a single `controller.events` queue (`queue.Queue`). T
 | `RecordingStarted` | audio consumer (first frame after opening the stream) | `recording_id`, `capture_id` |
 | `RecordingLimitReached` | audio consumer (Recorder, PTT) | `recording_id`, `capture_id`, `ended_at` |
 | `RecordingFinished` | audio consumer (after the `finish_ptt` command) | `recording_id`, `capture_id`, `operation_id`, `AudioClip`, `cut` |
-| `SpeechStarted` / `SpeechEnded` | audio-consumer (Segmenter) | `recording_id`, `capture_id` |
+| `SpeechStarted` / `SpeechEnded` | audio-consumer (Segmenter) | `recording_id`, `capture_id`; `speech_at`, `confirmed_at` / `speech_start`, `speech_end` (monotonic, task 6.1) |
 | `SegmentReady` | audio consumer (Segmenter) | `recording_id`, `capture_id`, `AudioSegment`; also `operation_id` during flush |
 | `MicrophoneSilent` | audio consumer (continuous; 05 §5.6) | `recording_id`, `capture_id` |
 | `FlushDone` | audio consumer (after the `flush` command) | `recording_id`, `capture_id`, `operation_id`, `purpose ∈ {stop, reconnect}` |
@@ -113,11 +113,11 @@ The silence gate and VAD trimming do **not** run in the Controller. PipelineWork
 | Event | Condition | Actions | New state |
 |---|---|---|---|
 | `CaptureOpenDue(rid)` | matching `recording_id` and not `stopping` | `capture.open(ids)` with identifiers assigned at startup: success → `ok` response; failure → `AudioError(open_failed)` row | CONTINUOUS |
-| `SpeechStarted` / `SpeechEnded` | — | set `speech` | CONTINUOUS |
+| `SpeechStarted` / `SpeechEnded` | — | set `speech`; publish `speech_start` with a new `utt` / `speech_end` (10 §10.2, task 6.1) | CONTINUOUS |
 | `SegmentReady` | — | `pipeline.submit(Job(continuous, segment, session_id, seq, cut))`; if `queued_audio_s > continuous.max_backlog_s` → *Backlog* row | CONTINUOUS |
 | `ContinuousToggle` | not `stopping` | *Stop(flush)* row, `stop` sound | → IDLE after `FlushDone` |
 | *Backlog* (internal) | not `stopping` | *Stop(flush)* row, `stop` + `error` sounds, “Transcription cannot keep up — dictation stopped” notification; finish processing the queue | → IDLE after `FlushDone` |
-| `CancelRequested` | — | invalidate the recording and operations, `capture.close()`, request `audio_consumer.discard(ids)`, `pipeline.cancel_all()`, `cancel` sound; a pending IPC start receives `cancelled` | IDLE |
+| `CancelRequested` | — | invalidate the recording and operations, `capture.close()`, request `audio_consumer.discard(ids)`, `pipeline.cancel_all()`, `cancel` sound; a pending IPC start receives `cancelled`; an open utterance gets `speech_end` with `t_end = null` (task 6.1) | IDLE |
 | `EngineStateChanged(DOWN)` | not `stopping` | *Stop(flush)* row, `stop` + `error` sounds; segments wait in the paused queue (4.5); “STT engine stopped working — dictation stopped” notification | → IDLE after `FlushDone` |
 | `AudioError(device_lost)` | not `reconnecting` and not `stopping` | `capture.close()`, new `operation_id`, request `audio_consumer.flush(ids, purpose="reconnect")`, set `reconnecting = true`; wait for confirmation before reopening | CONTINUOUS(reconnecting) |
 | `FlushDone(reconnect)` | matching identifiers, `reconnecting`, not `stopping` | schedule `ReconnectTick(recording_id, operation_id, 1)` in 1 s | CONTINUOUS(reconnecting) |

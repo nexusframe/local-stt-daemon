@@ -138,6 +138,8 @@ It divides the frame stream into utterances using **hysteresis**: speech begins 
                           silence_ms ≥ min_silence_ms: emit Segment, SpeechEnded ──► SILENCE
 ```
 
+**Speech times (task 6.1).** `SpeechStarted` carries the start of the first CANDIDATE frame and the end of the frame that confirmed speech. `SpeechEnded` carries the utterance start and the end of its last frame with `p ≥ end_threshold`. A `max_length` split (rule 5) does not change the utterance start. Both times come from the frame timestamps (`time.monotonic()` of the first sample). The Controller publishes them as `speech_start` and `speech_end` ([10](10-cli-ipc-status.md) §10.2).
+
 Detailed rules:
 
 1. **Pre-roll.** In SILENCE, we keep a ring buffer containing the last `speech_pad_ms` of frames. On transition to SPEECH, the segment begins with this buffer's contents so the beginning of the first syllable is not lost.

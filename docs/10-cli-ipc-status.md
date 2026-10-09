@@ -67,11 +67,19 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 ← {"event": "state", "status": {...}}        // stream – one line on every state change
 ← {"event": "language", "language": {"active": "en", "languages": ["pl", "en"]}}   // after every switch
 ← {"event": "job", "job_id": 17, "source": "continuous", "audio_s": 4.1, "processing_s": 1.9, "chars": 62, "result": "injected"}
+← {"event": "speech_start", "utt": 41, "session_id": 3, "t": 81234.512, "t_start": 81234.262}
+← {"event": "speech_end", "utt": 41, "session_id": 3, "t_start": 81234.262, "t_end": 81236.940}
 ```
 
 `job` events **do not contain text**. Only the `history` response contains text (task 5.2, 12 §12.2).
 
-*Implementation (task 2.5).* `subscribe` turns the connection into a stream; the client sends nothing more and closes the connection to end it. The first line is the current state (or, if the Controller does not answer, a `timeout` error and the connection closes). A `state` line follows every change of the displayed state (04 §4.7), with the full status document. A `job` line follows every finished job: `audio_s`, `processing_s` (`null` when the engine was not reached), `chars` (0 when nothing was entered), `source` ∈ `ptt`, `continuous`, `history` (a `last` insert, task 5.2; it does not count in the `stats` of 10.4), and `result` ∈ `injected`, `clipboard` (left in the clipboard), `failed`, `no_speech`, `filtered`, `cancelled`. A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
+*Implementation (task 2.5).* `subscribe` turns the connection into a stream; the client sends nothing more and closes the connection to end it. The first line is the current state (or, if the Controller does not answer, a `timeout` error and the connection closes). A `state` line follows every change of the displayed state (04 §4.7), with the full status document. A `job` line follows every finished job: `audio_s`, `processing_s` (`null` when the engine was not reached), `chars` (0 when nothing was entered), `source` ∈ `ptt`, `continuous`, `history` (a `last` insert, task 5.2; it does not count in the `stats` of 10.4), and `result` ∈ `injected`, `clipboard` (left in the clipboard), `failed`, `no_speech`, `filtered`, `cancelled`. *Speech events (task 6.1, ADR-019).* In continuous mode, a `speech_start` line follows when the VAD confirms speech, and a `speech_end` line follows when the utterance ends. They contain no text. `utt` is the utterance number. The daemon gives it at `speech_start`, and it increases across sessions. `session_id` is the continuous session. All times are `time.monotonic()` of the daemon (Linux `CLOCK_MONOTONIC`), so another process on the same machine can compare them with its own monotonic clock. The times come from the audio frames, not from the moment of processing:
+
+- `t_start`: the start of the first speech frame of the utterance (also when the utterance was split at `max_segment_s`),
+- `t`: the end of the frame that confirmed speech, about `min_speech_ms` after `t_start`,
+- `t_end`: the end of the last speech frame (`p ≥ end_threshold`), not the end of the silence that ended the utterance. The line comes `min_silence_ms` after `t_end`, or at once on a stop. `t_end` is `null` when the session ends before the end of speech (cancel, an error), so that no client waits for a `speech_end` that never comes.
+
+PTT recordings make no speech events. A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
 
 Response to `cancel`: `{"ok": true, "injection_in_flight": false}`, or `true` in the second field if injection began before cancellation. With `true`, the CLI prints “Remaining jobs cancelled; injection already in progress may finish.” This applies to a single paste sequence or the current `type` chunk, never subsequent chunks or jobs.
 

@@ -105,6 +105,8 @@ class _Continuous:
     start_reply: ev.Reply  # answered after the delayed open attempt
     opened: bool = False  # the stream is open (not before CaptureOpenDue, not while reconnecting)
     speech: bool = False
+    utt: int | None = None  # the utterance between speech_start and speech_end (task 6.1)
+    utt_start: float = 0.0  # its monotonic start, repeated in speech_end
     stopping: bool = False
     reconnecting: bool = False
     reconnect_op: int | None = None  # the reconnect being run (flush, then ReconnectTicks)
@@ -178,6 +180,7 @@ class Controller:
         self._next_capture_id = 0
         self._next_operation_id = 0
         self._next_job_id = 0
+        self._next_utt_id = 0  # utterance numbers of the speech events (task 6.1)
 
         self._outstanding: dict[int, float] = {}  # job_id → audio seconds, until reported done
         self._busy_job: int | None = None
@@ -365,6 +368,10 @@ class Controller:
             if self._on_publish is not None:
                 self._on_publish({"event": "state", "status": self.status()})
 
+    def _publish(self, message: dict[str, Any]) -> None:
+        if self._on_publish is not None:
+            self._on_publish(message)
+
     def _publish_job(
         self,
         job_id: int,
@@ -421,7 +428,7 @@ class Controller:
         timer.daemon = True
         timer.start()
 
-    def _new_id(self, kind: Literal["recording", "capture", "operation", "job"]) -> int:
+    def _new_id(self, kind: Literal["recording", "capture", "operation", "job", "utt"]) -> int:
         attr = f"_next_{kind}_id"
         value: int = getattr(self, attr) + 1
         setattr(self, attr, value)
@@ -701,8 +708,38 @@ class Controller:
     def _on_speech(self, event: ev.SpeechStarted | ev.SpeechEnded) -> None:
         if not self._cont_matches(event.recording_id, event.capture_id):
             return self._stale(event)
-        assert self._cont is not None
-        self._cont.speech = isinstance(event, ev.SpeechStarted)
+        cont = self._cont
+        assert cont is not None
+        cont.speech = isinstance(event, ev.SpeechStarted)
+        if isinstance(event, ev.SpeechStarted):
+            cont.utt, cont.utt_start = self._new_id("utt"), event.speech_at
+            self._publish(
+                {
+                    "event": "speech_start",
+                    "utt": cont.utt,
+                    "session_id": cont.recording_id,
+                    "t": event.confirmed_at,
+                    "t_start": event.speech_at,
+                }
+            )
+        else:
+            self._end_utterance(cont, event.speech_end)
+
+    def _end_utterance(self, cont: "_Continuous", t_end: float | None) -> None:
+        """`speech_end` for subscribers (10 §10.2); `t_end` None when the session ends before
+        the VAD saw the end of speech (cancel, error), so no client waits for it."""
+        if cont.utt is None:
+            return
+        self._publish(
+            {
+                "event": "speech_end",
+                "utt": cont.utt,
+                "session_id": cont.recording_id,
+                "t_start": cont.utt_start,
+                "t_end": t_end,
+            }
+        )
+        cont.utt = None
 
     def _on_segment_ready(self, event: ev.SegmentReady) -> None:
         cont = self._cont
@@ -842,6 +879,7 @@ class Controller:
         """Invalidates the session and its operations; nothing more is submitted."""
         cont = self._cont
         assert cont is not None
+        self._end_utterance(cont, None)
         self._cont = None
         self.mode = Mode.IDLE
         self._capture.close()

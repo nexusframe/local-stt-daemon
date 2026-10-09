@@ -12,8 +12,9 @@ remainder can hold only silence or a fragment of a word, and Whisper hallucinate
 
 import math
 from collections import deque
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 from numpy.typing import NDArray
@@ -28,8 +29,27 @@ if TYPE_CHECKING:
 FRAME_MS = FRAME_SAMPLES * 1000 // SAMPLE_RATE  # 32
 MIN_SPLIT_RUN_MS = 96  # shortest silence run worth splitting in (05 §5.5 rule 5)
 
+
+@dataclass(frozen=True)
+class SpeechStart:
+    """The VAD confirmed speech (rule 2). Stream times: `at` is the start of the first speech
+    frame, `confirmed_at` the end of the frame that confirmed it (task 6.1)."""
+
+    at: float
+    confirmed_at: float
+
+
+@dataclass(frozen=True)
+class SpeechEnd:
+    """The utterance ended. Stream times of the start of its first speech frame and the end
+    of its last one (`p >= end_threshold`), not of the silence that ended it (task 6.1)."""
+
+    start: float
+    end: float
+
+
 # The audio consumer turns these into SpeechStarted / SpeechEnded / SegmentReady (task 2.3).
-SegmenterOutput = Literal["speech_started", "speech_ended"] | AudioSegment
+SegmenterOutput = SpeechStart | SpeechEnd | AudioSegment
 
 
 class _State(Enum):
@@ -63,6 +83,9 @@ class Segmenter:
         self._last_speech_end: float | None = None
         self._pause: float | None = None
         self._frame_end = 0.0
+        # Stream times of the utterance in progress (SpeechStart.at, SpeechEnd.end).
+        self._speech_start = 0.0
+        self._speech_end = 0.0
         self._reset_buffers()
 
     @property
@@ -128,6 +151,8 @@ class Segmenter:
     def _append(self, samples: NDArray[np.float32], p: float) -> None:
         self._frames.append(samples)
         self._probs.append(p)
+        if p >= self._config.end_threshold:
+            self._speech_end = self._frame_end
 
     def _accept_candidate(self) -> list[SegmenterOutput]:
         if len(self._frames) * FRAME_MS < self._config.min_speech_ms:
@@ -135,11 +160,12 @@ class Segmenter:
         self._state = _State.SPEECH
         # Every CANDIDATE frame has p >= end_threshold, so speech began with the first one.
         start = self._frame_end - len(self._frames) * FRAME_MS / 1000
+        self._speech_start = start
         self._pause = None if self._last_speech_end is None else start - self._last_speech_end
         if self._pad and self._preroll:
             self._head = np.concatenate(self._preroll)[-self._pad :]
         self._preroll.clear()
-        return ["speech_started"]
+        return [SpeechStart(start, self._frame_end)]
 
     def _speech_range(self, frames: int) -> tuple[int, int] | None:
         """Half-open range of frames[:frames] from the first to the last frame with
@@ -179,7 +205,7 @@ class Segmenter:
         if cut == "silence" and len(tail):
             self._preroll.extend(np.array_split(tail, math.ceil(len(tail) / FRAME_SAMPLES)))
         self._reset_buffers()
-        return [*out, "speech_ended"]
+        return [*out, SpeechEnd(self._speech_start, self._speech_end)]
 
     def _split_if_too_long(self, ended_at: float) -> list[SegmenterOutput]:
         """Rule 5: at `max_segment_s`, split in the middle of the longest silence run (at least

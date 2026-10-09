@@ -85,12 +85,16 @@ class RecordingFinished:
 class SpeechStarted:
     recording_id: int
     capture_id: int
+    speech_at: float  # monotonic start of the first speech frame (task 6.1)
+    confirmed_at: float  # monotonic end of the frame that confirmed speech
 
 
 @dataclass(frozen=True)
 class SpeechEnded:
     recording_id: int
     capture_id: int
+    speech_start: float  # monotonic start of the utterance's first speech frame
+    speech_end: float  # monotonic end of its last speech frame, not of the silence after it
 
 
 @dataclass(frozen=True)

@@ -165,7 +165,7 @@ def test_stale_open_timer_is_ignored(c: Controller, w: World) -> None:
 def test_speech_flag_and_listening_status(c: Controller, w: World) -> None:
     rid, cid = start(c, w)
     assert c.display_status() == "LISTENING"
-    c.handle(ev.SpeechStarted(rid, cid))
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
     assert c.display_status() == "LISTENING (speech)"
     status = status_of(c)
     assert (status["mode"], status["speech"], status["audio"]["open"]) == (
@@ -173,7 +173,7 @@ def test_speech_flag_and_listening_status(c: Controller, w: World) -> None:
         True,
         True,
     )
-    c.handle(ev.SpeechEnded(rid, cid))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
     assert c.display_status() == "LISTENING"
 
 
@@ -400,11 +400,76 @@ def test_vad_reload_waits_for_idle(c: Controller, w: World) -> None:
 
 def test_stale_speech_and_reconnect_events_are_ignored(c: Controller, w: World) -> None:
     rid, cid, op = lose(c, w)
-    c.handle(ev.SpeechStarted(rid, cid + 5))
+    c.handle(ev.SpeechStarted(rid, cid + 5, 10.0, 10.3))
     c.handle(ev.ReconnectTick(rid, op, 1))  # the reconnect flush has not finished
     c.handle(ev.AudioError(rid, cid, "open_failed", "x"))
     assert w.calls == []
     assert status_of(c)["speech"] is False
+
+
+# --- VAD events for subscribers (task 6.1; 10 §10.2) ----------------------------------------
+
+
+def speech_events(published: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in published if m["event"] in ("speech_start", "speech_end")]
+
+
+def test_speech_start_and_end_are_published_with_an_utterance_number(w: World) -> None:
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    rid, cid = start(c, w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.5))
+    c.handle(ev.SpeechStarted(rid, cid, 14.0, 14.25))
+    c.handle(ev.SpeechEnded(rid, cid, 14.0, 15.0))
+    assert speech_events(published) == [
+        {"event": "speech_start", "utt": 1, "session_id": rid, "t": 10.3, "t_start": 10.0},
+        {"event": "speech_end", "utt": 1, "session_id": rid, "t_start": 10.0, "t_end": 12.5},
+        {"event": "speech_start", "utt": 2, "session_id": rid, "t": 14.25, "t_start": 14.0},
+        {"event": "speech_end", "utt": 2, "session_id": rid, "t_start": 14.0, "t_end": 15.0},
+    ]
+
+
+def test_stale_speech_events_are_not_published(w: World) -> None:
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    rid, cid = start(c, w)
+    c.handle(ev.SpeechStarted(rid, cid + 5, 10.0, 10.3))
+    c.handle(ev.SpeechEnded(rid + 1, cid, 10.0, 12.0))
+    assert speech_events(published) == []
+
+
+def test_dropping_a_session_ends_an_open_utterance(w: World) -> None:
+    """A client must not wait for a `speech_end` that never comes (cancel, no flush)."""
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    rid, cid = start(c, w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.CancelRequested())
+    assert speech_events(published)[-1] == {
+        "event": "speech_end",
+        "utt": 1,
+        "session_id": rid,
+        "t_start": 10.0,
+        "t_end": None,
+    }
+
+
+def test_utterance_numbers_continue_across_sessions(w: World) -> None:
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    rid, cid = start(c, w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 11.0))
+    c.handle(ev.ContinuousToggle())
+    c.handle(ev.FlushDone(rid, cid, stop_op(c), "stop"))
+    rid2, cid2 = start(c, w)
+    c.handle(ev.SpeechStarted(rid2, cid2, 20.0, 20.3))
+    assert [m["utt"] for m in speech_events(published)] == [1, 1, 2]
 
 
 def test_default_schedule_posts_the_event_after_the_delay(w: World) -> None:
@@ -431,19 +496,19 @@ def test_state_changes_and_jobs_are_published(w: World) -> None:
     c._on_publish = published.append
     rid, cid = start(c, w)
     assert [m["status"]["state"] for m in published] == ["LISTENING"]
-    c.handle(ev.SpeechStarted(rid, cid))
-    c.handle(ev.SpeechStarted(rid, cid))  # no change: nothing published
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
     c.handle(ev.SegmentReady(rid, cid, segment(seconds=2)))
     job_id = w.jobs[0].id
     c.handle(ev.JobDiscarded(job_id, "continuous", "filtered"))
-    assert [m.get("status", {}).get("state") or m["result"] for m in published] == [
+    state_and_jobs = [m for m in published if m["event"] in ("state", "job")]
+    assert [m.get("status", {}).get("state") or m["result"] for m in state_and_jobs] == [
         "LISTENING",
         "LISTENING (speech)",
         "LISTENING (speech), transcribing 1",
         "filtered",
         "LISTENING (speech)",
     ]
-    assert published[3] == {
+    assert state_and_jobs[3] == {
         "event": "job",
         "job_id": job_id,
         "source": "continuous",
