@@ -6,6 +6,9 @@ the real TextProcessor → a temporary `whisper-server`. Only the edges are repl
 microphone by `FileAudioSource`, the injector by one that enters nothing, sounds and
 notifications by no-ops. The run measures what 13 §13.5 decides on (RTF, the queue trend,
 CPU frequency), the VAD's CPU share (N4), and where the Segmenter cut the recording.
+`conversation=True` (task 6.4, v0.6 K5) starts conversation mode instead of continuous
+dictation: speculative jobs run too, and RTF is the engine time of all jobs per second of
+speech in the final segments.
 """
 
 import concurrent.futures
@@ -63,6 +66,7 @@ CUT_TOLERANCE_S = 0.040
 FILE_EDGE_S = 0.5  # cuts this close to the loop joint are not Segmenter cuts
 # 05 §5.4
 VAD_CPU_BUDGET = 0.05  # N4: share of one core
+CONVERSATION_OWNER = 1  # the conversation belongs to this fake subscription (task 6.3)
 
 
 # --- the daemon's edges ------------------------------------------------------------------
@@ -195,10 +199,24 @@ class _Recorder:
     jobs: list[dict[str, Any]] = field(default_factory=list)
     segments: list[ev.SegmentReady] = field(default_factory=list)
     stopped_by: list[str] = field(default_factory=list)
+    conversation: bool = False
+    speculative_cuts: int = 0
+    retractions: int = 0
+    transcripts: int = 0
 
     def publish(self, message: dict[str, Any]) -> None:
         if message["event"] == "job":
             self.jobs.append(message)
+        elif message["event"] == "transcript" and message.get("final"):
+            self.transcripts += 1
+
+    def consumer_event(self, event: ev.Event) -> None:
+        if isinstance(event, ev.SegmentReady):
+            self.segments.append(event)
+        elif isinstance(event, ev.SpeculativeReady):
+            self.speculative_cuts += 1
+        elif isinstance(event, ev.SpeculationRetracted):
+            self.retractions += 1
 
 
 def _status(controller: Controller) -> dict[str, Any]:
@@ -224,6 +242,7 @@ def run_soak(
     duration_s: float = DEFAULT_DURATION_S,
     words_path: Path | None = None,
     allow_concurrent: bool = False,
+    conversation: bool = False,
     on_progress: Callable[[str], None] = print,
 ) -> dict[str, Any]:
     """Runs the soak test; writes and returns the result document."""
@@ -260,13 +279,12 @@ def run_soak(
         )
     server.start()
     assert server.engine is not None and server.pid is not None
-    recorder = _Recorder()
+    recorder = _Recorder(conversation=conversation)
     frames: queue.SimpleQueue[Any] = queue.SimpleQueue()
     built: list[Controller] = []  # the consumer and pipeline post to it once it exists
 
     def post(event: ev.Event) -> None:
-        if isinstance(event, ev.SegmentReady):
-            recorder.segments.append(event)
+        recorder.consumer_event(event)
         built[0].events.put(event)
 
     source = FileAudioSource(frames, long_wav, loop=True)
@@ -304,9 +322,14 @@ def run_soak(
     try:
         controller.events.put(ev.EngineStateChanged(EngineHealth.READY))
         started: concurrent.futures.Future[dict[str, Any]] = concurrent.futures.Future()
-        controller.events.put(ev.ContinuousToggle(started))
-        if not started.result(10).get("ok"):
-            raise RuntimeError(f"continuous mode did not start: {started.result()}")
+        controller.events.put(
+            ev.ConversationStart(CONVERSATION_OWNER, started)
+            if conversation
+            else ev.ContinuousToggle(started)
+        )
+        reply = started.result(10)
+        if not (reply.get("ok") or reply.get("event") == "state"):
+            raise RuntimeError(f"continuous mode did not start: {reply}")
         consumer_thread = consumer._thread
         assert consumer_thread is not None and consumer_thread.native_id is not None
         cpu0 = (process_cpu_seconds(server.pid), thread_cpu_seconds(consumer_thread.native_id))
@@ -336,7 +359,9 @@ def run_soak(
             freqs = sampler.freqs_mhz
             system = sampler.summary()
         if not recorder.stopped_by:
-            controller.events.put(ev.ContinuousToggle())
+            controller.events.put(
+                ev.ConversationEnd(CONVERSATION_OWNER) if conversation else ev.ContinuousToggle()
+            )
         deadline = time.monotonic() + DRAIN_TIMEOUT_S
         while not _drained(_status(controller)):
             if time.monotonic() > deadline:
@@ -375,12 +400,15 @@ def run_soak(
         "file_s": len(audio) / SAMPLE_RATE,
         "words": str(words_path) if words_path else None,
         "words_verified": verified,
+        "conversation": conversation,
+        "speculative_ms": config.conversation.speculative_ms if conversation else None,
     }
     keys = ("timestamp", "cpu", "governor", "platform_profile", "power_source")
     result["system"] = {k: info[k] for k in keys}
     out_dir.mkdir(parents=True, exist_ok=True)
     power = f"{info['power_source'] or 'unknown'}-{info['platform_profile'] or 'unknown'}"
-    name = f"soak-{model}-t{threads}-ctx{audio_ctx}-{power}.json"
+    mode = "-conversation" if conversation else ""
+    name = f"soak{mode}-{model}-t{threads}-ctx{audio_ctx}-{power}.json"
     path = out_dir / re.sub(r"[^A-Za-z0-9._-]", "_", name)
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     result["path"] = str(path)
@@ -403,7 +431,23 @@ def _summarize(
 ) -> dict[str, Any]:
     done = [j for j in recorder.jobs if j["processing_s"] is not None and j["audio_s"]]
     audio_s = sum(j["audio_s"] for j in done)
-    rtf = sum(j["processing_s"] for j in done) / audio_s if audio_s else None
+    stt_s = sum(j["processing_s"] for j in done)
+    rtf = stt_s / audio_s if audio_s else None
+    conversation = None
+    if recorder.conversation:
+        # K5 (user decision 2026-10-10): all engine jobs, speculative and retracted ones too,
+        # per second of speech in the final segments. The dictation RTF hides the extra cost,
+        # because each speculative job adds its own audio to the denominator.
+        speech_s = sum(len(e.segment.samples) for e in recorder.segments) / SAMPLE_RATE
+        conversation = {
+            "speech_s": speech_s,
+            "engine_jobs": len(done),
+            "speculative_cuts": recorder.speculative_cuts,
+            "retractions": recorder.retractions,
+            "final_transcripts": recorder.transcripts,
+            "rtf_per_speech_s": stt_s / speech_s if speech_s else None,
+        }
+    verdict_rtf = conversation["rtf_per_speech_s"] if conversation else rtf
     tail = [p for p in timeline if p["t"] >= (timeline[-1]["t"] - TAIL_S if timeline else 0)]
     slope = slope_per_minute([p["t"] for p in tail], [p["queued_audio_s"] for p in tail])
     drop = sustained_freq_drop(freqs, int(FREQ_WINDOW_S / SAMPLE_INTERVAL_S))
@@ -415,7 +459,7 @@ def _summarize(
     wrong = incorrect_cuts(internal, words) if words else []
 
     verdict = {
-        "rtf": rtf is not None and rtf <= MAX_RTF,
+        "rtf": verdict_rtf is not None and verdict_rtf <= MAX_RTF,
         "queue_trend": slope <= MAX_QUEUE_SLOPE,
         "cpu_frequency": drop is None or drop <= MAX_FREQ_DROP,
         "completed": not recorder.stopped_by,
@@ -430,6 +474,7 @@ def _summarize(
         },
         "audio_transcribed_s": audio_s,
         "rtf": rtf,
+        "conversation": conversation,
         "queue": {
             "max_s": max((p["queued_audio_s"] for p in timeline), default=0.0),
             "tail_slope_s_per_min": slope,
@@ -492,6 +537,13 @@ def format_summary(result: dict[str, Any]) -> str:
         f"segments {result['segments']['by_cut']}, "
         f"cuts: {reference}",
     ]
+    if (conv := result.get("conversation")) is not None:
+        lines.append(
+            f"  conversation: RTF per speech second {fmt(conv['rtf_per_speech_s'], '.2f')} "
+            f"(≤ {MAX_RTF}), {conv['engine_jobs']} engine jobs for "
+            f"{conv['final_transcripts']} transcripts, {conv['speculative_cuts']} speculative "
+            f"cuts, {conv['retractions']} retracted"
+        )
     if result["stopped_by"]:
         lines.append(f"  stopped early: {result['stopped_by']}")
     return "\n".join(lines)

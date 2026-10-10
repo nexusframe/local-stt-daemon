@@ -8,8 +8,10 @@ import numpy as np
 import pytest
 
 from local_stt import cli
+from local_stt import events as ev
 from local_stt.bench import soak
 from local_stt.bench.soak import Word
+from local_stt.interfaces import AudioSegment
 from local_stt.stt.parakeet import PARAKEET_MODEL
 
 
@@ -144,6 +146,54 @@ def test_summary_verdicts() -> None:
     assert "stopped early" in text
 
 
+def segment_ready(seconds: float) -> ev.SegmentReady:
+    samples = np.zeros(int(seconds * 16000), dtype=np.float32)
+    return ev.SegmentReady(1, 1, AudioSegment(samples, 1, 1, 0.0, 0, "silence"))
+
+
+def test_summary_conversation_counts_speculative_cost_per_speech_second() -> None:
+    # Two utterances of 10 s each. Three engine jobs: one speculative job was retracted
+    # after it ran, so its 4 s of audio is extra cost, not speech (K5, user decision
+    # 2026-10-10: Σ stt of all jobs / Σ seconds of the final segments).
+    recorder = soak._Recorder(
+        jobs=jobs((10.0, 2.0), (4.0, 1.0), (10.0, 2.5)),
+        segments=[segment_ready(10.0), segment_ready(10.0)],
+        conversation=True,
+        speculative_cuts=3,
+        retractions=2,
+        transcripts=2,
+    )
+    flat = [{"t": float(t), "queued_audio_s": 0.0, "busy": 0.0} for t in range(600)]
+    result = summarize(recorder, flat)
+    conv = result["conversation"]
+    assert conv["speech_s"] == pytest.approx(20.0)
+    assert conv["engine_jobs"] == 3
+    assert conv["speculative_cuts"] == 3
+    assert conv["retractions"] == 2
+    assert conv["final_transcripts"] == 2
+    assert conv["rtf_per_speech_s"] == pytest.approx(5.5 / 20.0)
+    assert result["rtf"] == pytest.approx(5.5 / 24.0)  # the dictation formula, kept for comparison
+    assert result["verdict"]["rtf"]
+
+    slow = soak._Recorder(
+        jobs=jobs((10.0, 4.0), (10.0, 4.0)),
+        segments=[segment_ready(10.0)],
+        conversation=True,
+    )
+    result = summarize(slow, flat)
+    assert result["rtf"] == pytest.approx(0.4)  # would pass with the dictation formula
+    assert result["conversation"]["rtf_per_speech_s"] == pytest.approx(0.8)
+    assert not result["verdict"]["rtf"]
+    text = soak.format_summary({**result, "config": CONFIG, "system": {"power_source": "AC"}})
+    assert "conversation: RTF per speech second 0.80" in text
+
+
+def test_summary_dictation_has_no_conversation_part() -> None:
+    recorder = soak._Recorder(jobs=jobs((10.0, 3.0)))
+    flat = [{"t": float(t), "queued_audio_s": 0.0, "busy": 0.0} for t in range(600)]
+    assert summarize(recorder, flat)["conversation"] is None
+
+
 CONFIG = {"model": "small-q8_0", "threads": 4, "audio_ctx": 1000}
 
 
@@ -172,6 +222,15 @@ def test_cli_soak_uses_the_production_defaults(monkeypatch: pytest.MonkeyPatch) 
         == 0
     )
     assert (seen["threads"], seen["audio_ctx"]) == (8, 0)
+    assert seen["conversation"] is False
+    assert cli.main(["bench", "--soak", "--conversation"]) == 0
+    assert seen["conversation"] is True
+
+
+def test_cli_conversation_needs_soak(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["bench", "--conversation"])
+    assert "--conversation needs --soak" in capsys.readouterr().err
 
 
 def test_cli_soak_rejects_audio_ctx_for_parakeet(capsys: pytest.CaptureFixture[str]) -> None:

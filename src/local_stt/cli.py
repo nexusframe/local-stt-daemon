@@ -112,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="continuous mode in a loop over long/ (13 §13.4 stage 3)",
     )
     bench.add_argument(
+        "--conversation",
+        action="store_true",
+        help="--soak: conversation mode with speculative jobs (v0.6 K5)",
+    )
+    bench.add_argument(
         "--context",
         action="store_true",
         help="continuous-mode context policies on a long recording (task 3.4)",
@@ -332,6 +337,7 @@ def _run_soak(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             duration_s=args.duration,
             words_path=args.words,
             allow_concurrent=args.allow_concurrent,
+            conversation=args.conversation,
         )
     except (OSError, RuntimeError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
@@ -383,6 +389,8 @@ def _run_bench(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
             print(markdown, end="")
         return 0
 
+    if args.conversation and not args.soak:
+        parser.error("--conversation needs --soak")
     if args.soak:
         return _run_soak(args, parser)
     if args.context:
