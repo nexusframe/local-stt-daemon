@@ -37,6 +37,7 @@ All sources send events to a single `controller.events` queue (`queue.Queue`). T
 | `RecordingFinished` | audio consumer (after the `finish_ptt` command) | `recording_id`, `capture_id`, `operation_id`, `AudioClip`, `cut` |
 | `SpeechStarted` / `SpeechEnded` | audio-consumer (Segmenter) | `recording_id`, `capture_id`; `speech_at`, `confirmed_at` / `speech_start`, `speech_end` (monotonic, task 6.1) |
 | `SegmentReady` | audio consumer (Segmenter) | `recording_id`, `capture_id`, `AudioSegment`; also `operation_id` during flush |
+| `SpeculativeReady` / `SpeculationRetracted` | audio consumer (Segmenter), conversation sessions only (task 6.4) | `recording_id`, `capture_id`; `AudioSegment` and the end of speech / — |
 | `MicrophoneSilent` | audio consumer (continuous; 05 §5.6) | `recording_id`, `capture_id` |
 | `FlushDone` | audio consumer (after the `flush` command) | `recording_id`, `capture_id`, `operation_id`, `purpose ∈ {stop, reconnect}` |
 | `AudioError` | AudioCapture / audio consumer | `recording_id`, `capture_id`, `kind ∈ {open_failed, device_lost}`, description |
@@ -116,7 +117,9 @@ The silence gate and VAD trimming do **not** run in the Controller. PipelineWork
 |---|---|---|---|
 | `CaptureOpenDue(rid)` | matching `recording_id` and not `stopping` | `capture.open(ids)` with identifiers assigned at startup: success → `ok` response; failure → `AudioError(open_failed)` row | CONTINUOUS |
 | `SpeechStarted` / `SpeechEnded` | — | set `speech`; publish `speech_start` with a new `utt` / `speech_end` (10 §10.2, task 6.1) | CONTINUOUS |
-| `SegmentReady` | — | `pipeline.submit(Job(continuous, segment, session_id, seq, cut))`; if `queued_audio_s > continuous.max_backlog_s` → *Backlog* row | CONTINUOUS |
+| `SegmentReady` | — | `pipeline.submit(Job(continuous, segment, session_id, seq, cut))`; if `queued_audio_s > continuous.max_backlog_s` → *Backlog* row. With `reuses_speculative` and a valid speculative job: no new job, the speculative job is the final part (task 6.4) | CONTINUOUS |
+| `SpeculativeReady` | conversation mode, the utterance has no part yet, no valid speculative job | `pipeline.submit(Job(…, speculative=true, sink=subscriber))`; its text goes out as `transcript` with `final: false` while the utterance goes on (10 §10.2) | CONTINUOUS |
+| `SpeculationRetracted` | a valid speculative job | forget it (its result is ignored); if its text went out, publish `transcript_retracted` | CONTINUOUS |
 | `ContinuousToggle` | not `stopping` | *Stop(flush)* row, `stop` sound (none in conversation mode; the `conversation` event gets `reason: user`) | → IDLE after `FlushDone` |
 | `ConversationEnd` | `conversation == owner`, not `stopping` | *Stop(flush)* row without a sound; `reason: client`. Another owner or an ended session: ignored | → IDLE after `FlushDone` |
 | *Backlog* (internal) | not `stopping` | *Stop(flush)* row, `stop` + `error` sounds, “Transcription cannot keep up — dictation stopped” notification; finish processing the queue | → IDLE after `FlushDone` |

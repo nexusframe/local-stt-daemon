@@ -175,6 +175,16 @@ class PipelineWorker:
         )
         self.submit(job)
 
+    def withdraw(self, job_id: int) -> bool:
+        """Removes a job that has not started (a retracted speculative job, task 6.4). It
+        reports nothing; False when it has started or is gone."""
+        with self._cond:
+            for queued in self._queue:
+                if queued.job.id == job_id:
+                    self._queue.remove(queued)
+                    return True
+            return False
+
     def cancel_all(self) -> CancelResult:
         with self._cond:
             self._generation += 1
@@ -346,7 +356,7 @@ class PipelineWorker:
         finally:
             with self._lock:
                 self._current = None
-            if session is not None and not requeued:
+            if session is not None and not requeued and not job.speculative:  # 6.4
                 session.prev_cut = job.cut
                 if text and self._context_chars > 0:
                     tail = (session.tail + " " + text.strip()).strip()

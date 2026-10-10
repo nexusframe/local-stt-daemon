@@ -125,6 +125,24 @@ FlushPurpose = Literal["stop", "reconnect"]
 
 
 @dataclass(frozen=True)
+class SpeculativeReady:
+    """Conversation mode (task 6.4): the utterance so far, after `speculative_ms` of silence."""
+
+    recording_id: int
+    capture_id: int
+    segment: AudioSegment = field(compare=False)
+    speech_end: float = 0.0  # monotonic end of the last speech frame before the cut
+
+
+@dataclass(frozen=True)
+class SpeculationRetracted:
+    """Speech came back after the speculative cut (task 6.4)."""
+
+    recording_id: int
+    capture_id: int
+
+
+@dataclass(frozen=True)
 class FlushDone:
     recording_id: int
     capture_id: int
@@ -260,6 +278,8 @@ Event = (
     | SpeechStarted
     | SpeechEnded
     | SegmentReady
+    | SpeculativeReady
+    | SpeculationRetracted
     | FlushDone
     | MicrophoneSilent
     | CaptureOpenDue

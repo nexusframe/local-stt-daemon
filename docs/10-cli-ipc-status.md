@@ -91,12 +91,19 @@ PTT recordings make no speech events.
 *Transcripts (task 6.2, ADR-019).* `subscribe` with `"transcripts": true` adds the text events `transcript` (and `transcript_retracted`, task 6.4). A subscription without it never gets them; a value that is not a boolean gives `bad_request`. Every utterance of continuous mode gives exactly one of two events after its `speech_end`: one `transcript`, or one `utterance_dropped` when no text came from it. This is true also in ordinary dictation, where the text is injected as well. PTT jobs give no transcript. A `max_length` split makes several jobs for one utterance. Their texts are joined with one space into one `transcript`, in the order of the jobs (user decision 2026-10-10). Fields of `transcript`:
 
 - `job_ids`: the jobs of the utterance, also the ones without text,
-- `final`: `true` (task 6.4 adds speculative `false` texts),
+- `final`: `true` for the text of the ended utterance; `false` for a speculative text (task 6.4, below),
 - `text`: the processed text (08 §8.1, `text.commands` included) without leading and trailing spaces,
 - `language`: `auto` under Parakeet; under whisper-server the active language when speech started,
 - `t_start`, `t_end`: as in `speech_end`; `t_end` is `null` when the session ended before the end of speech,
 - `t_ready`: the monotonic time when the text of the last part was ready, before injection,
 - `audio_s`, `stt_s`: the sums over the parts with text.
+
+*Speculative transcripts (task 6.4, conversation mode only).* After `conversation.speculative_ms` (default 250 ms) of silence, the daemon transcribes the utterance so far and sends a `transcript` with `final: false` while the utterance can still go on. Its `t_end` is the end of the last speech frame before the cut, and `job_ids` has the speculative job. Then one of these follows:
+
+- the silence reaches `min_silence_ms` without speech: `speech_end`, then the `final: true` transcript with the same text and the same job (no second engine request), usually at once,
+- speech starts again: `transcript_retracted` (`utt`, `session_id`, `job_ids`); the speculative text is no longer valid, and the utterance goes on. A later pause can give a new `final: false` text.
+
+A `final: false` text is sent only before the utterance ends; when the speculative job finishes after `speech_end`, only the `final: true` text comes. A client can start work with a `final: false` text (for example, the LLM prompt processing) and must use only the `final: true` text as the result. Utterances split at `max_segment_s` get no speculative text. The speculative trailing pad is the silence that is there at the cut (256 ms), not `speech_pad_ms`.
 
 `utterance_dropped` has `reason` ∈ `no_speech` (the segmenter found less than `min_speech_ms` of speech, or no part reported a text), `filtered`, `cancelled`, `failed`: the reason of the last part without text. Queued jobs that a cancel drains count as `cancelled`.
 

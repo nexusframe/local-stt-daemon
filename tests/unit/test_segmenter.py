@@ -7,7 +7,14 @@ from numpy.typing import NDArray
 from pytest import approx
 
 from local_stt.audio.capture import FRAME_SAMPLES, SAMPLE_RATE, AudioFrame
-from local_stt.audio.segmenter import Segmenter, SegmenterOutput, SpeechEnd, SpeechStart
+from local_stt.audio.segmenter import (
+    Segmenter,
+    SegmenterOutput,
+    SpeculationRetracted,
+    SpeculativeSegment,
+    SpeechEnd,
+    SpeechStart,
+)
 from local_stt.config import VadConfig
 from local_stt.interfaces import AudioSegment
 
@@ -55,7 +62,13 @@ class Run:
 
 def kinds(out: list[SegmenterOutput]) -> list[str]:
     """Speech events as "speech_started" / "speech_ended", segments as "segment"."""
-    names = {SpeechStart: "speech_started", SpeechEnd: "speech_ended", AudioSegment: "segment"}
+    names = {
+        SpeechStart: "speech_started",
+        SpeechEnd: "speech_ended",
+        AudioSegment: "segment",
+        SpeculativeSegment: "speculative",
+        SpeculationRetracted: "retracted",
+    }
     return [names[type(o)] for o in out]
 
 
@@ -278,3 +291,79 @@ def test_reset_forgets_the_previous_speech() -> None:
     run.seg.reset(session_id=7)  # a reconnect
     (seg,) = segments(run.feed([S] * 10 + [Q] * 22))
     assert seg.pause_before_s is None
+
+
+# --- speculative cuts (task 6.4) ------------------------------------------------------------
+
+
+def spec_run(speculative_ms: int = 250, **config: float) -> Run:
+    run = Run(**config)
+    run.seg.reset(session_id=7, speculative_ms=speculative_ms)
+    return run
+
+
+def test_a_short_silence_gives_a_speculative_segment_once() -> None:
+    run = spec_run()
+    assert kinds(run.feed([Q] * 10 + [S] * 20 + [Q] * 7)) == ["speech_started"]  # 224 ms
+    (spec,) = run.feed([Q])  # 256 ms >= 250 ms
+    assert isinstance(spec, SpeculativeSegment)
+    # Speech 10..29 plus the pre-roll; the trailing pad is cut to the 8 silent frames there.
+    assert span(spec.segment) == (10 * FRAME_SAMPLES - PAD, 38 * FRAME_SAMPLES)
+    assert (spec.segment.seq, spec.segment.cut, spec.segment.speech_ms) == (1, "silence", 640)
+    assert run.feed([Q] * 13) == []  # no second speculation in the same pause
+    out = run.feed([Q])  # 704 ms: the end of the utterance
+    assert kinds(out) == ["segment", "speech_ended"]
+    final = segments(out)[0]
+    assert (final.seq, final.reuses_speculative) == (1, True)
+
+
+def test_speech_after_the_cut_retracts_it() -> None:
+    run = spec_run()
+    run.feed([Q] * 10 + [S] * 20 + [Q] * 8)
+    assert kinds(run.feed([S])) == ["retracted"]
+    assert kinds(run.feed([S] * 5 + [Q] * 8)) == ["speculative"]  # the next pause
+    out = run.feed([Q] * 14)
+    assert segments(out)[0].reuses_speculative is True
+
+
+def test_a_frame_between_the_thresholds_also_retracts() -> None:
+    """It extends the speech range of the final segment, so the text could differ."""
+    run = spec_run()
+    run.feed([Q] * 10 + [S] * 20 + [Q] * 8)
+    assert kinds(run.feed([M])) == ["retracted"]
+
+
+def test_a_retracted_utterance_does_not_reuse_without_a_new_cut() -> None:
+    run = spec_run(speculative_ms=500)
+    run.feed([Q] * 10 + [S] * 20 + [Q] * 16)  # cut at 512 ms
+    run.feed([M])  # retracted; the silence counter goes on (rule 3)
+    out = run.feed([Q] * 6)  # 704 ms: the end, and no new cut (the threshold is behind)
+    assert segments(out)[0].reuses_speculative is False
+
+
+def test_no_speculation_when_it_is_off() -> None:
+    run = Run()
+    out = run.feed([Q] * 10 + [S] * 20 + [Q] * 22)
+    assert kinds(out) == ["speech_started", "segment", "speech_ended"]
+    assert segments(out)[0].reuses_speculative is False
+
+
+def test_a_flush_after_the_cut_reuses_it() -> None:
+    run = spec_run()
+    run.feed([Q] * 10 + [S] * 20 + [Q] * 10)
+    assert segments(run.seg.flush(at=5.0))[0].reuses_speculative is True
+
+
+def test_no_speculation_after_a_split_in_the_same_utterance() -> None:
+    run = spec_run(max_segment_s=3.2, split_search_s=1.6)
+    out = run.feed([Q] * 10 + [S] * 95)  # split once
+    assert kinds(out) == ["speech_started", "segment"]
+    out = run.feed([Q] * 22)
+    assert kinds(out) == ["segment", "speech_ended"]  # no speculative part, no reuse
+    assert segments(out)[0].reuses_speculative is False
+
+
+def test_reset_turns_speculation_off_by_default() -> None:
+    run = spec_run()
+    run.seg.reset(session_id=8)
+    assert "speculative" not in kinds(run.feed([Q] * 10 + [S] * 20 + [Q] * 22))

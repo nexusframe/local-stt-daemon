@@ -74,7 +74,7 @@ def test_toggle_plays_start_resets_the_consumer_and_delays_the_open(
     c.handle(ev.ContinuousToggle(r))
     assert w.calls == [
         ("sound", "start"),
-        ("consumer.reset_continuous", 1, 1),
+        ("consumer.reset_continuous", 1, 1, 0),
         ("schedule", 0.150, ev.CaptureOpenDue(1)),
     ]
     assert c.mode is Mode.CONTINUOUS
@@ -334,7 +334,7 @@ def test_device_loss_flushes_then_reopens(c: Controller, w: World) -> None:
     c.handle(ev.ReconnectTick(rid, op, 1))
     new_cid = cid + 1
     assert w.calls == [
-        ("consumer.reset_continuous", rid, new_cid),
+        ("consumer.reset_continuous", rid, new_cid, 0),
         ("capture.open", rid, new_cid),
     ]
     assert c.display_status() == "LISTENING, transcribing 1"  # the reconnect segment
@@ -757,6 +757,135 @@ def test_errors_still_notify_in_conversation(w: World) -> None:
     c, *_ = converse(w)
     c.handle(ev.JobFailed(1, "continuous", 2.0, "timeout"))
     assert ("notify", "job_failed", "Could not transcribe segment (2 s)", False) in w.calls
+
+
+# --- speculative transcripts (task 6.4) -------------------------------------------------------
+
+
+def spec_segment(seq: int = 1, seconds: float = 2.0, reuses: bool = False) -> AudioSegment:
+    samples = np.zeros(int(seconds * 16000), dtype=np.float32)
+    return AudioSegment(samples, 1, seq, 99.0, 1500, "silence", None, reuses)
+
+
+def transcripts(published: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        m
+        for m in published
+        if m["event"] in ("transcript", "transcript_retracted", "utterance_dropped")
+    ]
+
+
+def test_conversation_session_resets_the_consumer_with_speculation(w: World) -> None:
+    c = make(w)
+    c.handle(ev.ConversationStart(7, reply()))
+    assert c._cont is not None
+    assert ("consumer.reset_continuous", c._cont.recording_id, c._cont.capture_id, 250) in w.calls
+
+
+def test_dictation_session_resets_the_consumer_without_speculation(c: Controller, w: World) -> None:
+    c.handle(ev.ContinuousToggle())
+    assert c._cont is not None
+    assert ("consumer.reset_continuous", c._cont.recording_id, c._cont.capture_id, 0) in w.calls
+
+
+def test_speculative_text_then_reused_final(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    (job,) = w.jobs
+    assert (job.speculative, job.sink, job.cut) == (True, "subscriber", "silence")
+    c.handle(finished(job.id, "Jaka pogoda? ", 12.6, 2.0, 0.3))
+    (spec,) = transcripts(published)
+    assert (spec["final"], spec["text"], spec["t_end"], spec["t_ready"]) == (
+        False,
+        "Jaka pogoda?",
+        12.0,
+        12.6,
+    )
+    assert spec["job_ids"] == [job.id]
+    c.handle(ev.SegmentReady(rid, cid, spec_segment(reuses=True)))
+    assert len(w.jobs) == 1  # no second engine request
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    final = transcripts(published)[-1]
+    assert (final["final"], final["text"], final["job_ids"], final["t_ready"]) == (
+        True,
+        "Jaka pogoda?",
+        [job.id],
+        12.6,
+    )
+
+
+def test_final_waits_for_a_speculative_job_still_running(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    c.handle(ev.SegmentReady(rid, cid, spec_segment(reuses=True)))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    assert transcripts(published) == []
+    c.handle(finished(w.jobs[0].id, "Jaka pogoda? ", 12.9, 2.0, 0.3))
+    # The speech has ended: only the final text, no speculative one before it.
+    assert [(m["event"], m["final"]) for m in transcripts(published)] == [("transcript", True)]
+
+
+def test_resumed_speech_retracts_and_the_final_is_new(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    spec_job = w.jobs[0].id
+    c.handle(finished(spec_job, "Jaka ", 12.6, 2.0, 0.3))
+    c.handle(ev.SpeculationRetracted(rid, cid))
+    assert transcripts(published)[-1] == {
+        "event": "transcript_retracted",
+        "utt": 1,
+        "session_id": rid,
+        "job_ids": [spec_job],
+    }
+    c.handle(ev.SegmentReady(rid, cid, spec_segment(seconds=4)))
+    final_job = w.jobs[-1].id
+    assert final_job != spec_job and not w.jobs[-1].speculative
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 14.0))
+    c.handle(finished(final_job, "Jaka jest pogoda? ", 15.0, 4.0, 0.5))
+    final = transcripts(published)[-1]
+    assert (final["text"], final["job_ids"]) == ("Jaka jest pogoda?", [final_job])
+
+
+def test_a_retracted_queued_job_is_withdrawn(w: World) -> None:
+    c, _, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    job = w.jobs[0].id
+    c.handle(ev.SpeculationRetracted(rid, cid))
+    assert ("pipeline.withdraw", job) in w.calls
+    assert c._spec_jobs == {} and job not in c._outstanding
+
+
+def test_a_retracted_job_that_finishes_later_is_ignored(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    w.queued.clear()  # already in the engine: it cannot be withdrawn
+    c.handle(ev.SpeculationRetracted(rid, cid))
+    assert transcripts(published) == []  # nothing was sent, so nothing to retract
+    c.handle(finished(w.jobs[0].id, "Jaka ", 12.6, 2.0, 0.3))
+    assert transcripts(published) == []
+
+
+def test_a_speculative_job_without_text_gives_no_event(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    c.handle(ev.JobDiscarded(w.jobs[0].id, "continuous", "filtered"))
+    assert transcripts(published) == []
+    c.handle(ev.SegmentReady(rid, cid, spec_segment(reuses=True)))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    assert transcripts(published)[-1]["reason"] == "filtered"
+
+
+def test_dictation_ignores_speculative_events(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    assert w.jobs == []
 
 
 def test_default_schedule_posts_the_event_after_the_delay(w: World) -> None:

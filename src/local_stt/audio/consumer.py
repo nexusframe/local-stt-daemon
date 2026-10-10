@@ -23,7 +23,14 @@ import numpy as np
 
 from local_stt.audio.capture import SAMPLE_RATE, AudioFrame
 from local_stt.audio.recorder import Recorder
-from local_stt.audio.segmenter import Segmenter, SegmenterOutput, SpeechEnd, SpeechStart
+from local_stt.audio.segmenter import (
+    Segmenter,
+    SegmenterOutput,
+    SpeculationRetracted,
+    SpeculativeSegment,
+    SpeechEnd,
+    SpeechStart,
+)
 from local_stt.audio.vad import SileroVad, Vad, VadModel
 from local_stt.config import Config, VadConfig
 from local_stt.events import (
@@ -34,8 +41,12 @@ from local_stt.events import (
     RecordingFinished,
     RecordingStarted,
     SegmentReady,
+    SpeculativeReady,
     SpeechEnded,
     SpeechStarted,
+)
+from local_stt.events import (
+    SpeculationRetracted as SpeculationRetractedEvent,
 )
 from local_stt.interfaces import Cut
 
@@ -86,6 +97,7 @@ class _SetMaxDuration:
 class _ResetContinuous:
     recording_id: int
     capture_id: int
+    speculative_ms: int = 0
 
 
 @dataclass(frozen=True)
@@ -194,8 +206,11 @@ class AudioConsumer:
         self._continuous_available = vad is not None
         self._items.put(_SetVad(vad, config.vad))
 
-    def reset_continuous(self, recording_id: int, capture_id: int) -> None:
-        self._items.put(_ResetContinuous(recording_id, capture_id))
+    def reset_continuous(
+        self, recording_id: int, capture_id: int, *, speculative_ms: int = 0
+    ) -> None:
+        """`speculative_ms` > 0: speculative cuts for a conversation session (task 6.4)."""
+        self._items.put(_ResetContinuous(recording_id, capture_id, speculative_ms))
 
     def flush(
         self,
@@ -251,12 +266,12 @@ class AudioConsumer:
                     self._stream = None
             case _SetMaxDuration(max_duration_s):
                 self._max_duration_s = max_duration_s
-            case _ResetContinuous(rid, cid):
+            case _ResetContinuous(rid, cid, speculative_ms):
                 if self._segmenter is None:
                     log.error("reset_continuous %d/%d without a VAD model", rid, cid)
                     self._stream = None
                 else:
-                    self._segmenter.reset(session_id=rid)
+                    self._segmenter.reset(session_id=rid, speculative_ms=speculative_ms)
                     self._stream = (rid, cid)
                     self._silent_since = None
             case _Flush(rid, cid, operation_id, purpose, at):
@@ -313,6 +328,12 @@ class AudioConsumer:
             elif isinstance(out, SpeechEnd):
                 log.debug("VAD speech ended")
                 self._post(SpeechEnded(rid, cid, out.start, out.end))
+            elif isinstance(out, SpeculativeSegment):
+                log.debug("VAD speculative cut seq=%d", out.segment.seq)
+                self._post(SpeculativeReady(rid, cid, out.segment, out.speech_end))
+            elif isinstance(out, SpeculationRetracted):
+                log.debug("VAD speculative cut retracted")
+                self._post(SpeculationRetractedEvent(rid, cid))
             else:
                 log.debug(
                     "VAD segment seq=%d speech_ms=%d cut=%s audio=%.2fs",

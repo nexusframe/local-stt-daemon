@@ -96,6 +96,9 @@ notifications = "errors"             # none | errors | all
 [history]
 size = 10                            # texts kept in RAM for `local-stt last`; 0 = off (12 §12.2)
 
+[conversation]
+speculative_ms = 250                 # conversation mode: silence before a speculative transcript; 0 = off (10 §10.2)
+
 [logging]
 level = "INFO"                       # INFO | DEBUG | TRACE
 log_text = false                     # true = full transcript text in logs (debugging only)

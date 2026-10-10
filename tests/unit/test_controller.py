@@ -34,6 +34,7 @@ class World:
     """All fakes record into one ordered `calls` list."""
 
     def __init__(self) -> None:
+        self.queued: set[int] = set()  # submitted jobs a withdraw can still remove
         self.calls: list[tuple[Any, ...]] = []
         self.now = 100.0
         self.open_error: str | None = None
@@ -111,8 +112,11 @@ class Consumer:
     def continuous_available(self) -> bool:
         return self.w.vad_available
 
-    def reset_continuous(self, recording_id: int, capture_id: int) -> None:
-        self.w.calls.append(("consumer.reset_continuous", recording_id, capture_id))
+    def reset_continuous(
+        self, recording_id: int, capture_id: int, *, speculative_ms: int = 0
+    ) -> None:
+        call = ("consumer.reset_continuous", recording_id, capture_id, speculative_ms)
+        self.w.calls.append(call)
 
     def flush(
         self, recording_id: int, capture_id: int, operation_id: int, purpose: str, at: float
@@ -131,6 +135,7 @@ class Pipeline:
     def submit(self, job: Job) -> None:
         self.w.calls.append(("pipeline.submit", job.id))
         self.w.jobs.append(job)
+        self.w.queued.add(job.id)
 
     def cancel_all(self) -> CancelResult:
         self.w.calls.append(("pipeline.cancel_all",))
@@ -139,6 +144,10 @@ class Pipeline:
 
     def reinject(self, job_id: int, text: str) -> None:
         self.w.calls.append(("pipeline.reinject", job_id, text))
+
+    def withdraw(self, job_id: int) -> bool:
+        self.w.calls.append(("pipeline.withdraw", job_id))
+        return job_id in self.w.queued
 
     def pause(self) -> None:
         self.w.calls.append(("pipeline.pause",))

@@ -97,6 +97,9 @@ class AudioSegment:
     # Silence from the previous emitted segment's last speech frame to this utterance's first,
     # in stream time; 0 for the rest of a max_length split, None for the first after reset().
     pause_before_s: float | None = None
+    # Conversation mode (task 6.4): no speech frame came after the speculative cut, so the
+    # speculative text is this segment's text; the Controller sends no second engine request.
+    reuses_speculative: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,9 @@ class Job:
     pause_before_s: float | None = None  # continuous: `AudioSegment.pause_before_s`
     text: str | None = None  # source "history": the text to insert again, no audio (task 5.2)
     sink: JobSink = "inject"
+    # Conversation mode (task 6.4): a speculative request; it does not change the session's
+    # context (`prev_cut`, prompt tail), because speech may still go on.
+    speculative: bool = False
 
     @property
     def duration_s(self) -> float:
@@ -205,7 +211,9 @@ class AudioConsumerControl(Protocol):
     def continuous_available(self) -> bool:
         """The Segmenter has a VAD model: `vad.enabled` and Silero loaded (05 §5.5)."""
 
-    def reset_continuous(self, recording_id: int, capture_id: int) -> None:
+    def reset_continuous(
+        self, recording_id: int, capture_id: int, *, speculative_ms: int = 0
+    ) -> None:
         """Starts feeding this stream to the Segmenter with clean buffers and VAD state; the
         same `recording_id` (a reconnect) keeps the session's `seq` numbering."""
 
@@ -228,6 +236,8 @@ class PipelineControl(Protocol):
     def submit(self, job: Job) -> None: ...
 
     def reinject(self, job_id: int, text: str) -> None: ...
+
+    def withdraw(self, job_id: int) -> bool: ...
 
     def cancel_all(self) -> CancelResult: ...
 

@@ -773,6 +773,35 @@ def test_prev_cut_follows_the_session(h: Harness) -> None:
     assert h.processor.contexts[2].prompt_tail is None
 
 
+def test_a_speculative_job_does_not_change_the_session_context(h: Harness) -> None:
+    """Task 6.4: speech may go on after the cut, so the next job sees the old context."""
+    run_continuous(
+        h,
+        continuous_job(h, 1, cut="max_length"),
+        dataclasses.replace(continuous_job(h, 2), speculative=True, sink="subscriber"),
+        continuous_job(h, 2),
+    )
+    assert [(c.cut, c.prev_cut) for c in h.processor.contexts] == [
+        ("max_length", None),
+        ("silence", "max_length"),
+        ("silence", "max_length"),
+    ]
+    assert h.processor.contexts[1].prompt_tail == h.processor.contexts[2].prompt_tail
+
+
+def test_withdraw_removes_a_queued_job_only(h: Harness) -> None:
+    """Task 6.4: a retracted speculative job must not hold the engine queue."""
+    h.worker.pause()
+    first, second = h.job(), h.job()
+    h.worker.submit(first)
+    h.worker.submit(second)
+    assert h.worker.withdraw(second.id) is True
+    assert h.worker.withdraw(second.id) is False  # gone
+    h.worker.resume()
+    assert isinstance(h.outcome(), JobFinished)
+    assert h.no_more_events()  # the withdrawn job reports nothing
+
+
 def test_ptt_and_disabled_context_send_only_the_vocabulary(h: Harness) -> None:
     h.worker.update_config(
         config(stt={"vocabulary_prompt": "Gdańsk.", "continuous_context": False})

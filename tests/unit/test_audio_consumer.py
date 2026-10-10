@@ -284,6 +284,31 @@ def test_speech_events_carry_monotonic_speech_times() -> None:
     assert ended == SpeechEnded(1, 1, approx(T0 + 5 * FRAME_S), approx(T0 + 15 * FRAME_S))
 
 
+def test_a_conversation_session_posts_speculative_events() -> None:
+    """Task 6.4: frames 5..14 speech, 8 silent frames give the cut, speech again retracts."""
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1, speculative_ms=250)
+    w.speech([Q] * 5 + [S] * 10 + [Q] * 8 + [S] + [Q] * 22)
+    w.drain()
+    assert w.kinds() == [
+        "SpeechStarted",
+        "SpeculativeReady",
+        "SpeculationRetracted",
+        "SpeculativeReady",
+        "SegmentReady",
+        "SpeechEnded",
+    ]
+    assert w.segments()[0].segment.reuses_speculative
+
+
+def test_dictation_sessions_do_not_speculate() -> None:
+    w = ContinuousWorld()
+    w.consumer.reset_continuous(1, 1)
+    w.speech([Q] * 5 + [S] * 10 + [Q] * 22)
+    w.drain()
+    assert w.kinds() == ["SpeechStarted", "SegmentReady", "SpeechEnded"]
+
+
 def test_stop_flush_emits_the_utterance_then_flush_done() -> None:
     w = ContinuousWorld()
     w.consumer.reset_continuous(1, 1)

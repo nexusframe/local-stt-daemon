@@ -300,3 +300,14 @@ def test_cli_prints_config_warnings(tmp_path: Path, capsys: pytest.CaptureFixtur
     path.write_text("[vad]\nenabled = false\n", encoding="utf-8")
     assert main(["models", "list", "--config", str(path)]) == 0
     assert "config warning: vad.enabled=false" in capsys.readouterr().err
+
+
+# --- conversation (task 6.4) ----------------------------------------------------------------
+
+
+def test_speculative_ms_default_and_range() -> None:
+    assert Config().conversation.speculative_ms == 250
+    assert parse_config({"conversation": {"speculative_ms": 0}})[0].conversation.speculative_ms == 0
+    assert errors_of({"conversation": {"speculative_ms": -1}})
+    (error,) = errors_of({"conversation": {"speculative_ms": 700}})  # = vad.min_silence_ms
+    assert "conversation.speculative_ms" in error

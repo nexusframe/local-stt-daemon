@@ -116,6 +116,12 @@ class _Utterance:
     audio_s: float = 0.0
     stt_s: float = 0.0
     reason: str = "no_speech"  # of the last part without text
+    # Speculative transcription (task 6.4): the valid speculative job, the end of speech at
+    # its cut, its report once it has come, and whether a `final: false` text was sent.
+    spec_job: int | None = None
+    spec_t_end: float = 0.0
+    spec_report: ev.Event | None = None
+    spec_sent: bool = False
 
 
 @dataclass
@@ -207,6 +213,7 @@ class Controller:
         self._next_utt_id = 0  # utterance numbers of the speech events (task 6.1)
         self._utterances: dict[int, _Utterance] = {}  # waiting for their transcript (6.2)
         self._job_utt: dict[int, int] = {}  # continuous job → its utterance
+        self._spec_jobs: dict[int, int] = {}  # speculative job → its utterance (6.4)
 
         self._outstanding: dict[int, float] = {}  # job_id → audio seconds, until reported done
         self._busy_job: int | None = None
@@ -252,6 +259,8 @@ class Controller:
             ev.SpeechStarted: self._on_speech,
             ev.SpeechEnded: self._on_speech,
             ev.SegmentReady: self._on_segment_ready,
+            ev.SpeculativeReady: self._on_speculative_ready,
+            ev.SpeculationRetracted: self._on_speculation_retracted,
             ev.MicrophoneSilent: self._on_microphone_silent,
             ev.FlushDone: self._on_flush_done,
             ev.ReconnectTick: self._on_reconnect_tick,
@@ -652,8 +661,15 @@ class Controller:
         cont.conversation = conversation
         self._cont = cont
         self.mode = Mode.CONTINUOUS
-        self._consumer.reset_continuous(cont.recording_id, cont.capture_id)
+        self._reset_consumer(cont)
         self._schedule(CAPTURE_OPEN_DELAY_S, ev.CaptureOpenDue(cont.recording_id))
+
+    def _reset_consumer(self, cont: "_Continuous") -> None:
+        """Speculative cuts only for conversation sessions (task 6.4)."""
+        speculative_ms = self.config.conversation.speculative_ms if cont.conversation else 0
+        self._consumer.reset_continuous(
+            cont.recording_id, cont.capture_id, speculative_ms=speculative_ms
+        )
 
     def _on_conversation_start(self, event: ev.ConversationStart) -> None:
         """Task 6.3: continuous mode for an IPC subscription, only from IDLE (user decision
@@ -827,11 +843,51 @@ class Controller:
 
     def _utterance_part_done(self, job_id: int, event: ev.Event) -> None:
         """Records one reported job of an utterance (task 6.2)."""
+        if self._spec_report(job_id, event):
+            return
         utt = self._job_utt.pop(job_id, None)
         u = self._utterances.get(utt) if utt is not None else None
         if u is None or utt is None:
             return
         u.pending.discard(job_id)
+        self._record_part(u, job_id, event)
+        self._settle_utterance(utt)
+
+    def _spec_report(self, job_id: int, event: ev.Event) -> bool:
+        """A speculative job reported (task 6.4). True when it is not (yet) a part of its
+        utterance: then its text, if still valid, goes out as `final: false`."""
+        utt = self._spec_jobs.pop(job_id, None)
+        if utt is None:
+            return False
+        if job_id in self._job_utt:  # already reused as the final part: an ordinary part
+            return False
+        u = self._utterances.get(utt)
+        if u is None or u.spec_job != job_id:
+            return True  # retracted, or the utterance is gone
+        u.spec_report = event
+        text = event.text.strip() if isinstance(event, ev.JobFinished) and event.text else ""
+        if text and not u.ended:
+            assert isinstance(event, ev.JobFinished)
+            u.spec_sent = True
+            self._publish(
+                {
+                    "event": "transcript",
+                    "utt": utt,
+                    "session_id": u.session_id,
+                    "job_ids": [job_id],
+                    "final": False,
+                    "text": text,
+                    "language": u.language,
+                    "t_start": u.t_start,
+                    "t_end": u.spec_t_end,
+                    "t_ready": event.text_at,
+                    "audio_s": round(event.timings.get("audio", 0.0), 3),
+                    "stt_s": round(event.timings.get("stt", 0.0), 3),
+                }
+            )
+        return True
+
+    def _record_part(self, u: _Utterance, job_id: int, event: ev.Event) -> None:
         if isinstance(event, ev.JobFinished) and event.text and event.text.strip():
             u.texts[job_id] = event.text.strip()
             if event.text_at is not None:
@@ -842,7 +898,6 @@ class Controller:
             u.reason = event.reason
         elif isinstance(event, ev.JobFailed):
             u.reason = "failed"
-        self._settle_utterance(utt)
 
     def _settle_utterance(self, utt: int) -> None:
         """One `transcript` (text events, only for `transcripts` subscribers) or one
@@ -878,6 +933,69 @@ class Controller:
             }
         )
 
+    def _reuse_speculative(self, utt: int | None, u: _Utterance) -> None:
+        """Task 6.4: no speech came after the speculative cut, so its job is the final part;
+        no second engine request."""
+        assert utt is not None and u.spec_job is not None
+        job_id = u.spec_job
+        u.job_ids.append(job_id)
+        if u.spec_report is not None:
+            self._record_part(u, job_id, u.spec_report)
+        else:
+            u.pending.add(job_id)
+            self._job_utt[job_id] = utt
+
+    def _on_speculative_ready(self, event: ev.SpeculativeReady) -> None:
+        """Task 6.4: transcribe the utterance so far. Only in conversation mode and only
+        before the utterance has a part (no `max_length` split)."""
+        cont = self._cont
+        if not self._cont_matches(event.recording_id, event.capture_id) or cont is None:
+            return self._stale(event)
+        u = self._utterances.get(cont.utt) if cont.utt is not None else None
+        if cont.conversation is None or u is None or u.job_ids or u.spec_job is not None:
+            return None
+        segment = event.segment
+        job = Job(
+            id=self._new_id("job"),
+            source="continuous",
+            audio=segment.samples,
+            ended_at=segment.ended_at,
+            generation=self._pipeline.generation,
+            session_id=segment.session_id,
+            seq=segment.seq,
+            cut=segment.cut,
+            language=self.language,
+            pause_before_s=segment.pause_before_s,
+            sink="subscriber",
+            speculative=True,
+        )
+        self._pipeline.submit(job)
+        self._outstanding[job.id] = len(segment.samples) / SAMPLE_RATE
+        assert cont.utt is not None
+        u.spec_job, u.spec_t_end, u.spec_report, u.spec_sent = job.id, event.speech_end, None, False
+        self._spec_jobs[job.id] = cont.utt
+
+    def _on_speculation_retracted(self, event: ev.SpeculationRetracted) -> None:
+        cont = self._cont
+        if not self._cont_matches(event.recording_id, event.capture_id) or cont is None:
+            return self._stale(event)
+        u = self._utterances.get(cont.utt) if cont.utt is not None else None
+        if u is None or u.spec_job is None:
+            return None
+        if u.spec_sent:
+            self._publish(
+                {
+                    "event": "transcript_retracted",
+                    "utt": cont.utt,
+                    "session_id": u.session_id,
+                    "job_ids": [u.spec_job],
+                }
+            )
+        if self._pipeline.withdraw(u.spec_job):  # not started: it must not hold the queue
+            self._job_done(u.spec_job)
+            self._spec_jobs.pop(u.spec_job, None)
+        u.spec_job, u.spec_report, u.spec_sent = None, None, False
+
     def _on_segment_ready(self, event: ev.SegmentReady) -> None:
         cont = self._cont
         if (
@@ -887,6 +1005,9 @@ class Controller:
         ):
             return self._stale(event)
         segment = event.segment
+        u = self._utterances.get(cont.utt) if cont.utt is not None else None
+        if segment.reuses_speculative and u is not None and u.spec_job is not None:
+            return self._reuse_speculative(cont.utt, u)
         job = Job(
             id=self._new_id("job"),
             source="continuous",
@@ -999,7 +1120,7 @@ class Controller:
             return self._unhandled(event)
         cont.capture_id = self._new_id("capture")
         # The same session_id keeps the next seq (05 §5.5, rule 8).
-        self._consumer.reset_continuous(cont.recording_id, cont.capture_id)
+        self._reset_consumer(cont)
         try:
             self._capture.open(cont.recording_id, cont.capture_id)
         except AudioOpenError as e:

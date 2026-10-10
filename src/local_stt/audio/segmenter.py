@@ -48,8 +48,25 @@ class SpeechEnd:
     end: float
 
 
-# The audio consumer turns these into SpeechStarted / SpeechEnded / SegmentReady (task 2.3).
-SegmenterOutput = SpeechStart | SpeechEnd | AudioSegment
+@dataclass(frozen=True)
+class SpeculativeSegment:
+    """Conversation mode (task 6.4): `speculative_ms` of silence ended the speech so far. The
+    segment is what a cut at this frame would give (the trailing pad is the silence that is
+    there); its `seq` is the one that the final segment will get. `speech_end`: the stream
+    time of the end of the last speech frame, as in SpeechEnd."""
+
+    segment: AudioSegment
+    speech_end: float
+
+
+@dataclass(frozen=True)
+class SpeculationRetracted:
+    """A frame with `p >= end_threshold` came after the speculative cut (task 6.4)."""
+
+
+# The audio consumer turns these into SpeechStarted / SpeechEnded / SegmentReady (task 2.3) and
+# SpeculativeReady / SpeculationRetracted (task 6.4).
+SegmenterOutput = SpeechStart | SpeechEnd | AudioSegment | SpeculativeSegment | SpeculationRetracted
 
 
 class _State(Enum):
@@ -86,15 +103,21 @@ class Segmenter:
         # Stream times of the utterance in progress (SpeechStart.at, SpeechEnd.end).
         self._speech_start = 0.0
         self._speech_end = 0.0
+        # Speculative cuts (task 6.4): 0 = off; set for each session by reset().
+        self._speculative_ms = 0
+        self._speculating = False  # a speculative cut is valid (no speech frame after it)
+        self._split = False  # the utterance was split at max_segment_s: no speculation
         self._reset_buffers()
 
     @property
     def state(self) -> str:
         return self._state.value
 
-    def reset(self, session_id: int) -> None:
+    def reset(self, session_id: int, *, speculative_ms: int = 0) -> None:
         """Clears buffers and the VAD state (rule 8). `seq` restarts only for a new session:
-        after a reconnect the same session continues its numbering."""
+        after a reconnect the same session continues its numbering. `speculative_ms` > 0
+        turns speculative cuts on for this session (conversation mode, task 6.4)."""
+        self._speculative_ms = speculative_ms
         if session_id != self._session_id:
             self._session_id, self._seq = session_id, 0
         self._preroll.clear()
@@ -123,14 +146,20 @@ class Segmenter:
             return self._accept_candidate()
         # SPEECH / TRAILING (rule 3)
         self._append(frame.samples, p)
+        out: list[SegmenterOutput] = []
+        if p >= c.end_threshold and self._speculating:
+            self._speculating = False
+            out.append(SpeculationRetracted())
         if p >= c.start_threshold:
             self._silence_ms, self._state = 0, _State.SPEECH
         elif p < c.end_threshold:
             self._silence_ms += FRAME_MS
             self._state = _State.TRAILING
             if self._silence_ms >= c.min_silence_ms:
-                return self._end(frame_end, "silence")
-        return self._split_if_too_long(frame_end)
+                return [*out, *self._end(frame_end, "silence")]
+            if self._speculation_due():
+                out += self._speculate(frame_end)
+        return [*out, *self._split_if_too_long(frame_end)]
 
     def flush(self, at: float) -> list[SegmenterOutput]:
         """Ends the utterance in progress (rule 6); `at` is the flush request time."""
@@ -141,7 +170,39 @@ class Segmenter:
 
     # --- internals ---------------------------------------------------------------------------
 
+    def _speculation_due(self) -> bool:
+        return (
+            self._speculative_ms > 0
+            and not self._speculating
+            and not self._split
+            and self._silence_ms >= self._speculative_ms
+            and self._silence_ms - FRAME_MS < self._speculative_ms  # only at the threshold
+        )
+
+    def _speculate(self, ended_at: float) -> list[SegmenterOutput]:
+        """Task 6.4: the segment that a cut here would give, with the silence that is there
+        as the trailing pad. Emitted once for each pause; `_seq` does not change."""
+        speech = self._speech_range(len(self._frames))
+        if speech is None or (speech[1] - speech[0]) * FRAME_MS < self._config.min_speech_ms:
+            return []
+        audio = np.concatenate([self._head, *self._frames])
+        end = min(len(audio), len(self._head) + speech[1] * FRAME_SAMPLES + self._pad)
+        assert self._session_id is not None, "reset(session_id) must precede add()"
+        speech_ms = (speech[1] - speech[0]) * FRAME_MS
+        segment = AudioSegment(
+            audio[:end],
+            self._session_id,
+            self._seq + 1,
+            ended_at,
+            speech_ms,
+            "silence",
+            self._pause,
+        )
+        self._speculating = True
+        return [SpeculativeSegment(segment, self._speech_end)]
+
     def _reset_buffers(self) -> None:
+        self._speculating = False
         self._state = _State.SILENCE
         self._head = np.zeros(0, dtype=np.float32)
         self._frames = []
@@ -158,6 +219,7 @@ class Segmenter:
         if len(self._frames) * FRAME_MS < self._config.min_speech_ms:
             return []
         self._state = _State.SPEECH
+        self._split = False
         # Every CANDIDATE frame has p >= end_threshold, so speech began with the first one.
         start = self._frame_end - len(self._frames) * FRAME_MS / 1000
         self._speech_start = start
@@ -189,7 +251,12 @@ class Segmenter:
         self._seq += 1
         assert self._session_id is not None, "reset(session_id) must precede add()"
         pause, self._pause = self._pause, 0.0  # the rest of a max_length split follows at once
-        return [AudioSegment(samples, self._session_id, self._seq, ended_at, speech_ms, cut, pause)]
+        reuses = self._speculating and cut != "max_length"
+        return [
+            AudioSegment(
+                samples, self._session_id, self._seq, ended_at, speech_ms, cut, pause, reuses
+            )
+        ]
 
     def _end(self, ended_at: float, cut: SegmentCut) -> list[SegmenterOutput]:
         """Rule 4: the segment runs through the last speech frame plus `speech_pad_ms`; the
@@ -220,9 +287,13 @@ class Segmenter:
             split = min(range(first, n), key=lambda i: self._probs[i], default=n)
         speech = self._speech_range(split)
         out: list[SegmenterOutput] = []
+        if self._speculating:  # the speculative text would miss the rest (task 6.4)
+            self._speculating = False
+            out.append(SpeculationRetracted())
+        self._split = True
         if speech is not None:
             audio = np.concatenate([self._head, *self._frames[:split]])
-            out = self._segment(audio, ended_at, speech, "max_length")
+            out += self._segment(audio, ended_at, speech, "max_length")
         self._head = np.zeros(0, dtype=np.float32)
         del self._frames[:split], self._probs[:split]
         return out

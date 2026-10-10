@@ -101,6 +101,9 @@ notifications = "errors"             # none | errors | all
 [history]
 size = 10                            # texts kept in RAM for `local-stt last`; 0 = off (12 §12.2)
 
+[conversation]
+speculative_ms = 250                 # conversation mode: silence before a speculative transcript; 0 = off (10 §10.2)
+
 [logging]
 level = "INFO"                       # INFO | DEBUG | TRACE
 log_text = false                     # true = full transcript text in logs (debugging only)
@@ -147,6 +150,7 @@ The validator checks all keys for both engines. A key that does not apply is kep
 | `stt.extra_server_args` does not contain `-pr`/`--print-realtime` or `-debug`/`--debug-mode`: `--print-realtime` prints transcribed text to the server's stdout, which ends up in journald (12 §12.1; verified in `examples/server/server.cpp`, v1.9.4); `--debug-mode` enables whisper.cpp debug output derived from the audio | `stt.extra_server_args: flag X would log transcribed content` |
 | `continuous` requires `vad.enabled` | warning `vad.enabled=false: continuous dictation unavailable`; `toggle` returns `vad_disabled` |
 | `history.size` is 0..100 (task 5.2) | `history.size: must be 0..100 (got 500)` |
+| `conversation.speculative_ms` is 0 (off) or more than 0 and less than `vad.min_silence_ms` (task 6.4) | `conversation.speculative_ms: must be 0 (off) or > 0 and < vad.min_silence_ms (got 700)` |
 | regexes in `text.*` compile | `text.hallucination_patterns[2]: invalid regex: …` |
 | the `replace` template of a regex `text.replacements` rule is valid for its pattern (group references exist, no bad escapes); `re.sub` parses the template even without a match, so a bad one would fail on every transcript | `text.replacements[0].replace: invalid replacement template: …` |
 

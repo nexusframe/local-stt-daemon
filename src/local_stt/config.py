@@ -173,6 +173,13 @@ class HistoryConfig:
 
 
 @dataclass(frozen=True)
+class ConversationConfig:
+    # Conversation mode (task 6.4): silence after which the utterance so far is transcribed
+    # for a `final: false` transcript; 0 = off. Below vad.min_silence_ms.
+    speculative_ms: int = 250
+
+
+@dataclass(frozen=True)
 class LoggingConfig:
     level: str = "INFO"
     log_text: bool = False
@@ -191,6 +198,7 @@ class Config:
     injection: InjectionConfig = field(default_factory=InjectionConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     history: HistoryConfig = field(default_factory=HistoryConfig)
+    conversation: ConversationConfig = field(default_factory=ConversationConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
     @property
@@ -475,6 +483,13 @@ def _validate(config: Config, errors: list[str]) -> list[str]:
     check(ptt.min_duration_ms >= 0, "ptt.min_duration_ms", "must be >= 0", ptt.min_duration_ms)
     size = config.history.size
     check(0 <= size <= 100, "history.size", "must be 0..100", size)
+    spec = config.conversation.speculative_ms
+    check(
+        spec == 0 or 0 < spec < config.vad.min_silence_ms,
+        "conversation.speculative_ms",
+        "must be 0 (off) or > 0 and < vad.min_silence_ms",
+        spec,
+    )
     check(
         ptt.max_duration_s > ptt.min_duration_ms / 1000,
         "ptt.max_duration_s",
