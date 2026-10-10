@@ -55,6 +55,22 @@ class LanguageSwitch:
 
 
 @dataclass(frozen=True)
+class ConversationStart:
+    """IPC `subscribe` with `"conversation": true` (task 6.3): continuous mode whose text goes
+    only to subscribers. `owner` identifies the connection; the reply waits for the open."""
+
+    owner: int
+    reply: Reply = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
+class ConversationEnd:
+    """The owner's subscription has closed (task 6.3)."""
+
+    owner: int
+
+
+@dataclass(frozen=True)
 class CancelRequested:
     reply: Reply = field(default=None, compare=False)
 
@@ -234,6 +250,8 @@ Event = (
     | PttReleased
     | PttCancelKey
     | ContinuousToggle
+    | ConversationStart
+    | ConversationEnd
     | LanguageSwitch
     | CancelRequested
     | RecordingStarted

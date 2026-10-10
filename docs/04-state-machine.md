@@ -29,6 +29,7 @@ All sources send events to a single `controller.events` queue (`queue.Queue`). T
 | `PttReleased` | HotkeyListener / IPC `ptt stop` | `at: float` (monotonic, at the source), `reply` |
 | `PttCancelKey` | HotkeyListener (`hotkeys.ptt_cancel_key` while PTT is held) | — |
 | `ContinuousToggle` | HotkeyListener / IPC `toggle` | `reply` |
+| `ConversationStart` / `ConversationEnd` | IPC `subscribe` with `"conversation": true` / the end of that connection (task 6.3) | `owner` (the connection), `reply` |
 | `LanguageSwitch` | HotkeyListener (`hotkeys.language_toggle`) / IPC `language` | `target: str \| None` (None = toggle), `reply` |
 | `CancelRequested` | IPC `cancel` | `reply` |
 | `RecordingStarted` | audio consumer (first frame after opening the stream) | `recording_id`, `capture_id` |
@@ -86,6 +87,7 @@ Sounds are referred to by the names from [10](10-cli-ipc-status.md) §10.6 (the 
 | `PttPressed` | `engine != READY` | `error` sound, “STT engine unavailable” notification, reject with `engine_down`/`engine_starting` | IDLE |
 | `ContinuousToggle` | `engine == READY`, `vad.enabled` and the Segmenter's VAD model loaded | `start` sound, new `recording_id` (`session_id`) and `capture_id`; request a Segmenter reset with these identifiers in the audio consumer; schedule `CaptureOpenDue(recording_id)` in 150 ms (the Controller does not block). Send the IPC response only after the open attempt | CONTINUOUS |
 | `ContinuousToggle` | `engine != READY` / `!vad.enabled` / VAD model not loaded | `error` sound, notification, reject with `engine_*` / `vad_disabled` / `vad_disabled`. Without Silero, continuous mode has no way to segment speech, unlike PTT, which falls back to the RMS gate (user decision 2026-10-04) | IDLE |
+| `ConversationStart` | as `ContinuousToggle` (task 6.3) | as `ContinuousToggle`, but no sound, and after the open the notification “Conversation mode enabled” instead of “Dictation enabled”; the session has `conversation = owner`, so its jobs have `sink = subscriber`; after the open, publish `conversation` with `on: true`. When the engine or the VAD is not ready: reject without a sound or a notification | CONTINUOUS |
 | `CancelRequested` | — | `pipeline.cancel_all()`; `cancel` sound if anything was discarded | IDLE |
 | `JobDiscarded(no_speech)` | PTT source | `cancel` sound | IDLE |
 
@@ -115,7 +117,8 @@ The silence gate and VAD trimming do **not** run in the Controller. PipelineWork
 | `CaptureOpenDue(rid)` | matching `recording_id` and not `stopping` | `capture.open(ids)` with identifiers assigned at startup: success → `ok` response; failure → `AudioError(open_failed)` row | CONTINUOUS |
 | `SpeechStarted` / `SpeechEnded` | — | set `speech`; publish `speech_start` with a new `utt` / `speech_end` (10 §10.2, task 6.1) | CONTINUOUS |
 | `SegmentReady` | — | `pipeline.submit(Job(continuous, segment, session_id, seq, cut))`; if `queued_audio_s > continuous.max_backlog_s` → *Backlog* row | CONTINUOUS |
-| `ContinuousToggle` | not `stopping` | *Stop(flush)* row, `stop` sound | → IDLE after `FlushDone` |
+| `ContinuousToggle` | not `stopping` | *Stop(flush)* row, `stop` sound (none in conversation mode; the `conversation` event gets `reason: user`) | → IDLE after `FlushDone` |
+| `ConversationEnd` | `conversation == owner`, not `stopping` | *Stop(flush)* row without a sound; `reason: client`. Another owner or an ended session: ignored | → IDLE after `FlushDone` |
 | *Backlog* (internal) | not `stopping` | *Stop(flush)* row, `stop` + `error` sounds, “Transcription cannot keep up — dictation stopped” notification; finish processing the queue | → IDLE after `FlushDone` |
 | `CancelRequested` | — | invalidate the recording and operations, `capture.close()`, request `audio_consumer.discard(ids)`, `pipeline.cancel_all()`, `cancel` sound; a pending IPC start receives `cancelled`; an open utterance gets `speech_end` with `t_end = null` (task 6.1) | IDLE |
 | `EngineStateChanged(DOWN)` | not `stopping` | *Stop(flush)* row, `stop` + `error` sounds; segments wait in the paused queue (4.5); “STT engine stopped working — dictation stopped” notification | → IDLE after `FlushDone` |

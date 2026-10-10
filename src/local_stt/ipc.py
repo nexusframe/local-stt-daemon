@@ -7,6 +7,7 @@ each subscriber's own connection thread writes them. The client side is used by 
 """
 
 import contextlib
+import itertools
 import json
 import logging
 import os
@@ -26,6 +27,8 @@ from typing import Any
 from local_stt.events import (
     CancelRequested,
     ContinuousToggle,
+    ConversationEnd,
+    ConversationStart,
     Event,
     HistoryInsert,
     HistoryRequested,
@@ -44,6 +47,9 @@ REPLY_TIMEOUT_S = 5.0  # waiting for the controller (10 §10.2)
 CLIENT_TIMEOUT_S = REPLY_TIMEOUT_S + 2.0
 IDLE_CONNECTION_S = 60.0  # a client that sends nothing is disconnected
 SUBSCRIBER_BACKLOG = 256  # messages a subscriber may fall behind before it is disconnected
+# How often an idle stream checks that its client is still there. A closed conversation
+# subscription must give the microphone back quickly (K6 of v0.6: within 1 s).
+SUBSCRIBER_POLL_S = 0.2
 # Events with dictated text: only for `subscribe` with `"transcripts": true` (task 6.2, ADR-019).
 TEXT_EVENTS = frozenset({"transcript", "transcript_retracted"})
 
@@ -151,7 +157,7 @@ class Subscribers:
         with self._lock:
             subs, self._subs = list(self._subs), set()
         for sub in subs:
-            sub.dropped = True  # seen within a second even if the wake-up does not fit
+            sub.dropped = True  # seen within SUBSCRIBER_POLL_S even if the wake-up does not fit
             with contextlib.suppress(queue.Full):
                 sub.messages.put_nowait(None)
 
@@ -181,26 +187,41 @@ class _Handler(socketserver.StreamRequestHandler):
                     return
                 subscribe = _subscribe_request(line)
                 if subscribe is not None:
-                    transcripts = subscribe.get("transcripts", False)
-                    if not isinstance(transcripts, bool):
-                        return self._send(error("bad_request", '"transcripts" must be a boolean'))
-                    return self._stream(transcripts)
+                    flags = [subscribe.get(k, False) for k in ("transcripts", "conversation")]
+                    if not all(isinstance(flag, bool) for flag in flags):
+                        message = '"transcripts" and "conversation" must be booleans'
+                        return self._send(error("bad_request", message))
+                    return self._stream(*flags)
                 self._send(self._respond(line))
         except (TimeoutError, ConnectionError):
             return
 
-    def _stream(self, transcripts: bool) -> None:
+    def _stream(self, transcripts: bool, conversation: bool) -> None:
         """`subscribe`: the current state first, then every published message until the
-        client disconnects or falls behind (10 §10.2); text events only with `transcripts`."""
+        client disconnects or falls behind (10 §10.2); text events only with `transcripts`.
+        With `conversation` (task 6.3) the subscription starts conversation mode first and
+        owns it: when the connection ends, the Controller stops the mode."""
         sub = self.server.subscribers.add(transcripts=transcripts)
+        owner = next(self.server.owners) if conversation else None
+        started = False
         try:
+            if owner is not None:
+                reply: Future[Response] = Future()
+                self.server.post(ConversationStart(owner, reply))
+                try:
+                    answer = reply.result(self.server.reply_timeout_s)
+                except FutureTimeout:
+                    answer = error("timeout", "the daemon did not respond in time")
+                if not answer.get("ok"):
+                    return self._send(answer)
+                started = True
             initial = self._respond(b'{"cmd": "status"}')
             if not initial.get("ok"):
                 return self._send(initial)
             self._send({"event": "state", "status": initial["status"]})
             while not sub.dropped:
                 try:
-                    message = sub.messages.get(timeout=1.0)
+                    message = sub.messages.get(timeout=SUBSCRIBER_POLL_S)
                 except queue.Empty:
                     if _closed_by_peer(self.request):
                         return
@@ -210,6 +231,8 @@ class _Handler(socketserver.StreamRequestHandler):
                 self._send(message)
         finally:
             self.server.subscribers.remove(sub)
+            if started and owner is not None:
+                self.server.post(ConversationEnd(owner))
 
     def _respond(self, line: bytes) -> Response:
         try:
@@ -245,6 +268,7 @@ class _Server(socketserver.ThreadingUnixStreamServer):
         self.post = post
         self.subscribers = subscribers
         self.reply_timeout_s = reply_timeout_s
+        self.owners = itertools.count(1)  # conversation subscriptions (task 6.3)
         self.uid = os.getuid()
         super().__init__(str(path), _Handler)
 
@@ -372,9 +396,12 @@ def call(
     return response
 
 
-def subscribe(*, path: Path | None = None, transcripts: bool = False) -> Iterator[Response]:
+def subscribe(
+    *, path: Path | None = None, transcripts: bool = False, conversation: bool = False
+) -> Iterator[Response]:
     """Yields the daemon's `subscribe` stream (CLI side) until the daemon closes it; the first
-    message is the current state, or an error response. `transcripts` asks for text events."""
+    message is the current state, or an error response. `transcripts` asks for text events,
+    `conversation` for conversation mode for as long as the stream is open (task 6.3)."""
     target = path if path is not None else socket_path()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(CLIENT_TIMEOUT_S)
@@ -382,7 +409,8 @@ def subscribe(*, path: Path | None = None, transcripts: bool = False) -> Iterato
             s.connect(str(target))
         except (FileNotFoundError, ConnectionRefusedError) as e:
             raise DaemonNotRunning("daemon not running") from e
-        s.sendall(json.dumps({"cmd": "subscribe", "transcripts": transcripts}).encode() + b"\n")
+        request = {"cmd": "subscribe", "transcripts": transcripts, "conversation": conversation}
+        s.sendall(json.dumps(request).encode() + b"\n")
         stream = s.makefile("rb")
         first = True
         while True:

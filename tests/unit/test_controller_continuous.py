@@ -641,6 +641,124 @@ def test_ptt_jobs_give_no_transcript(w: World) -> None:
     assert text_events(published) == []
 
 
+# --- conversation mode (task 6.3; ADR-019) --------------------------------------------------
+
+
+def converse(w: World, owner: int = 7) -> tuple[Controller, list[dict[str, Any]], int, int]:
+    """IDLE → conversation mode with the microphone open; returns (c, published, rid, cid)."""
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    answer = reply()
+    c.handle(ev.ConversationStart(owner, answer))
+    cont = c._cont
+    assert cont is not None
+    c.handle(ev.CaptureOpenDue(cont.recording_id))
+    assert answer.result(0) == {"ok": True}
+    w.calls.clear()
+    return c, published, cont.recording_id, cont.capture_id
+
+
+def conversation_events(published: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in published if m["event"] == "conversation"]
+
+
+def test_conversation_starts_with_one_notification_and_no_sound(w: World) -> None:
+    """The microphone must not open unseen (user decision 2026-10-10); no sound: echo."""
+    c = make(w)
+    published: list[dict[str, Any]] = []
+    c._on_publish = published.append
+    c.handle(ev.ConversationStart(7, reply()))
+    assert c._cont is not None
+    rid = c._cont.recording_id
+    c.handle(ev.CaptureOpenDue(rid))
+    assert c.mode is Mode.CONTINUOUS
+    assert [call for call in w.calls if call[0] in ("sound", "notify")] == [
+        ("notify", "conversation", "Conversation mode enabled", False)
+    ]
+    assert conversation_events(published) == [
+        {"event": "conversation", "on": True, "session_id": rid}
+    ]
+    assert status_of(c)["conversation"] is True
+
+
+def test_conversation_jobs_go_to_the_subscriber(w: World) -> None:
+    c, _, rid, cid = converse(w)
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    assert w.jobs[0].sink == "subscriber"
+
+
+def test_dictation_jobs_are_injected(c: Controller, w: World) -> None:
+    rid, cid = start(c, w)
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    assert w.jobs[0].sink == "inject"
+    assert status_of(c)["conversation"] is False
+
+
+def test_conversation_is_busy_unless_idle(c: Controller, w: World) -> None:
+    start(c, w)
+    answer = reply()
+    c.handle(ev.ConversationStart(7, answer))
+    assert answer.result(0)["error"] == "busy"
+
+
+def test_conversation_needs_a_ready_engine(w: World) -> None:
+    c = make(w, engine=EngineHealth.DOWN)
+    answer = reply()
+    c.handle(ev.ConversationStart(7, answer))
+    assert answer.result(0)["ok"] is False
+    assert c.mode is Mode.IDLE
+
+
+def test_owner_disconnect_stops_quietly(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.ConversationEnd(8))  # another connection: nothing happens
+    assert c._cont is not None and not c._cont.stopping
+    c.handle(ev.ConversationEnd(7))
+    c.handle(ev.FlushDone(rid, cid, stop_op(c), "stop"))
+    assert c.mode is Mode.IDLE
+    assert [call for call in w.calls if call[0] in ("sound", "notify")] == []
+    assert conversation_events(published)[-1] == {
+        "event": "conversation",
+        "on": False,
+        "session_id": rid,
+        "reason": "client",
+    }
+
+
+def test_the_toggle_hotkey_ends_the_conversation(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.ContinuousToggle())
+    c.handle(ev.FlushDone(rid, cid, stop_op(c), "stop"))
+    assert c.mode is Mode.IDLE
+    assert conversation_events(published)[-1]["reason"] == "user"
+    c.handle(ev.ConversationEnd(7))  # the owner disconnects later: no second event
+    assert len(conversation_events(published)) == 2
+
+
+def test_cancel_ends_the_conversation(w: World) -> None:
+    c, published, _, _ = converse(w)
+    c.handle(ev.CancelRequested())
+    assert c.mode is Mode.IDLE
+    assert conversation_events(published)[-1]["reason"] == "user"
+    assert [call for call in w.calls if call[0] == "sound"] == []
+
+
+def test_a_new_dictation_after_a_conversation_is_ordinary(w: World) -> None:
+    c, _, rid, cid = converse(w)
+    c.handle(ev.ConversationEnd(7))
+    c.handle(ev.FlushDone(rid, cid, stop_op(c), "stop"))
+    rid2, cid2 = start(c, w)
+    c.handle(ev.SegmentReady(rid2, cid2, segment()))
+    assert w.jobs[-1].sink == "inject"
+
+
+def test_errors_still_notify_in_conversation(w: World) -> None:
+    c, *_ = converse(w)
+    c.handle(ev.JobFailed(1, "continuous", 2.0, "timeout"))
+    assert ("notify", "job_failed", "Could not transcribe segment (2 s)", False) in w.calls
+
+
 def test_default_schedule_posts_the_event_after_the_delay(w: World) -> None:
     c = Controller(
         WHISPER,

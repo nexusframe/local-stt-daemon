@@ -870,6 +870,7 @@ def test_status_document(c: Controller, w: World) -> None:
         "state": "IDLE",
         "mode": "IDLE",
         "speech": False,
+        "conversation": False,
         "reconnecting": False,
         "engine": {
             "state": "READY",

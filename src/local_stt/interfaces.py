@@ -66,6 +66,8 @@ class SttEngine(Protocol):
 Sound = Literal["start", "stop", "cancel", "error", "language", "language_alt"]  # 10 §10.6
 Cut = Literal["release", "max_duration", "silence", "max_length", "flush"]
 JobSource = Literal["ptt", "continuous", "history"]  # history: `local-stt last` (5.2)
+# Where a job's text goes: the active window, or only IPC subscribers (conversation, 6.3).
+JobSink = Literal["inject", "subscriber"]
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,7 @@ class Job:
     language: str  # active when the recording (PTT) or segment (continuous) was taken
     pause_before_s: float | None = None  # continuous: `AudioSegment.pause_before_s`
     text: str | None = None  # source "history": the text to insert again, no audio (task 5.2)
+    sink: JobSink = "inject"
 
     @property
     def duration_s(self) -> float:
@@ -119,7 +122,7 @@ class Job:
 @dataclass(frozen=True)
 class InjectResult:
     ok: bool
-    backend: str  # "clipboard" | "type" | "clipboard-only"
+    backend: str  # "clipboard" | "type" | "clipboard-only" | "none" (conversation, task 6.3)
     chars: int
     window_class: str | None  # WM_CLASS of the target window, informational
     left_in_clipboard: bool  # text intentionally left in the clipboard

@@ -133,6 +133,10 @@ class _Continuous:
     reconnect_flushing: bool = False  # its FlushDone has not arrived yet
     muted_notified: bool = False  # "Microphone appears to be muted" shown (05 §5.6)
     stop_op: int | None = None  # the stop flush, once requested
+    # Conversation mode (task 6.3): the owning IPC subscription; text only to subscribers,
+    # no sounds or information notifications. `end_reason` goes into the `conversation` event.
+    conversation: int | None = None
+    end_reason: str = "error"
 
 
 @dataclass(frozen=True)
@@ -235,6 +239,8 @@ class Controller:
             ev.PttReleased: self._on_ptt_released,
             ev.PttCancelKey: self._on_ptt_cancel_key,
             ev.ContinuousToggle: self._on_continuous_toggle,
+            ev.ConversationStart: self._on_conversation_start,
+            ev.ConversationEnd: self._on_conversation_end,
             ev.LanguageSwitch: self._on_language_switch,
             ev.HistoryInsert: self._on_history_insert,
             ev.HistoryRequested: self._on_history_requested,
@@ -332,6 +338,7 @@ class Controller:
             "state": snap.display,
             "mode": snap.mode.value,
             "speech": self._cont is not None and self._cont.speech,
+            "conversation": self._cont is not None and self._cont.conversation is not None,
             "reconnecting": self._cont is not None and self._cont.reconnecting,
             "engine": {
                 "state": snap.engine.value,
@@ -594,9 +601,13 @@ class Controller:
             result = self._cancel_pipeline()
             self._feedback.play("cancel")
         elif self.mode is Mode.CONTINUOUS:
+            assert self._cont is not None
+            quiet = self._cont.conversation is not None
+            self._cont.end_reason = "user"
             self._drop_continuous()
             result = self._cancel_pipeline()
-            self._feedback.play("cancel")
+            if not quiet:
+                self._feedback.play("cancel")
         else:
             result = self._cancel_pipeline()
             if result.discarded_any:
@@ -618,8 +629,10 @@ class Controller:
             assert cont is not None
             if cont.stopping:
                 return self._unhandled(event)
+            cont.end_reason = "user"
             self._stop_continuous()
-            self._feedback.play("stop")
+            if cont.conversation is None:
+                self._feedback.play("stop")
             return self._respond(event.reply, _ok())
         if self.mode is not Mode.IDLE:
             return self._unhandled(event)
@@ -632,11 +645,45 @@ class Controller:
         # The start sound plays before the microphone opens (10 §10.6); the IPC reply waits
         # for the open attempt.
         self._feedback.play("start")
-        cont = _Continuous(self._new_id("recording"), self._new_id("capture"), event.reply)
+        self._begin_continuous(event.reply)
+
+    def _begin_continuous(self, reply: ev.Reply, conversation: int | None = None) -> None:
+        cont = _Continuous(self._new_id("recording"), self._new_id("capture"), reply)
+        cont.conversation = conversation
         self._cont = cont
         self.mode = Mode.CONTINUOUS
         self._consumer.reset_continuous(cont.recording_id, cont.capture_id)
         self._schedule(CAPTURE_OPEN_DELAY_S, ev.CaptureOpenDue(cont.recording_id))
+
+    def _on_conversation_start(self, event: ev.ConversationStart) -> None:
+        """Task 6.3: continuous mode for an IPC subscription, only from IDLE (user decision
+        2026-10-10). No sound and no notification; the reply waits for the open attempt."""
+        if self.mode is not Mode.IDLE:
+            message = "dictation or a recording is running"
+            return self._respond(event.reply, _error("busy", message))
+        if (rejection := self._continuous_rejection()) is not None:
+            code, title, _ = rejection
+            return self._respond(event.reply, _error(code, title))
+        self._begin_continuous(event.reply, conversation=event.owner)
+
+    def _on_conversation_end(self, event: ev.ConversationEnd) -> None:
+        """The owner's subscription closed; a later session or another owner is not touched."""
+        cont = self._cont
+        if cont is None or cont.conversation != event.owner or cont.stopping:
+            return self._stale(event)
+        cont.end_reason = "client"
+        self._stop_continuous()
+
+    def _conversation_ended(self, cont: "_Continuous") -> None:
+        if cont.conversation is not None:
+            self._publish(
+                {
+                    "event": "conversation",
+                    "on": False,
+                    "session_id": cont.recording_id,
+                    "reason": cont.end_reason,
+                }
+            )
 
     # --- language (task 3.7) --------------------------------------------------------------
 
@@ -725,8 +772,15 @@ class Controller:
             self._feedback.notify("audio", "Microphone error", str(e))
             return None
         cont.opened = True
-        log.info("continuous dictation started (session %d)", cont.recording_id)
-        self._feedback.notify("dictation", "Dictation enabled", informational=True)
+        if cont.conversation is not None:
+            log.info("conversation mode started (session %d)", cont.recording_id)
+            # No sound (echo), but the microphone must not open unseen (6.3, user 2026-10-10):
+            # not informational, so the default `notifications = "errors"` shows it too.
+            self._feedback.notify("conversation", "Conversation mode enabled")
+            self._publish({"event": "conversation", "on": True, "session_id": cont.recording_id})
+        else:
+            log.info("continuous dictation started (session %d)", cont.recording_id)
+            self._feedback.notify("dictation", "Dictation enabled", informational=True)
         self._respond(cont.start_reply, _ok())
 
     def _on_speech(self, event: ev.SpeechStarted | ev.SpeechEnded) -> None:
@@ -844,6 +898,7 @@ class Controller:
             cut=segment.cut,
             language=self.language,
             pause_before_s=segment.pause_before_s,
+            sink="subscriber" if cont.conversation is not None else "inject",
         )
         self._pipeline.submit(job)
         if cont.utt is not None and cont.utt in self._utterances:
@@ -898,7 +953,9 @@ class Controller:
             log.info("continuous dictation stopped (session %d)", cont.recording_id)
             self._cont = None
             self.mode = Mode.IDLE
-            self._feedback.notify("dictation", "Dictation disabled", informational=True)
+            if cont.conversation is None:
+                self._feedback.notify("dictation", "Dictation disabled", informational=True)
+            self._conversation_ended(cont)
             return None
         if (
             event.purpose == "reconnect"
@@ -973,8 +1030,9 @@ class Controller:
         self._capture.close()
         self._consumer.discard(cont.recording_id, cont.capture_id)
         self._respond(cont.start_reply, _error("cancelled", "continuous start was cancelled"))
-        if notify and cont.opened:
+        if notify and cont.opened and cont.conversation is None:
             self._feedback.notify("dictation", "Dictation disabled", informational=True)
+        self._conversation_ended(cont)
 
     # --- engine and jobs ("Any state") ---------------------------------------------------
 
@@ -1019,6 +1077,8 @@ class Controller:
         self._utterance_part_done(event.job_id, event)
         result = event.result
         outcome = "clipboard" if result.left_in_clipboard else "injected" if result.ok else "failed"
+        if result.backend == "none":  # conversation: the text went to subscribers (6.3)
+            outcome = "sent"
         self._publish_job(
             event.job_id,
             event.source,

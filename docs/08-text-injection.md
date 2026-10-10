@@ -74,6 +74,8 @@ Implementations (v0.1): `ClipboardPasteInjector`, `XdotoolTypeInjector`, and `Au
 
 If cancellation stops a job before all text is entered, the injector returns `cancelled=True`, and the pipeline reports `JobDiscarded(cancelled)` instead of an error or retry. An operation started before cancellation may finish (including releasing synthetic modifiers and handling the clipboard); text in another application is not undone. The `cancel` response then reports `injection_in_flight=true`. No subsequent operation from the old generation may start. If text was partially entered, the result contains the number of characters sent; the job is not counted as fully injected. If one started operation manages to inject the entire result, return a normal `InjectResult` and `JobFinished`, even if the remaining jobs were cancelled in the meantime. The in-progress flag remains set until all paste handling, including confirmation and clipboard restoration, is complete.
 
+*Conversation mode (task 6.3).* A job with `sink = subscriber` is not injected. The pipeline processes the text as usual, does not add it to the history, and reports `InjectResult(ok=True, backend="none")`. The Controller sends the text to the `transcript` subscribers ([10](10-cli-ipc-status.md) §10.2).
+
 ## 8.4 Method selection — why clipboard + paste is the default
 
 | Criterion | `xdotool type` | clipboard + Ctrl+V (custom selection owner) |

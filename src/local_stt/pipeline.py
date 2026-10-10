@@ -301,8 +301,9 @@ class PipelineWorker:
             text_s = text_at - text_started
             if text is None:
                 return self._discard(job, "filtered")
-            if self._history is not None:  # before injection: a failed paste stays here (5.2)
-                self._history.add(text)
+            subscriber = job.sink == "subscriber"  # conversation: no window, no history (6.3)
+            if self._history is not None and not subscriber:
+                self._history.add(text)  # before injection: a failed paste stays here (5.2)
             if config.logging.log_text:
                 log.debug('text job=%d: "%s"', job.id, text)
             # Counted, not changed: the count is the evidence for a fallback engine (task 4.4,
@@ -319,7 +320,10 @@ class PipelineWorker:
                 return self._discard(job, "cancelled")
 
             inject_started = self._clock()
-            result = self._inject(text, session, config, token)
+            if subscriber:
+                result = InjectResult(True, "none", len(text), None, False, None)
+            else:
+                result = self._inject(text, session, config, token)
             done = self._clock()
             if result.cancelled:
                 text = None  # not entered: it must not become context
@@ -466,6 +470,8 @@ def _timing_line(
     rtf = transcript.processing_s / job.duration_s if job.duration_s > 0 else 0.0
     if result.left_in_clipboard:
         outcome = "clipboard"
+    elif result.backend == "none":  # conversation: the text went only to subscribers (6.3)
+        outcome = "sent"
     elif not result.ok:
         outcome = "failed"
     else:

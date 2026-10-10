@@ -78,7 +78,9 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 
 `job`, `state` and speech events **do not contain text**. Only the `history` response (task 5.2) and the `transcript` events of a subscription with `"transcripts": true` (task 6.2, ADR-019) contain text (12 §12.2).
 
-*Implementation (task 2.5).* `subscribe` turns the connection into a stream; the client sends nothing more and closes the connection to end it. The first line is the current state (or, if the Controller does not answer, a `timeout` error and the connection closes). A `state` line follows every change of the displayed state (04 §4.7), with the full status document. A `job` line follows every finished job: `audio_s`, `processing_s` (`null` when the engine was not reached), `chars` (0 when nothing was entered), `source` ∈ `ptt`, `continuous`, `history` (a `last` insert, task 5.2; it does not count in the `stats` of 10.4), and `result` ∈ `injected`, `clipboard` (left in the clipboard), `failed`, `no_speech`, `filtered`, `cancelled`. *Speech events (task 6.1, ADR-019).* In continuous mode, a `speech_start` line follows when the VAD confirms speech, and a `speech_end` line follows when the utterance ends. They contain no text. `utt` is the utterance number. The daemon gives it at `speech_start`, and it increases across sessions. `session_id` is the continuous session. All times are `time.monotonic()` of the daemon (Linux `CLOCK_MONOTONIC`), so another process on the same machine can compare them with its own monotonic clock. The times come from the audio frames, not from the moment of processing:
+*Implementation (task 2.5).* `subscribe` turns the connection into a stream; the client sends nothing more and closes the connection to end it. The first line is the current state (or, if the Controller does not answer, a `timeout` error and the connection closes). A `state` line follows every change of the displayed state (04 §4.7), with the full status document. A `job` line follows every finished job: `audio_s`, `processing_s` (`null` when the engine was not reached), `chars` (0 when nothing was entered), `source` ∈ `ptt`, `continuous`, `history` (a `last` insert, task 5.2; it does not count in the `stats` of 10.4), and `result` ∈ `injected`, `clipboard` (left in the clipboard), `failed`, `no_speech`, `filtered`, `cancelled`, `sent` (conversation mode: the text went only to subscribers, task 6.3). A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
+
+*Speech events (task 6.1, ADR-019).* In continuous mode, a `speech_start` line follows when the VAD confirms speech, and a `speech_end` line follows when the utterance ends. They contain no text. `utt` is the utterance number. The daemon gives it at `speech_start`, and it increases across sessions. `session_id` is the continuous session. All times are `time.monotonic()` of the daemon (Linux `CLOCK_MONOTONIC`), so another process on the same machine can compare them with its own monotonic clock. The times come from the audio frames, not from the moment of processing:
 
 - `t_start`: the start of the first speech frame of the utterance (also when the utterance was split at `max_segment_s`),
 - `t`: the end of the frame that confirmed speech, about `min_speech_ms` after `t_start`,
@@ -96,7 +98,16 @@ PTT recordings make no speech events.
 - `t_ready`: the monotonic time when the text of the last part was ready, before injection,
 - `audio_s`, `stt_s`: the sums over the parts with text.
 
-`utterance_dropped` has `reason` ∈ `no_speech` (the segmenter found less than `min_speech_ms` of speech, or no part reported a text), `filtered`, `cancelled`, `failed`: the reason of the last part without text. Queued jobs that a cancel drains count as `cancelled`. A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
+`utterance_dropped` has `reason` ∈ `no_speech` (the segmenter found less than `min_speech_ms` of speech, or no part reported a text), `filtered`, `cancelled`, `failed`: the reason of the last part without text. Queued jobs that a cancel drains count as `cancelled`.
+
+*Conversation mode (task 6.3, ADR-019).* `subscribe` with `"conversation": true` starts continuous mode for this subscription, usually together with `"transcripts": true`. The first line is the answer to the start: an error response (and the connection closes), or the `state` line after the microphone has opened. The mode lasts as long as the connection. In conversation mode:
+
+- the text of each utterance goes only to `transcript` subscribers: it is not injected, not put in the clipboard and not added to the history (`job` result `sent`),
+- the daemon plays no sounds and shows one notification, “Conversation mode enabled”, when the microphone has opened, so that no client opens it unseen (user decision 2026-10-10). It is not an information notification: it shows also with the default `feedback.notifications = "errors"`, and only `none` hides it; there is no “Dictation enabled/disabled”, and error notifications stay,
+- PTT does nothing (as in every continuous session),
+- the continuous hotkey, IPC `toggle` and `cancel` end the mode, so that the user can always close the microphone.
+
+A `conversation` line marks the start and the end: `{"event": "conversation", "on": true, "session_id": 5}` after the microphone has opened, and `{"event": "conversation", "on": false, "session_id": 5, "reason": "client"}` when the session has ended. `reason` ∈ `client` (the subscription closed), `user` (hotkey, `toggle` or `cancel`), `error` (for example the microphone was lost or the backlog limit was reached). After the end the subscription stays open; a new conversation needs a new subscription. The start is accepted only at IDLE: during PTT or continuous dictation it is rejected with `busy` (user decision 2026-10-10), and with the `toggle` errors when the engine is not ready or the VAD is not available. `status` has `"conversation": true` during the mode.
 
 Response to `cancel`: `{"ok": true, "injection_in_flight": false}`, or `true` in the second field if injection began before cancellation. With `true`, the CLI prints “Remaining jobs cancelled; injection already in progress may finish.” This applies to a single paste sequence or the current `type` chunk, never subsequent chunks or jobs.
 
@@ -132,6 +143,7 @@ local-stt 0.1.0 — IDLE
   "state": "LISTENING",
   "mode": "CONTINUOUS",
   "speech": true,
+  "conversation": false,
   "reconnecting": false,
   "engine": {"state": "READY", "name": "whisper.cpp", "model": "small-q8_0", "port": 8178},
   "hotkeys": {"state": "OK", "problems": []},

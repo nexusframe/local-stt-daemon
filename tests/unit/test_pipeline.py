@@ -816,6 +816,25 @@ def test_processed_text_goes_to_the_history(h: Harness) -> None:
     assert h.history.items() == ["Ala ma kota. "]
 
 
+def test_conversation_text_goes_only_to_the_subscriber(h: Harness) -> None:
+    """Task 6.3: no injection and no history entry; the text travels in JobFinished."""
+    job = dataclasses.replace(h.job(), sink="subscriber")
+    h.worker.submit(job)
+    event = h.outcome()
+    assert isinstance(event, JobFinished)
+    assert (event.result.ok, event.result.backend, event.result.chars) == (True, "none", 13)
+    assert event.text == "Ala ma kota. "
+    assert h.injector.texts == [] and h.history.items() == []
+
+
+def test_conversation_timing_line_says_sent(h: Harness, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="local_stt.timings")
+    h.worker.submit(dataclasses.replace(h.job(), sink="subscriber"))
+    assert isinstance(h.outcome(), JobFinished)
+    (line,) = [r.getMessage() for r in caplog.records if r.name == "local_stt.timings"]
+    assert line.endswith("backend=none result=sent")
+
+
 def test_text_of_a_failed_paste_stays_in_the_history(h: Harness) -> None:
     failed = InjectResult(False, "clipboard", 0, "gedit", True, "no paste confirmation")
     h.injector.inject = lambda text, *, cancel: failed  # type: ignore[method-assign]

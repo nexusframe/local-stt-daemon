@@ -287,6 +287,69 @@ def test_subscribe_rejects_a_non_boolean_transcripts_flag(
     assert not server.subscribers._subs
 
 
+# --- conversation mode (task 6.3) ------------------------------------------------------------
+
+
+def test_conversation_subscription_owns_the_mode_until_it_closes(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = {"ok": True, "status": {"state": "LISTENING"}}
+    stream = ipc.subscribe(path=path, transcripts=True, conversation=True)
+    assert next(stream)["event"] == "state"
+    start = daemon.events[0]
+    assert isinstance(start, ev.ConversationStart)
+    stream.close()  # the client closes the connection
+    wait_until(lambda: any(isinstance(e, ev.ConversationEnd) for e in daemon.events))
+    (end,) = [e for e in daemon.events if isinstance(e, ev.ConversationEnd)]
+    assert end.owner == start.owner
+
+
+def test_a_closed_conversation_is_noticed_quickly(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    """K6 (v0.6): dictation works again within 1 s after the client disconnects."""
+    daemon.answer = {"ok": True, "status": {}}
+    stream = ipc.subscribe(path=path, conversation=True)
+    next(stream)
+    time.sleep(0.05)
+    closed = time.monotonic()
+    stream.close()
+    wait_until(lambda: any(isinstance(e, ev.ConversationEnd) for e in daemon.events))
+    assert time.monotonic() - closed < 0.5
+
+
+def test_a_refused_conversation_ends_the_subscription(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = {"ok": False, "error": "busy", "message": "dictation is running"}
+    assert list(ipc.subscribe(path=path, conversation=True)) == [daemon.answer]
+    wait_until(lambda: not server.subscribers._subs)
+    assert not any(isinstance(e, ev.ConversationEnd) for e in daemon.events)
+
+
+def test_two_conversation_subscriptions_have_different_owners(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = {"ok": True, "status": {}}
+    first = ipc.subscribe(path=path, conversation=True)
+    second = ipc.subscribe(path=path, conversation=True)
+    next(first), next(second)
+    owners = {e.owner for e in daemon.events if isinstance(e, ev.ConversationStart)}
+    assert len(owners) == 2
+    first.close(), second.close()
+
+
+def test_subscribe_rejects_a_non_boolean_conversation_flag(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(2)
+        s.connect(str(path))
+        s.sendall(b'{"cmd": "subscribe", "conversation": 1}\n')
+        assert json.loads(s.makefile("rb").readline())["error"] == "bad_request"
+    assert daemon.events == []
+
+
 def test_subscribe_to_a_stopped_daemon(path: Path) -> None:
     with pytest.raises(ipc.DaemonNotRunning):
         next(ipc.subscribe(path=path))
