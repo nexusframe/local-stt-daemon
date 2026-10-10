@@ -6,8 +6,10 @@
 Connects to the control socket, starts conversation mode with transcripts, prints every
 event, and disconnects after --seconds or on Ctrl+C. The disconnect ends conversation mode.
 With --out, every event is also written as one JSON line, with `rx`: the monotonic time when
-the client read it. The daemon times use the same clock (CLOCK_MONOTONIC), so on Linux
-`time.perf_counter()` and `time.monotonic()` of the client can be compared with them.
+the client read it. Each line from the daemon has `seq` (1, 2, … for this connection) and
+`t_sent` (the daemon's time just before the write). The daemon times use the same clock
+(CLOCK_MONOTONIC), so on Linux `time.perf_counter()` and `time.monotonic()` of the client can
+be compared with them: `rx - t_sent` is the socket delay.
 Uses only the standard library.
 """
 

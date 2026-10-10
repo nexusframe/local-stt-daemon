@@ -198,19 +198,55 @@ def wait_until(condition: Any, timeout_s: float = 3.0) -> None:
         time.sleep(0.01)
 
 
+def body(line: dict[str, Any]) -> dict[str, Any]:
+    """A stream line without the fields that the connection adds (`seq`, `t_sent`)."""
+    return {k: v for k, v in line.items() if k not in ("seq", "t_sent")}
+
+
 def test_subscribe_streams_the_state_then_published_messages(
     server: ipc.IpcServer, path: Path, daemon: Daemon
 ) -> None:
     daemon.answer = {"ok": True, "status": {"state": "IDLE"}}
     stream = ipc.subscribe(path=path)
-    assert next(stream) == {"event": "state", "status": {"state": "IDLE"}}
+    assert body(next(stream)) == {"event": "state", "status": {"state": "IDLE"}}
     assert [type(e) for e in daemon.events] == [ev.StatusRequested]
     wait_until(lambda: len(server.subscribers._subs) == 1)
     job = {"event": "job", "job_id": 3, "result": "injected"}
     server.publish(job)
-    assert next(stream) == job
+    assert body(next(stream)) == job
     server.stop()  # the daemon shuts down: the stream ends
     assert list(stream) == []
+
+
+def test_each_stream_line_has_its_own_sequence_number_and_send_time(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    """Every line of a subscription has `seq` (1, 2, … for this connection) and `t_sent`
+    (the daemon's monotonic time just before the write); the published message is not changed."""
+    daemon.answer = {"ok": True, "status": {"state": "IDLE"}}
+    first = ipc.subscribe(path=path)
+    before = time.monotonic()
+    assert next(first)["seq"] == 1
+    wait_until(lambda: len(server.subscribers._subs) == 1)
+    second = ipc.subscribe(path=path)
+    assert next(second)["seq"] == 1
+    wait_until(lambda: len(server.subscribers._subs) == 2)
+    job = {"event": "job", "job_id": 3, "result": "injected"}
+    server.publish(job)
+    server.publish({"event": "speech_start", "utt": 1})
+    a1, a2 = next(first), next(first)
+    after = time.monotonic()
+    assert (a1["seq"], a2["seq"], next(second)["seq"]) == (2, 3, 2)
+    assert before <= a1["t_sent"] <= a2["t_sent"] <= after
+    assert job == {"event": "job", "job_id": 3, "result": "injected"}
+    server.stop()
+
+
+def test_a_refused_subscription_answer_has_no_stream_fields(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = None
+    assert "seq" not in next(ipc.subscribe(path=path))
 
 
 def test_subscribe_without_a_controller_answer_is_an_error(
@@ -270,7 +306,7 @@ def test_subscribe_with_transcripts_receives_text(
     wait_until(lambda: len(server.subscribers._subs) == 1)
     transcript = {"event": "transcript", "utt": 2, "text": "Dzień dobry."}
     server.publish(transcript)
-    assert next(stream) == transcript
+    assert body(next(stream)) == transcript
     server.stop()
 
 

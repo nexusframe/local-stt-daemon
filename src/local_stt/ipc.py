@@ -200,8 +200,10 @@ class _Handler(socketserver.StreamRequestHandler):
         """`subscribe`: the current state first, then every published message until the
         client disconnects or falls behind (10 §10.2); text events only with `transcripts`.
         With `conversation` (task 6.3) the subscription starts conversation mode first and
-        owns it: when the connection ends, the Controller stops the mode."""
+        owns it: when the connection ends, the Controller stops the mode. Every line of the
+        stream gets `seq` (1, 2, … for this connection) and `t_sent` (10 §10.2)."""
         sub = self.server.subscribers.add(transcripts=transcripts)
+        seq = itertools.count(1)
         owner = next(self.server.owners) if conversation else None
         started = False
         try:
@@ -218,7 +220,7 @@ class _Handler(socketserver.StreamRequestHandler):
             initial = self._respond(b'{"cmd": "status"}')
             if not initial.get("ok"):
                 return self._send(initial)
-            self._send({"event": "state", "status": initial["status"]})
+            self._send_line({"event": "state", "status": initial["status"]}, next(seq))
             while not sub.dropped:
                 try:
                     message = sub.messages.get(timeout=SUBSCRIBER_POLL_S)
@@ -228,7 +230,7 @@ class _Handler(socketserver.StreamRequestHandler):
                     continue
                 if message is None:
                     return
-                self._send(message)
+                self._send_line(message, next(seq))
         finally:
             self.server.subscribers.remove(sub)
             if started and owner is not None:
@@ -253,6 +255,11 @@ class _Handler(socketserver.StreamRequestHandler):
 
     def _send(self, response: Response) -> None:
         self.wfile.write(json.dumps(response, ensure_ascii=False).encode() + b"\n")
+
+    def _send_line(self, message: Response, seq: int) -> None:
+        """One stream line; a copy, because all subscriptions share the published message.
+        `t_sent` is the monotonic time just before the write (CLOCK_MONOTONIC, as `t_end`)."""
+        self._send({**message, "seq": seq, "t_sent": time.monotonic()})
 
 
 class _Server(socketserver.ThreadingUnixStreamServer):

@@ -99,8 +99,8 @@ Live values are about 50 ms higher than the corpus values. They include the capt
 | Field | Status |
 |---|---|
 | Utterance identifier | **yes**: `utt` (increases across sessions) and `session_id` |
-| Sequence number | **missing**. No event has a sequence number. In one utterance, the order of the lines on the socket is the order of the events. Retractions refer to the jobs with `job_ids`. |
-| `CLOCK_MONOTONIC` time stamp | **partly**. `t_start`, `t`, `t_end` and `t_ready` are `time.monotonic()` of the daemon. The time of the audio is given, not the time when the line was sent. `transcript_retracted`, `utterance_dropped` and `job` have no time stamp. The client must take its own time when it reads the line (the example client writes `rx`). |
+| Sequence number | **missing** in `eade7d4`; `seq` was added after the report. No event had a sequence number. In one utterance, the order of the lines on the socket is the order of the events. Retractions refer to the jobs with `job_ids`. |
+| `CLOCK_MONOTONIC` time stamp | **partly** in `eade7d4`; `t_sent` was added after the report. `t_start`, `t`, `t_end` and `t_ready` are `time.monotonic()` of the daemon. The time of the audio is given, not the time when the line was sent. `transcript_retracted`, `utterance_dropped` and `job` have no time stamp. The client must take its own time when it reads the line (the example client writes `rx`). |
 
 **Fact (tested).** On this machine, Python `time.perf_counter()` and `time.monotonic()` both use `clock_gettime(CLOCK_MONOTONIC)` (`time.get_clock_info`). Thus the orchestrator can compare `time.perf_counter()` directly with the daemon times.
 
@@ -147,7 +147,7 @@ The pause case has two files, because the pause split it into two utterances. Th
 3. A pause longer than 700 ms splits a question. The first part can look complete (“Ile kosztuje bilet do Gdańska?”). The orchestrator must decide whether to wait for more speech after `speech_end`.
 4. Take the receive time of each line with `time.perf_counter()`. Do not calculate the time of `speech_end` from `t_end`.
 5. Measure the prompt processing time while a local-stt job runs. Both use the same 4 cores.
-6. Possible protocol changes (only after approval): a sequence number for each event, and a send time stamp in each event.
+6. Possible protocol changes (only after approval): a sequence number for each event, and a send time stamp in each event. Added after the report, see below.
 
 ## Changes after the measurement
 
@@ -158,5 +158,7 @@ User decisions 2026-10-10 about the three problems of this report:
 | `speech_end` less than 700 ms after `t_end` | no change of the behavior | [10](10-cli-ipc-status.md) §10.2 describes when the line comes, and that a client must not calculate it from `t_end` |
 | `job` result `sent` for a speculative text that was not used | new result `retracted`; one `job` event for each job | the `job` event of a speculative job comes when its result is known: `sent` when its text is a part of the final transcript, else `retracted`. A withdrawn speculative job gives `retracted` with `processing_s` `null`. A job that a cancel removes from the queue gives `cancelled`. Specs: [10](10-cli-ipc-status.md) §10.2, [04](04-state-machine.md) |
 | a pause splits a question | no change in local-stt | [10](10-cli-ipc-status.md) §10.2 describes the split and how a client can add the second part at the end of its input |
+
+Second decision 2026-10-10: every line of a `subscribe` stream gets `seq` (1, 2, … for each subscription, no gaps) and `t_sent` (the daemon's monotonic time just before the write to the socket). An error response that ends a subscription before the stream starts has neither field. Spec: [10](10-cli-ipc-status.md) §10.2, part “Stream fields”. The logs of this report were recorded before this change and do not have the two fields.
 
 Check of the `job` change (2026-10-10): 7 new unit tests; ruff, mypy and the full test suite (1088 tests) pass. A second corpus run with the new code gave 84 `job` events for 84 jobs: 49 `sent` and 35 `retracted`. Each `sent` job is in a final transcript, and no `retracted` job is in one. The first run gave 84 `sent`. Live check after `install.sh --no-apt` (`doctor` 17 OK), 4 utterances with a short pause: job 13 (its text was not sent) and job 15 (its text was sent as `final: false`, then retracted) gave `retracted`. Jobs 14, 16, 17 and 18 were in the final transcripts and gave `sent`.
