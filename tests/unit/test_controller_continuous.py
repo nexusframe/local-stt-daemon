@@ -881,6 +881,103 @@ def test_a_speculative_job_without_text_gives_no_event(w: World) -> None:
     assert transcripts(published)[-1]["reason"] == "filtered"
 
 
+def job_results(published: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    return [(m["job_id"], m["result"]) for m in published if m["event"] == "job"]
+
+
+def test_a_reused_speculative_job_reports_once_its_text_is_final(w: World) -> None:
+    """The `job` event of a speculative job waits until its text is final or retracted."""
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    job = w.jobs[0].id
+    c.handle(finished(job, "Jaka pogoda? ", 12.6, 2.0, 0.3))
+    assert job_results(published) == []  # the text is not final yet
+    c.handle(ev.SegmentReady(rid, cid, spec_segment(reuses=True)))
+    assert job_results(published) == [(job, "injected")]  # the outcome of the job itself
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    assert job_results(published) == [(job, "injected")]
+
+
+def test_a_speculative_job_that_finishes_after_the_reuse_reports_at_once(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    c.handle(ev.SegmentReady(rid, cid, spec_segment(reuses=True)))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    job = w.jobs[0].id
+    c.handle(finished(job, "Jaka pogoda? ", 12.9, 2.0, 0.3))
+    assert job_results(published) == [(job, "injected")]
+
+
+def test_a_sent_and_retracted_speculative_job_reports_retracted(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    spec_job = w.jobs[0].id
+    c.handle(finished(spec_job, "Jaka ", 12.6, 2.0, 0.3))
+    c.handle(ev.SpeculationRetracted(rid, cid))
+    (event,) = [m for m in published if m["event"] == "job"]
+    assert (event["job_id"], event["result"], event["chars"], event["processing_s"]) == (
+        spec_job,
+        "retracted",
+        10,
+        0.3,
+    )
+
+
+def test_a_speculative_job_that_finishes_after_its_retraction_reports_retracted(
+    w: World,
+) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    w.queued.clear()  # already in the engine: it cannot be withdrawn
+    c.handle(ev.SpeculationRetracted(rid, cid))
+    job = w.jobs[0].id
+    c.handle(finished(job, "Jaka ", 12.6, 2.0, 0.3))
+    assert job_results(published) == [(job, "retracted")]
+
+
+def test_a_withdrawn_speculative_job_reports_retracted(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(seconds=2.0), 12.0))
+    job = w.jobs[0].id
+    c.handle(ev.SpeculationRetracted(rid, cid))
+    (event,) = [m for m in published if m["event"] == "job"]
+    assert event == {
+        "event": "job",
+        "job_id": job,
+        "source": "continuous",
+        "audio_s": 2.0,
+        "processing_s": None,
+        "chars": 0,
+        "result": "retracted",
+    }
+
+
+def test_a_held_speculative_job_reports_retracted_when_the_session_drops(w: World) -> None:
+    c, published, rid, cid = converse(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeculativeReady(rid, cid, spec_segment(), 12.0))
+    job = w.jobs[0].id
+    c.handle(finished(job, "Jaka ", 12.6, 2.0, 0.3))
+    c.handle(ev.CancelRequested())
+    assert job_results(published) == [(job, "retracted")]
+    assert c._spec_held == {}
+
+
+def test_drained_jobs_report_cancelled(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    job = w.jobs[0].id
+    w.cancel_result = CancelResult((job,), False, False)
+    c.handle(ev.CancelRequested())
+    assert job_results(published) == [(job, "cancelled")]
+
+
 def test_dictation_ignores_speculative_events(c: Controller, w: World) -> None:
     rid, cid = start(c, w)
     c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))

@@ -60,6 +60,7 @@ SERVER_KEYS = frozenset(
 )  # fmt: skip
 IDLE_SECTIONS = ("audio", "vad", "hotkeys")
 ReloadGroup = Literal["live", "idle", "server"]
+SpecFate = Literal["held", "retracted"]  # a speculative job that is not a part yet (6.4)
 
 
 class Mode(Enum):
@@ -214,6 +215,10 @@ class Controller:
         self._utterances: dict[int, _Utterance] = {}  # waiting for their transcript (6.2)
         self._job_utt: dict[int, int] = {}  # continuous job → its utterance
         self._spec_jobs: dict[int, int] = {}  # speculative job → its utterance (6.4)
+        # A finished speculative job whose text is not yet final or retracted: its `job`
+        # event waits for that (10 §10.2).
+        self._spec_held: dict[int, dict[str, Any]] = {}
+        self._job_source: dict[int, str] = {}  # job_id → source, until reported done
 
         self._outstanding: dict[int, float] = {}  # job_id → audio seconds, until reported done
         self._busy_job: int | None = None
@@ -421,18 +426,31 @@ class Controller:
         chars: int = 0,
     ) -> None:
         """A `job` event for subscribers (10 §10.2); never contains text."""
-        if self._on_publish is not None:
-            self._on_publish(
-                {
-                    "event": "job",
-                    "job_id": job_id,
-                    "source": source,
-                    "audio_s": audio_s,
-                    "processing_s": processing_s,
-                    "chars": chars,
-                    "result": result,
-                }
+        self._publish(
+            self._job_message(
+                job_id, source, result, audio_s=audio_s, processing_s=processing_s, chars=chars
             )
+        )
+
+    @staticmethod
+    def _job_message(
+        job_id: int,
+        source: str,
+        result: str,
+        *,
+        audio_s: float | None,
+        processing_s: float | None = None,
+        chars: int = 0,
+    ) -> dict[str, Any]:
+        return {
+            "event": "job",
+            "job_id": job_id,
+            "source": source,
+            "audio_s": audio_s,
+            "processing_s": processing_s,
+            "chars": chars,
+            "result": result,
+        }
 
     # --- helpers -------------------------------------------------------------------------
 
@@ -484,10 +502,14 @@ class Controller:
     def _cancel_pipeline(self) -> CancelResult:
         result = self._pipeline.cancel_all()
         for job_id in result.drained_job_ids:
+            source = self._job_source.get(job_id, "continuous")
+            audio_s = self._outstanding.get(job_id)
             # A drained job may already have started: requeued after a connection error.
             self._job_done(job_id)
-            # It reports nothing, so its utterance counts it as cancelled here (task 6.2).
+            # It reports nothing, so its utterance counts it as cancelled here (task 6.2),
+            # and its `job` event comes from here.
             self._utterance_part_done(job_id, ev.JobDiscarded(job_id, "continuous", "cancelled"))
+            self._publish_job(job_id, source, "cancelled", audio_s=audio_s)
         return result
 
     def _audio_failure(self, description: str) -> None:
@@ -596,6 +618,7 @@ class Controller:
         self.mode = Mode.IDLE
         self._pipeline.submit(job)
         self._outstanding[job.id] = event.clip.duration_s
+        self._job_source[job.id] = job.source
         self._feedback.play("stop")
 
     def _on_ptt_cancel_key(self, event: ev.PttCancelKey) -> None:
@@ -713,7 +736,9 @@ class Controller:
         if text is None:
             message = f"no history text number {event.n}"
             return self._respond(event.reply, _error("no_history", message))
-        self._pipeline.reinject(self._new_id("job"), text)
+        job_id = self._new_id("job")
+        self._pipeline.reinject(job_id, text)
+        self._job_source[job_id] = "history"
         self._respond(event.reply, _ok(chars=len(text)))
 
     def _on_history_requested(self, event: ev.HistoryRequested) -> None:
@@ -841,29 +866,32 @@ class Controller:
             u.ended, u.t_end = True, t_end
             self._settle_utterance(utt)
 
-    def _utterance_part_done(self, job_id: int, event: ev.Event) -> None:
-        """Records one reported job of an utterance (task 6.2)."""
-        if self._spec_report(job_id, event):
-            return
+    def _utterance_part_done(self, job_id: int, event: ev.Event) -> SpecFate | None:
+        """Records one reported job of an utterance (task 6.2). Returns the fate of a
+        speculative job that is not (yet) a part of its utterance (task 6.4)."""
+        if (fate := self._spec_report(job_id, event)) is not None:
+            return fate
         utt = self._job_utt.pop(job_id, None)
         u = self._utterances.get(utt) if utt is not None else None
         if u is None or utt is None:
-            return
+            return None
         u.pending.discard(job_id)
         self._record_part(u, job_id, event)
         self._settle_utterance(utt)
+        return None
 
-    def _spec_report(self, job_id: int, event: ev.Event) -> bool:
-        """A speculative job reported (task 6.4). True when it is not (yet) a part of its
-        utterance: then its text, if still valid, goes out as `final: false`."""
+    def _spec_report(self, job_id: int, event: ev.Event) -> SpecFate | None:
+        """A speculative job reported (task 6.4). None when it is an ordinary part (reused as
+        the final part); "held" while it is still valid: then its text goes out as
+        `final: false`; "retracted" when it was retracted or its utterance is gone."""
         utt = self._spec_jobs.pop(job_id, None)
         if utt is None:
-            return False
+            return None
         if job_id in self._job_utt:  # already reused as the final part: an ordinary part
-            return False
+            return None
         u = self._utterances.get(utt)
         if u is None or u.spec_job != job_id:
-            return True  # retracted, or the utterance is gone
+            return "retracted"
         u.spec_report = event
         text = event.text.strip() if isinstance(event, ev.JobFinished) and event.text else ""
         if text and not u.ended:
@@ -885,7 +913,13 @@ class Controller:
                     "stt_s": round(event.timings.get("stt", 0.0), 3),
                 }
             )
-        return True
+        return "held"
+
+    def _release_spec_job(self, job_id: int, result: str | None = None) -> None:
+        """Sends the held `job` event of a speculative job; `result` replaces its own."""
+        message = self._spec_held.pop(job_id, None)
+        if message is not None:
+            self._publish(message if result is None else {**message, "result": result})
 
     def _record_part(self, u: _Utterance, job_id: int, event: ev.Event) -> None:
         if isinstance(event, ev.JobFinished) and event.text and event.text.strip():
@@ -906,6 +940,8 @@ class Controller:
         if not u.ended or u.pending:
             return
         del self._utterances[utt]
+        if u.spec_job is not None and u.spec_job not in u.job_ids:
+            self._release_spec_job(u.spec_job, "retracted")  # the utterance ended without it
         if not u.texts:
             self._publish(
                 {
@@ -941,6 +977,7 @@ class Controller:
         u.job_ids.append(job_id)
         if u.spec_report is not None:
             self._record_part(u, job_id, u.spec_report)
+            self._release_spec_job(job_id)  # its text is now final
         else:
             u.pending.add(job_id)
             self._job_utt[job_id] = utt
@@ -971,6 +1008,7 @@ class Controller:
         )
         self._pipeline.submit(job)
         self._outstanding[job.id] = len(segment.samples) / SAMPLE_RATE
+        self._job_source[job.id] = job.source
         assert cont.utt is not None
         u.spec_job, u.spec_t_end, u.spec_report, u.spec_sent = job.id, event.speech_end, None, False
         self._spec_jobs[job.id] = cont.utt
@@ -991,9 +1029,13 @@ class Controller:
                     "job_ids": [u.spec_job],
                 }
             )
-        if self._pipeline.withdraw(u.spec_job):  # not started: it must not hold the queue
+        if u.spec_job in self._spec_held:
+            self._release_spec_job(u.spec_job, "retracted")
+        elif self._pipeline.withdraw(u.spec_job):  # not started: it must not hold the queue
+            audio_s = self._outstanding.get(u.spec_job)
             self._job_done(u.spec_job)
             self._spec_jobs.pop(u.spec_job, None)
+            self._publish_job(u.spec_job, "continuous", "retracted", audio_s=audio_s)
         u.spec_job, u.spec_report, u.spec_sent = None, None, False
 
     def _on_segment_ready(self, event: ev.SegmentReady) -> None:
@@ -1022,6 +1064,7 @@ class Controller:
             sink="subscriber" if cont.conversation is not None else "inject",
         )
         self._pipeline.submit(job)
+        self._job_source[job.id] = job.source
         if cont.utt is not None and cont.utt in self._utterances:
             u = self._utterances[cont.utt]
             u.job_ids.append(job.id)
@@ -1189,25 +1232,30 @@ class Controller:
 
     def _job_done(self, job_id: int) -> None:
         self._outstanding.pop(job_id, None)
+        self._job_source.pop(job_id, None)
         if self._busy_job == job_id:
             self._busy_job = None
 
     def _on_job_finished(self, event: ev.JobFinished) -> None:
         audio_s = self._outstanding.get(event.job_id)
         self._job_done(event.job_id)
-        self._utterance_part_done(event.job_id, event)
+        fate = self._utterance_part_done(event.job_id, event)
         result = event.result
         outcome = "clipboard" if result.left_in_clipboard else "injected" if result.ok else "failed"
         if result.backend == "none":  # conversation: the text went to subscribers (6.3)
             outcome = "sent"
-        self._publish_job(
+        message = self._job_message(
             event.job_id,
             event.source,
-            outcome,
+            outcome if fate is None else fate,
             audio_s=event.timings.get("audio", audio_s),
             processing_s=event.timings.get("stt"),
             chars=result.chars,
         )
+        if fate == "held":  # sent when the text is final or retracted (task 6.4)
+            self._spec_held[event.job_id] = {**message, "result": outcome}
+        else:
+            self._publish(message)
         if event.source == "history":  # not a dictation: no stats (task 5.2)
             pass
         elif result.ok:
