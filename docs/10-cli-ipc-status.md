@@ -171,7 +171,7 @@ local-stt 0.1.0 — IDLE
 *Parakeet (tasks 4.3–4.5).* The examples above show whisper-server. Under Parakeet, `engine.name` is `parakeet` and `engine.model` is `parakeet-tdt-0.6b-v3-int8`. The active language is `auto`, and `status --watch` does not append it. Live output 2026-10-08:
 
 ```text
-local-stt 0.5.0 — IDLE
+local-stt 0.6.0 — IDLE
   engine     READY   parakeet parakeet-tdt-0.6b-v3-int8 @127.0.0.1:8178 (t=4)
   hotkeys    OK      PTT=Control_R  continuous=Shift+Control_R  language=Ctrl+Control_R
   language   auto (languages: pl, en)
