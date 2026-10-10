@@ -335,6 +335,8 @@ Echo (task 6.5) has no threshold. The acceptance records the number of false `sp
 
 K1–K3 use recordings, because the real start of speech is not known in a live test. A live result can differ by the PipeWire capture delay. This is not measured.
 
+Status: v0.6 accepted 2026-10-10, results in [acceptance-v0.6.md](acceptance-v0.6.md). K1, K2 and K4–K7 pass. K3 fails by 25 ms (p90 0.825 s), and the user accepted this deviation. K5 needed a new mode of the soak test: `bench --soak --conversation` (13 §13.4 stage 3) gives 0.16 s of engine time for each second of speech. K6 has a new Xvfb test (`tests/e2e/test_conversation_e2e.py`).
+
 Open points:
 
 - The config key names: `[conversation]` with `speculative_ms`.
