@@ -7,9 +7,15 @@ import numpy as np
 import pytest
 
 from local_stt import events as ev
-from local_stt.config import ContinuousConfig, VadConfig
+from local_stt.config import Config, ContinuousConfig, VadConfig
 from local_stt.controller import Controller, Mode
-from local_stt.interfaces import AudioSegment, EngineHealth, InjectResult, SegmentCut
+from local_stt.interfaces import (
+    AudioSegment,
+    CancelResult,
+    EngineHealth,
+    InjectResult,
+    SegmentCut,
+)
 
 from .test_controller import (
     WHISPER,
@@ -470,6 +476,169 @@ def test_utterance_numbers_continue_across_sessions(w: World) -> None:
     rid2, cid2 = start(c, w)
     c.handle(ev.SpeechStarted(rid2, cid2, 20.0, 20.3))
     assert [m["utt"] for m in speech_events(published)] == [1, 1, 2]
+
+
+# --- transcripts for subscribers (task 6.2; 10 §10.2) ---------------------------------------
+
+DONE = InjectResult(True, "clipboard", 10, None, False, None)
+
+
+def finished(job_id: int, text: str, text_at: float, audio: float, stt: float) -> ev.JobFinished:
+    timings = {"audio": audio, "stt": stt}
+    return ev.JobFinished(job_id, "continuous", DONE, timings, False, 1, text, text_at)
+
+
+def text_events(published: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [m for m in published if m["event"] in ("transcript", "utterance_dropped")]
+
+
+def listening(w: World) -> tuple[Controller, list[dict[str, Any]], int, int]:
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    rid, cid = start(c, w)
+    return c, published, rid, cid
+
+
+def test_one_utterance_gives_one_transcript(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment(seconds=2.5)))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    assert text_events(published) == []  # the text is not ready yet
+    job = w.jobs[0].id
+    c.handle(finished(job, "Jaka jest pogoda? ", 13.1, 2.5, 0.4))
+    assert text_events(published) == [
+        {
+            "event": "transcript",
+            "utt": 1,
+            "session_id": rid,
+            "job_ids": [job],
+            "final": True,
+            "text": "Jaka jest pogoda?",
+            "language": "pl",
+            "t_start": 10.0,
+            "t_end": 12.0,
+            "t_ready": 13.1,
+            "audio_s": 2.5,
+            "stt_s": 0.4,
+        }
+    ]
+
+
+def test_a_split_utterance_is_joined_into_one_transcript(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=1, seconds=15, cut="max_length")))
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=2, seconds=3)))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 27.5))
+    first, second = (j.id for j in w.jobs)
+    c.handle(finished(first, "Pierwsza część, ", 26.0, 15.0, 1.5))
+    assert text_events(published) == []
+    c.handle(ev.JobDiscarded(second, "continuous", "filtered"))
+    (transcript,) = text_events(published)
+    assert (transcript["text"], transcript["job_ids"]) == ("Pierwsza część,", [first, second])
+    assert (transcript["t_ready"], transcript["audio_s"], transcript["stt_s"]) == (26.0, 15.0, 1.5)
+
+
+def test_parts_with_text_are_joined_with_one_space(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=1, seconds=15, cut="max_length")))
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=2, seconds=3)))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 27.5))
+    first, second = (j.id for j in w.jobs)
+    c.handle(finished(first, "Ala ma kota ", 26.0, 15.0, 1.5))
+    c.handle(finished(second, "i psa. ", 28.0, 3.0, 0.4))
+    (transcript,) = text_events(published)
+    assert transcript["text"] == "Ala ma kota i psa."
+    assert (transcript["t_ready"], transcript["audio_s"]) == (28.0, 18.0)
+
+
+def test_an_utterance_without_text_is_dropped_with_the_last_reason(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    c.handle(ev.JobDiscarded(w.jobs[0].id, "continuous", "filtered"))
+    assert text_events(published) == [
+        {"event": "utterance_dropped", "utt": 1, "session_id": rid, "reason": "filtered"}
+    ]
+
+
+def test_a_failed_job_drops_its_utterance(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    c.handle(ev.JobFailed(w.jobs[0].id, "continuous", 2.0, "timeout"))
+    assert text_events(published)[0]["reason"] == "failed"
+
+
+def test_speech_without_a_segment_is_dropped_at_speech_end(w: World) -> None:
+    """The segmenter drops an utterance with less than min_speech_ms of speech."""
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 10.2))
+    assert text_events(published) == [
+        {"event": "utterance_dropped", "utt": 1, "session_id": rid, "reason": "no_speech"}
+    ]
+
+
+def test_a_job_that_finishes_before_speech_end_waits_for_it(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=1, seconds=15, cut="max_length")))
+    c.handle(finished(w.jobs[0].id, "Długo mówię ", 26.0, 15.0, 1.5))
+    assert text_events(published) == []  # speech goes on: more parts can come
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 25.5))
+    assert text_events(published)[0]["text"] == "Długo mówię"
+
+
+def test_cancel_drops_an_utterance_with_pending_jobs(w: World) -> None:
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment(seq=1, seconds=15, cut="max_length")))
+    c.handle(ev.CancelRequested())
+    assert text_events(published) == []  # the pipeline still reports the cancelled job
+    c.handle(ev.JobDiscarded(w.jobs[0].id, "continuous", "cancelled"))
+    assert text_events(published)[0]["reason"] == "cancelled"
+
+
+def test_cancel_drops_an_utterance_whose_jobs_were_drained(w: World) -> None:
+    """Drained queued jobs report nothing; the utterance must still end."""
+    c, published, rid, cid = listening(w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    w.cancel_result = CancelResult((w.jobs[0].id,), False, False)
+    c.handle(ev.CancelRequested())
+    assert text_events(published)[-1] == {
+        "event": "utterance_dropped",
+        "utt": 1,
+        "session_id": rid,
+        "reason": "cancelled",
+    }
+    assert c._utterances == {} and c._job_utt == {}
+
+
+def test_transcript_language_is_auto_under_parakeet(w: World) -> None:
+    published: list[dict[str, Any]] = []
+    c = make(w, config=Config())
+    c._on_publish = published.append
+    rid, cid = start(c, w)
+    c.handle(ev.SpeechStarted(rid, cid, 10.0, 10.3))
+    c.handle(ev.SegmentReady(rid, cid, segment()))
+    c.handle(ev.SpeechEnded(rid, cid, 10.0, 12.0))
+    c.handle(finished(w.jobs[0].id, "Hello. ", 13.0, 2.0, 0.3))
+    assert text_events(published)[0]["language"] == "auto"
+
+
+def test_ptt_jobs_give_no_transcript(w: World) -> None:
+    published: list[dict[str, Any]] = []
+    c = make(w)
+    c._on_publish = published.append
+    c.handle(ev.JobFinished(7, "ptt", DONE, {"audio": 1.0}, False, None, "Tekst. ", 5.0))
+    assert text_events(published) == []
 
 
 def test_default_schedule_posts_the_event_after_the_delay(w: World) -> None:

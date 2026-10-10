@@ -16,7 +16,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
@@ -96,6 +96,26 @@ class _PttRecording:
     stopping: bool = False
     operation_id: int | None = None
     ended_at: float | None = None
+
+
+@dataclass
+class _Utterance:
+    """One utterance for transcript subscribers (task 6.2): its parts (jobs of one VAD
+    utterance, more than one after a `max_length` split) give one `transcript` or one
+    `utterance_dropped` when the utterance has ended and every part has reported."""
+
+    session_id: int
+    t_start: float
+    language: str
+    t_end: float | None = None
+    ended: bool = False
+    job_ids: list[int] = field(default_factory=list)
+    pending: set[int] = field(default_factory=set)
+    texts: dict[int, str] = field(default_factory=dict)
+    text_at: float | None = None
+    audio_s: float = 0.0
+    stt_s: float = 0.0
+    reason: str = "no_speech"  # of the last part without text
 
 
 @dataclass
@@ -181,6 +201,8 @@ class Controller:
         self._next_operation_id = 0
         self._next_job_id = 0
         self._next_utt_id = 0  # utterance numbers of the speech events (task 6.1)
+        self._utterances: dict[int, _Utterance] = {}  # waiting for their transcript (6.2)
+        self._job_utt: dict[int, int] = {}  # continuous job → its utterance
 
         self._outstanding: dict[int, float] = {}  # job_id → audio seconds, until reported done
         self._busy_job: int | None = None
@@ -448,6 +470,8 @@ class Controller:
         for job_id in result.drained_job_ids:
             # A drained job may already have started: requeued after a connection error.
             self._job_done(job_id)
+            # It reports nothing, so its utterance counts it as cancelled here (task 6.2).
+            self._utterance_part_done(job_id, ev.JobDiscarded(job_id, "continuous", "cancelled"))
         return result
 
     def _audio_failure(self, description: str) -> None:
@@ -713,6 +737,8 @@ class Controller:
         cont.speech = isinstance(event, ev.SpeechStarted)
         if isinstance(event, ev.SpeechStarted):
             cont.utt, cont.utt_start = self._new_id("utt"), event.speech_at
+            language = "auto" if self.config.stt.engine == "parakeet" else self.language
+            self._utterances[cont.utt] = _Utterance(cont.recording_id, event.speech_at, language)
             self._publish(
                 {
                     "event": "speech_start",
@@ -739,7 +765,64 @@ class Controller:
                 "t_end": t_end,
             }
         )
-        cont.utt = None
+        utt, cont.utt = cont.utt, None
+        u = self._utterances.get(utt)
+        if u is not None:
+            u.ended, u.t_end = True, t_end
+            self._settle_utterance(utt)
+
+    def _utterance_part_done(self, job_id: int, event: ev.Event) -> None:
+        """Records one reported job of an utterance (task 6.2)."""
+        utt = self._job_utt.pop(job_id, None)
+        u = self._utterances.get(utt) if utt is not None else None
+        if u is None or utt is None:
+            return
+        u.pending.discard(job_id)
+        if isinstance(event, ev.JobFinished) and event.text and event.text.strip():
+            u.texts[job_id] = event.text.strip()
+            if event.text_at is not None:
+                u.text_at = max(u.text_at or event.text_at, event.text_at)
+            u.audio_s += event.timings.get("audio", 0.0)
+            u.stt_s += event.timings.get("stt", 0.0)
+        elif isinstance(event, ev.JobDiscarded):
+            u.reason = event.reason
+        elif isinstance(event, ev.JobFailed):
+            u.reason = "failed"
+        self._settle_utterance(utt)
+
+    def _settle_utterance(self, utt: int) -> None:
+        """One `transcript` (text events, only for `transcripts` subscribers) or one
+        `utterance_dropped` once the utterance has ended and all its parts have reported."""
+        u = self._utterances[utt]
+        if not u.ended or u.pending:
+            return
+        del self._utterances[utt]
+        if not u.texts:
+            self._publish(
+                {
+                    "event": "utterance_dropped",
+                    "utt": utt,
+                    "session_id": u.session_id,
+                    "reason": u.reason,
+                }
+            )
+            return
+        self._publish(
+            {
+                "event": "transcript",
+                "utt": utt,
+                "session_id": u.session_id,
+                "job_ids": u.job_ids,
+                "final": True,
+                "text": " ".join(u.texts[j] for j in u.job_ids if j in u.texts),
+                "language": u.language,
+                "t_start": u.t_start,
+                "t_end": u.t_end,
+                "t_ready": u.text_at,
+                "audio_s": round(u.audio_s, 3),
+                "stt_s": round(u.stt_s, 3),
+            }
+        )
 
     def _on_segment_ready(self, event: ev.SegmentReady) -> None:
         cont = self._cont
@@ -763,6 +846,11 @@ class Controller:
             pause_before_s=segment.pause_before_s,
         )
         self._pipeline.submit(job)
+        if cont.utt is not None and cont.utt in self._utterances:
+            u = self._utterances[cont.utt]
+            u.job_ids.append(job.id)
+            u.pending.add(job.id)
+            self._job_utt[job.id] = cont.utt
         self._outstanding[job.id] = len(segment.samples) / SAMPLE_RATE
         backlog = sum(self._outstanding.values())
         if backlog > self.config.continuous.max_backlog_s and not cont.stopping:
@@ -928,6 +1016,7 @@ class Controller:
     def _on_job_finished(self, event: ev.JobFinished) -> None:
         audio_s = self._outstanding.get(event.job_id)
         self._job_done(event.job_id)
+        self._utterance_part_done(event.job_id, event)
         result = event.result
         outcome = "clipboard" if result.left_in_clipboard else "injected" if result.ok else "failed"
         self._publish_job(
@@ -969,6 +1058,7 @@ class Controller:
     def _on_job_discarded(self, event: ev.JobDiscarded) -> None:
         audio_s = self._outstanding.get(event.job_id)
         self._job_done(event.job_id)
+        self._utterance_part_done(event.job_id, event)
         self._publish_job(event.job_id, event.source, event.reason, audio_s=audio_s)
         if event.reason in ("no_speech", "filtered"):
             self._jobs_filtered += 1
@@ -977,6 +1067,7 @@ class Controller:
 
     def _on_job_failed(self, event: ev.JobFailed) -> None:
         self._job_done(event.job_id)
+        self._utterance_part_done(event.job_id, event)
         self._publish_job(event.job_id, event.source, "failed", audio_s=event.audio_s)
         self._jobs_failed += 1
         log.error("job %d failed (%.1f s of audio): %s", event.job_id, event.audio_s, event.error)

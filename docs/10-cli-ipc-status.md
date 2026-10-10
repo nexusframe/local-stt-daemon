@@ -69,9 +69,14 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 ← {"event": "job", "job_id": 17, "source": "continuous", "audio_s": 4.1, "processing_s": 1.9, "chars": 62, "result": "injected"}
 ← {"event": "speech_start", "utt": 41, "session_id": 3, "t": 81234.512, "t_start": 81234.262}
 ← {"event": "speech_end", "utt": 41, "session_id": 3, "t_start": 81234.262, "t_end": 81236.940}
+
+→ {"cmd": "subscribe", "transcripts": true}
+← ... // the same stream, and also:
+← {"event": "transcript", "utt": 41, "session_id": 3, "job_ids": [17], "final": true, "text": "Jaka jest pogoda?", "language": "auto", "t_start": 81234.262, "t_end": 81236.940, "t_ready": 81237.610, "audio_s": 2.68, "stt_s": 0.61}
+← {"event": "utterance_dropped", "utt": 42, "session_id": 3, "reason": "filtered"}
 ```
 
-`job` events **do not contain text**. Only the `history` response contains text (task 5.2, 12 §12.2).
+`job`, `state` and speech events **do not contain text**. Only the `history` response (task 5.2) and the `transcript` events of a subscription with `"transcripts": true` (task 6.2, ADR-019) contain text (12 §12.2).
 
 *Implementation (task 2.5).* `subscribe` turns the connection into a stream; the client sends nothing more and closes the connection to end it. The first line is the current state (or, if the Controller does not answer, a `timeout` error and the connection closes). A `state` line follows every change of the displayed state (04 §4.7), with the full status document. A `job` line follows every finished job: `audio_s`, `processing_s` (`null` when the engine was not reached), `chars` (0 when nothing was entered), `source` ∈ `ptt`, `continuous`, `history` (a `last` insert, task 5.2; it does not count in the `stats` of 10.4), and `result` ∈ `injected`, `clipboard` (left in the clipboard), `failed`, `no_speech`, `filtered`, `cancelled`. *Speech events (task 6.1, ADR-019).* In continuous mode, a `speech_start` line follows when the VAD confirms speech, and a `speech_end` line follows when the utterance ends. They contain no text. `utt` is the utterance number. The daemon gives it at `speech_start`, and it increases across sessions. `session_id` is the continuous session. All times are `time.monotonic()` of the daemon (Linux `CLOCK_MONOTONIC`), so another process on the same machine can compare them with its own monotonic clock. The times come from the audio frames, not from the moment of processing:
 
@@ -79,7 +84,19 @@ Exit codes: `0` OK, `1` general error, `2` usage error, `3` daemon not running, 
 - `t`: the end of the frame that confirmed speech, about `min_speech_ms` after `t_start`,
 - `t_end`: the end of the last speech frame (`p ≥ end_threshold`), not the end of the silence that ended the utterance. The line comes `min_silence_ms` after `t_end`, or at once on a stop. `t_end` is `null` when the session ends before the end of speech (cancel, an error), so that no client waits for a `speech_end` that never comes.
 
-PTT recordings make no speech events. A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
+PTT recordings make no speech events.
+
+*Transcripts (task 6.2, ADR-019).* `subscribe` with `"transcripts": true` adds the text events `transcript` (and `transcript_retracted`, task 6.4). A subscription without it never gets them; a value that is not a boolean gives `bad_request`. Every utterance of continuous mode gives exactly one of two events after its `speech_end`: one `transcript`, or one `utterance_dropped` when no text came from it. This is true also in ordinary dictation, where the text is injected as well. PTT jobs give no transcript. A `max_length` split makes several jobs for one utterance. Their texts are joined with one space into one `transcript`, in the order of the jobs (user decision 2026-10-10). Fields of `transcript`:
+
+- `job_ids`: the jobs of the utterance, also the ones without text,
+- `final`: `true` (task 6.4 adds speculative `false` texts),
+- `text`: the processed text (08 §8.1, `text.commands` included) without leading and trailing spaces,
+- `language`: `auto` under Parakeet; under whisper-server the active language when speech started,
+- `t_start`, `t_end`: as in `speech_end`; `t_end` is `null` when the session ended before the end of speech,
+- `t_ready`: the monotonic time when the text of the last part was ready, before injection,
+- `audio_s`, `stt_s`: the sums over the parts with text.
+
+`utterance_dropped` has `reason` ∈ `no_speech` (the segmenter found less than `min_speech_ms` of speech, or no part reported a text), `filtered`, `cancelled`, `failed`: the reason of the last part without text. Queued jobs that a cancel drains count as `cancelled`. A subscriber that falls 256 messages behind is disconnected so that it cannot hold daemon memory; the daemon closes all streams at shutdown.
 
 Response to `cancel`: `{"ok": true, "injection_in_flight": false}`, or `true` in the second field if injection began before cancellation. With `true`, the CLI prints “Remaining jobs cancelled; injection already in progress may finish.” This applies to a single paste sequence or the current `type` chunk, never subsequent chunks or jobs.
 

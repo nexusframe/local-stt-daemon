@@ -42,7 +42,7 @@ All sources send events to a single `controller.events` queue (`queue.Queue`). T
 | `ReconnectTick` | controller timer | `recording_id`, `operation_id`, attempt number |
 | `CaptureOpenDue` | controller timer (150 ms after continuous mode starts) | `recording_id` |
 | `ServerRestartDone` | helper thread executing `systemctl --user restart` (4.6) | exit code |
-| `JobStarted` / `JobFinished` / `JobDiscarded` / `JobFailed` | PipelineWorker | `job_id`, timings, reason (`no_speech`, `filtered`, `cancelled`), or error |
+| `JobStarted` / `JobFinished` / `JobDiscarded` / `JobFailed` | PipelineWorker | `job_id`, timings, reason (`no_speech`, `filtered`, `cancelled`), or error; `JobFinished` also has the text and the time it was ready (task 6.2, not in its `repr`) |
 | `EngineStateChanged` | EngineMonitor / PipelineWorker | `READY` / `STARTING` / `DOWN` |
 | `ReloadRequested` | IPC `reload`, `SIGHUP` | `reply` |
 | `StatusRequested` | IPC `status` | `reply`; the Controller answers with the [10](10-cli-ipc-status.md) §10.4 document composed in its own thread, so no other thread reads its state (task 1.10, user decision 2026-10-03) |
@@ -145,7 +145,7 @@ Between steps 1 and 4, another `ContinuousToggle` is ignored (IPC: `invalid_in_m
 | `X11ConnectionLost` | close capture and the IPC socket, **without** X11 operations → WARNING, exit 0 (the session is ending; systemd does not restart, and `PartOf` stops the unit) |
 | `ReloadRequested` | 4.6 |
 | `EngineStateChanged(s)` | `engine = s`; `READY` → `pipeline.paused = false`; in CONTINUOUS, `DOWN` also applies the corresponding CONTINUOUS table row |
-| `JobStarted` / `JobFinished` | update `pipeline` and status statistics; `JobFinished` with `left_in_clipboard` → notification from [08](08-text-injection.md) §8.5 (sent by the Controller based on `InjectResult`; the injector does not notify by itself); with the `clipboard-only` backend → the notification from 08 §8.4 |
+| `JobStarted` / `JobFinished` | update `pipeline` and status statistics; `JobFinished` with `left_in_clipboard` → notification from [08](08-text-injection.md) §8.5 (sent by the Controller based on `InjectResult`; the injector does not notify by itself); with the `clipboard-only` backend → the notification from 08 §8.4. Every reported continuous job (also a drained one, as `cancelled`) completes its utterance: when the utterance has ended and all its jobs have reported, publish one `transcript` or one `utterance_dropped` ([10](10-cli-ipc-status.md) §10.2, task 6.2) |
 | `JobFailed` | update statistics + aggregate notification (4.4), regardless of mode |
 | `JobDiscarded` | update statistics; `cancel` sound only in IDLE and only for `no_speech` from PTT (IDLE table) |
 | audio events and timers with a stale `recording_id`, `capture_id`, or `operation_id` | ignored before consulting the transition table, even if the new session has the same mode |

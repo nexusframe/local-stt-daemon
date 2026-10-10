@@ -242,6 +242,51 @@ def test_a_subscriber_that_falls_behind_is_dropped() -> None:
     assert sub.dropped and not subscribers._subs
 
 
+# --- transcript stream (task 6.2; ADR-019) ---------------------------------------------------
+
+
+def test_text_events_go_only_to_transcript_subscribers() -> None:
+    subscribers = ipc.Subscribers()
+    plain, text = subscribers.add(), subscribers.add(transcripts=True)
+    speech = {"event": "speech_end", "utt": 1}
+    transcript = {"event": "transcript", "utt": 1, "text": "Ala ma kota."}
+    subscribers.publish(speech)
+    subscribers.publish(transcript)
+    subscribers.publish({"event": "transcript_retracted", "utt": 1})
+    assert plain.messages.get_nowait() == speech and plain.messages.empty()
+    assert [text.messages.get_nowait()["event"] for _ in range(3)] == [
+        "speech_end",
+        "transcript",
+        "transcript_retracted",
+    ]
+
+
+def test_subscribe_with_transcripts_receives_text(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = {"ok": True, "status": {"state": "IDLE"}}
+    stream = ipc.subscribe(path=path, transcripts=True)
+    assert next(stream)["event"] == "state"
+    wait_until(lambda: len(server.subscribers._subs) == 1)
+    transcript = {"event": "transcript", "utt": 2, "text": "Dzień dobry."}
+    server.publish(transcript)
+    assert next(stream) == transcript
+    server.stop()
+
+
+def test_subscribe_rejects_a_non_boolean_transcripts_flag(
+    server: ipc.IpcServer, path: Path, daemon: Daemon
+) -> None:
+    daemon.answer = {"ok": True, "status": {}}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(2)
+        s.connect(str(path))
+        s.sendall(b'{"cmd": "subscribe", "transcripts": "yes"}\n')
+        reply = json.loads(s.makefile("rb").readline())
+    assert reply["error"] == "bad_request"
+    assert not server.subscribers._subs
+
+
 def test_subscribe_to_a_stopped_daemon(path: Path) -> None:
     with pytest.raises(ipc.DaemonNotRunning):
         next(ipc.subscribe(path=path))

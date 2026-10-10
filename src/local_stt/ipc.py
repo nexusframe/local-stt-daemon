@@ -44,6 +44,8 @@ REPLY_TIMEOUT_S = 5.0  # waiting for the controller (10 §10.2)
 CLIENT_TIMEOUT_S = REPLY_TIMEOUT_S + 2.0
 IDLE_CONNECTION_S = 60.0  # a client that sends nothing is disconnected
 SUBSCRIBER_BACKLOG = 256  # messages a subscriber may fall behind before it is disconnected
+# Events with dictated text: only for `subscribe` with `"transcripts": true` (task 6.2, ADR-019).
+TEXT_EVENTS = frozenset({"transcript", "transcript_retracted"})
 
 Response = dict[str, Any]
 
@@ -107,9 +109,10 @@ def request_event(request: Any, reply: "Future[Response]") -> Event | Response:
 
 
 class _Subscription:
-    def __init__(self) -> None:
+    def __init__(self, transcripts: bool) -> None:
         self.messages: queue.Queue[Response | None] = queue.Queue(SUBSCRIBER_BACKLOG)
         self.dropped = False
+        self.transcripts = transcripts
 
 
 class Subscribers:
@@ -119,8 +122,8 @@ class Subscribers:
         self._lock = threading.Lock()
         self._subs: set[_Subscription] = set()
 
-    def add(self) -> _Subscription:
-        sub = _Subscription()
+    def add(self, *, transcripts: bool = False) -> _Subscription:
+        sub = _Subscription(transcripts)
         with self._lock:
             self._subs.add(sub)
         return sub
@@ -132,7 +135,10 @@ class Subscribers:
     def publish(self, message: Response) -> None:
         with self._lock:
             subs = list(self._subs)
+        text = message.get("event") in TEXT_EVENTS
         for sub in subs:
+            if text and not sub.transcripts:
+                continue
             try:
                 sub.messages.put_nowait(message)
             except queue.Full:
@@ -173,16 +179,20 @@ class _Handler(socketserver.StreamRequestHandler):
                 if len(line) > MAX_LINE:
                     self._send(error("too_long", f"requests are limited to {MAX_LINE} bytes"))
                     return
-                if _is_subscribe(line):
-                    return self._stream()
+                subscribe = _subscribe_request(line)
+                if subscribe is not None:
+                    transcripts = subscribe.get("transcripts", False)
+                    if not isinstance(transcripts, bool):
+                        return self._send(error("bad_request", '"transcripts" must be a boolean'))
+                    return self._stream(transcripts)
                 self._send(self._respond(line))
         except (TimeoutError, ConnectionError):
             return
 
-    def _stream(self) -> None:
+    def _stream(self, transcripts: bool) -> None:
         """`subscribe`: the current state first, then every published message until the
-        client disconnects or falls behind (10 §10.2)."""
-        sub = self.server.subscribers.add()
+        client disconnects or falls behind (10 §10.2); text events only with `transcripts`."""
+        sub = self.server.subscribers.add(transcripts=transcripts)
         try:
             initial = self._respond(b'{"cmd": "status"}')
             if not initial.get("ok"):
@@ -304,12 +314,14 @@ class IpcServer:
         self.path.unlink(missing_ok=True)
 
 
-def _is_subscribe(line: bytes) -> bool:
+def _subscribe_request(line: bytes) -> dict[str, Any] | None:
     try:
         request = json.loads(line)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return False
-    return isinstance(request, dict) and request.get("cmd") == "subscribe"
+        return None
+    if isinstance(request, dict) and request.get("cmd") == "subscribe":
+        return request
+    return None
 
 
 def _closed_by_peer(sock: socket.socket) -> bool:
@@ -360,9 +372,9 @@ def call(
     return response
 
 
-def subscribe(*, path: Path | None = None) -> Iterator[Response]:
+def subscribe(*, path: Path | None = None, transcripts: bool = False) -> Iterator[Response]:
     """Yields the daemon's `subscribe` stream (CLI side) until the daemon closes it; the first
-    message is the current state, or an error response."""
+    message is the current state, or an error response. `transcripts` asks for text events."""
     target = path if path is not None else socket_path()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.settimeout(CLIENT_TIMEOUT_S)
@@ -370,7 +382,7 @@ def subscribe(*, path: Path | None = None) -> Iterator[Response]:
             s.connect(str(target))
         except (FileNotFoundError, ConnectionRefusedError) as e:
             raise DaemonNotRunning("daemon not running") from e
-        s.sendall(b'{"cmd": "subscribe"}\n')
+        s.sendall(json.dumps({"cmd": "subscribe", "transcripts": transcripts}).encode() + b"\n")
         stream = s.makefile("rb")
         first = True
         while True:

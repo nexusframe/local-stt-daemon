@@ -297,7 +297,8 @@ class PipelineWorker:
             prev_cut = session.prev_cut if session else None
             ctx = TextContext(job.source, job.session_id, job.seq, job.cut, prev_cut, prompt_tail)
             text = self._processor.process(transcript, ctx)
-            text_s = self._clock() - text_started
+            text_at = self._clock()
+            text_s = text_at - text_started
             if text is None:
                 return self._discard(job, "filtered")
             if self._history is not None:  # before injection: a failed paste stays here (5.2)
@@ -333,7 +334,11 @@ class PipelineWorker:
             }
             if config.logging.timings:
                 timings_log.info(_timing_line(job, transcript, timings, result))
-            self._post(JobFinished(job.id, job.source, result, timings, non_latin, job.session_id))
+            self._post(
+                JobFinished(
+                    job.id, job.source, result, timings, non_latin, job.session_id, text, text_at
+                )
+            )
         finally:
             with self._lock:
                 self._current = None

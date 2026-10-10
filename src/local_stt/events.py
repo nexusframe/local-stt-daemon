@@ -166,6 +166,10 @@ class JobFinished:
     timings: Mapping[str, float] = field(default_factory=dict, compare=False)
     non_latin: bool = False  # letters outside the Latin script, injected unchanged (task 4.4)
     session_id: int | None = None  # continuous session (one clipboard-only notification, 5.3)
+    # The processed text and the monotonic time it was ready, before injection (task 6.2).
+    # Out of repr: events are logged, and the text must not reach the journal (12 §12.1).
+    text: str | None = field(default=None, compare=False, repr=False)
+    text_at: float | None = None
 
 
 @dataclass(frozen=True)

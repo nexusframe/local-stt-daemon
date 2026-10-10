@@ -266,6 +266,9 @@ def test_job_is_transcribed_processed_and_injected(
     assert h.injector.texts == ["Ala ma kota. "]
     assert h.engine.calls == [{"samples": SR, "language": "pl", "prompt": None, "timeout_s": 120.0}]
     assert h.processor.contexts == [TextContext("ptt", None, None, "release", None, None)]
+    # Task 6.2: the text for transcript subscribers, kept out of the event's repr (12 §12.1)
+    assert event.text == "Ala ma kota. " and event.text_at is not None
+    assert "Ala ma kota" not in repr(event)
     (line,) = [r.getMessage() for r in caplog.records if r.name == "local_stt.timings"]
     assert line.startswith(f"job={job.id} src=ptt cut=release audio=1.00s queued=")
     assert "stt=0.50s rtf=0.50" in line
